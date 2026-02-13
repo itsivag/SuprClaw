@@ -9,7 +9,6 @@ import io.ktor.server.application.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
-import kotlinx.coroutines.launch
 
 fun Application.configureDropletRoutes(
     digitalOceanService: DigitalOceanService,
@@ -27,30 +26,34 @@ fun Application.configureDropletRoutes(
                 try {
                     val request = call.receive<CreateDropletNameRequest>()
 
-                    // Phase 1 — Create droplet (returns immediately)
+                    // Phase 1 — Create droplet
                     val result = provisioningService.createAndProvision(request.name)
 
-                    // Launch background provisioning (phases 2-7)
-                    launch {
-                        provisioningService.provisionDroplet(
-                            dropletId = result.dropletId,
-                            password = result.password,
-                            geminiApiKey = result.geminiApiKey
-                        )
-                    }
+                    // Run provisioning (phases 2-8) — blocks until complete
+                    provisioningService.provisionDroplet(
+                        dropletId = result.dropletId,
+                        password = result.password,
+                        geminiApiKey = result.geminiApiKey
+                    )
+
+                    val finalStatus = provisioningService.statuses[result.dropletId]
 
                     val response = CreateDropletResponse(
                         droplet = DropletInfo(
                             id = result.dropletId,
                             name = request.name,
-                            status = result.status.phase,
-                            ip_address = null
+                            status = finalStatus?.phase ?: "unknown",
+                            ip_address = finalStatus?.ip_address
                         ),
                         setup_status_url = "/api/droplets/${result.dropletId}/status",
-                        message = "Droplet created! Provisioning is running in the background. Poll the setup_status_url to monitor progress."
+                        message = finalStatus?.message ?: "Provisioning finished."
                     )
 
-                    call.respond(HttpStatusCode.Created, response)
+                    if (finalStatus?.phase == ProvisioningStatus.PHASE_COMPLETE) {
+                        call.respond(HttpStatusCode.Created, response)
+                    } else {
+                        call.respond(HttpStatusCode.InternalServerError, response)
+                    }
                 } catch (e: Exception) {
                     log.error("Error creating droplet", e)
                     call.respond(

@@ -22,6 +22,7 @@ data class ProvisioningStatus(
         const val PHASE_ONBOARDING = "onboarding"
         const val PHASE_CONFIGURING = "configuring"
         const val PHASE_VERIFYING = "verifying"
+        const val PHASE_NGINX = "configuring_nginx"
         const val PHASE_COMPLETE = "complete"
         const val PHASE_FAILED = "failed"
     }

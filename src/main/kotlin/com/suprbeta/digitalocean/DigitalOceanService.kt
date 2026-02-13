@@ -75,4 +75,14 @@ class DigitalOceanService(
 
         return response.body()
     }
+
+    /**
+     * Deletes a droplet by ID.
+     */
+    suspend fun deleteDroplet(dropletId: Long) {
+        application.log.info("Deleting DigitalOcean droplet: $dropletId")
+        httpClient.delete("$API_BASE_URL/$dropletId") {
+            header("Authorization", "Bearer $apiToken")
+        }
+    }
 }

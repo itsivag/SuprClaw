@@ -35,6 +35,7 @@ class DropletProvisioningService(
         private const val POLL_INTERVAL_MS = 5_000L
         private const val MAX_POLL_WAIT_MS = 300_000L       // 5 minutes for droplet to become active
         private const val SSH_PROBE_TIMEOUT_MS = 120_000L   // 2 minutes for SSH port
+        private const val SSH_AUTH_TIMEOUT_MS = 180_000L    // 3 minutes for cloud-init to apply password
         private const val SSH_CONNECT_TIMEOUT_MS = 10_000    // 10s per SSH attempt
         private const val ONBOARDING_MAX_RETRIES = 3
         private const val GATEWAY_VERIFY_TIMEOUT_S = 30
@@ -77,9 +78,13 @@ class DropletProvisioningService(
             // Phase 2 — Wait for active + IP
             val ipAddress = waitForDropletReady(dropletId)
 
-            // Phase 3 — Wait for SSH
-            updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_SSH, "Waiting for SSH to become reachable at $ipAddress...")
+            // Phase 3 — Wait for SSH port
+            updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_SSH, "Waiting for SSH port at $ipAddress...")
             waitForSshReady(ipAddress)
+
+            // Phase 3b — Wait for cloud-init to apply password (deterministic probe)
+            updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_SSH, "Waiting for cloud-init to finish (probing SSH auth)...", ipAddress)
+            waitForSshAuth(ipAddress, password)
 
             // Phase 4 — Onboarding (with retries)
             updateStatus(dropletId, ProvisioningStatus.PHASE_ONBOARDING, "Running OpenClaw onboarding via SSH...", ipAddress)
@@ -93,28 +98,41 @@ class DropletProvisioningService(
             updateStatus(dropletId, ProvisioningStatus.PHASE_VERIFYING, "Verifying gateway status...", ipAddress)
             verifyGateway(ipAddress, password)
 
-            // Phase 7 — Complete
+            // Phase 7 — Nginx reverse proxy
+            updateStatus(dropletId, ProvisioningStatus.PHASE_NGINX, "Installing and configuring nginx reverse proxy...", ipAddress)
+            setupNginxReverseProxy(ipAddress, password)
+
+            // Phase 8 — Complete
             updateStatus(
                 dropletId, ProvisioningStatus.PHASE_COMPLETE,
-                "Provisioning complete. Gateway running on port $GATEWAY_PORT.",
+                "Provisioning complete. Gateway exposed at http://$ipAddress (port 80 → $GATEWAY_PORT).",
                 ipAddress,
                 completedAt = Instant.now().toString()
             )
-            logger.info("✅ Droplet $dropletId provisioning complete at $ipAddress")
+            logger.info("✅ Droplet $dropletId provisioning complete at http://$ipAddress")
 
         } catch (e: Exception) {
-            logger.error("❌ Droplet $dropletId provisioning failed", e)
+            logger.error("❌ Droplet $dropletId provisioning failed, deleting droplet...", e)
+
+            // Clean up: destroy the failed droplet
+            try {
+                digitalOceanService.deleteDroplet(dropletId)
+                logger.info("🗑️ Droplet $dropletId deleted after provisioning failure")
+            } catch (deleteError: Exception) {
+                logger.error("Failed to delete droplet $dropletId: ${deleteError.message}")
+            }
+
             val current = statuses[dropletId]
             statuses[dropletId] = current?.copy(
                 phase = ProvisioningStatus.PHASE_FAILED,
-                message = "Provisioning failed: ${e.message}",
+                message = "Provisioning failed (droplet destroyed): ${e.message}",
                 error = e.stackTraceToString(),
                 completed_at = Instant.now().toString()
             ) ?: ProvisioningStatus(
                 droplet_id = dropletId,
                 droplet_name = "unknown",
                 phase = ProvisioningStatus.PHASE_FAILED,
-                message = "Provisioning failed: ${e.message}",
+                message = "Provisioning failed (droplet destroyed): ${e.message}",
                 error = e.stackTraceToString(),
                 started_at = Instant.now().toString(),
                 completed_at = Instant.now().toString()
@@ -167,8 +185,6 @@ class DropletProvisioningService(
                     socket.connect(InetSocketAddress(ipAddress, SSH_PORT), 3000)
                 }
                 logger.info("SSH port reachable at $ipAddress")
-                // Give sshd a moment to fully initialize after port opens
-                delay(3000)
                 return
             } catch (_: IOException) {
                 delay(2000)
@@ -176,6 +192,37 @@ class DropletProvisioningService(
         }
 
         throw IllegalStateException("SSH not reachable at $ipAddress after ${SSH_PROBE_TIMEOUT_MS / 1000}s")
+    }
+
+    /**
+     * Deterministically waits for cloud-init to finish applying password config.
+     * Instead of guessing with a fixed delay, we actively probe SSH auth
+     * every 5 seconds until it succeeds — meaning cloud-init has applied
+     * ssh_pwauth + chpasswd.
+     */
+    private suspend fun waitForSshAuth(ipAddress: String, password: String) {
+        val deadline = System.currentTimeMillis() + SSH_AUTH_TIMEOUT_MS
+
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                val ssh = SSHClient()
+                try {
+                    ssh.addHostKeyVerifier(PromiscuousVerifier())
+                    ssh.connectTimeout = SSH_CONNECT_TIMEOUT_MS
+                    ssh.connect(ipAddress, SSH_PORT)
+                    ssh.authPassword(SSH_USER, password)
+                    logger.info("SSH auth succeeded — cloud-init has applied password config")
+                    return
+                } finally {
+                    ssh.disconnect()
+                }
+            } catch (e: Exception) {
+                logger.info("SSH auth not ready yet (cloud-init still running): ${e.message}")
+                delay(5000)
+            }
+        }
+
+        throw IllegalStateException("SSH auth not available at $ipAddress after ${SSH_AUTH_TIMEOUT_MS / 1000}s — cloud-init may have failed")
     }
 
     // ── Phase 4 — Onboarding via SSH ────────────────────────────────────
@@ -238,6 +285,58 @@ class DropletProvisioningService(
         }
 
         throw IllegalStateException("Gateway did not become ready within ${GATEWAY_VERIFY_TIMEOUT_S}s")
+    }
+
+    // ── Phase 7 — Nginx reverse proxy ───────────────────────────────────
+
+    private fun setupNginxReverseProxy(ipAddress: String, password: String) {
+        logger.info("Installing nginx on $ipAddress...")
+
+        // Install nginx
+        runSshCommand(ipAddress, password, "sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nginx")
+
+        // Build the nginx config as a plain string, then base64 encode it
+        // to avoid all shell escaping issues (heredocs don't work inside bash -l -c '...')
+        val nginxConfig = """
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    location / {
+        proxy_pass http://127.0.0.1:$GATEWAY_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade ${'$'}http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host ${'$'}host;
+        proxy_set_header X-Real-IP ${'$'}remote_addr;
+        proxy_set_header X-Forwarded-For ${'$'}proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto ${'$'}scheme;
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+    }
+}
+""".trimIndent()
+
+        val encoded = java.util.Base64.getEncoder().encodeToString(nginxConfig.toByteArray())
+        runSshCommand(ipAddress, password, "echo $encoded | base64 -d | sudo tee /etc/nginx/sites-available/openclaw > /dev/null")
+
+        // Enable site and disable default
+        runSshCommand(ipAddress, password, "sudo ln -sf /etc/nginx/sites-available/openclaw /etc/nginx/sites-enabled/openclaw")
+        runSshCommand(ipAddress, password, "sudo rm -f /etc/nginx/sites-enabled/default")
+
+        // Test and reload
+        runSshCommand(ipAddress, password, "sudo nginx -t")
+        runSshCommand(ipAddress, password, "sudo systemctl reload nginx")
+
+        logger.info("Nginx reverse proxy configured: port 80 -> $GATEWAY_PORT")
+
+        // Configure UFW firewall — allow SSH first (critical!), then HTTP, then enable
+        runSshCommand(ipAddress, password, "sudo ufw allow OpenSSH")
+        runSshCommand(ipAddress, password, "sudo ufw allow 'Nginx Full'")
+        runSshCommand(ipAddress, password, "sudo ufw --force enable")
+
+        logger.info("UFW firewall enabled: SSH + Nginx allowed")
     }
 
     // ── SSH helper ──────────────────────────────────────────────────────
