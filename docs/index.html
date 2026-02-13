@@ -706,6 +706,12 @@
             <li class="nav-fixed nav-header active" data-group="_"><a href="#api-_">API Summary</a></li>
 
                   <li class="nav-header" data-group="Default"><a href="#api-Default">API Methods - Default</a></li>
+                    <li data-group="Default" data-name="apiDropletsIdStatusGet" class="">
+                      <a href="#api-Default-apiDropletsIdStatusGet">apiDropletsIdStatusGet</a>
+                    </li>
+                    <li data-group="Default" data-name="apiDropletsPost" class="">
+                      <a href="#api-Default-apiDropletsPost">apiDropletsPost</a>
+                    </li>
                     <li data-group="Default" data-name="docsAsyncapiGet" class="">
                       <a href="#api-Default-docsAsyncapiGet">docsAsyncapiGet</a>
                     </li>
@@ -745,6 +751,435 @@
         <div id="sections">
                 <section id="api-Default">
                   <h1>Default</h1>
+                    <div id="api-Default-apiDropletsIdStatusGet">
+                      <article id="api-Default-apiDropletsIdStatusGet-0" data-group="User" data-name="apiDropletsIdStatusGet" data-version="0">
+                        <div class="pull-left">
+                          <h1>apiDropletsIdStatusGet</h1>
+                          <p></p>
+                        </div>
+                        <div class="pull-right"></div>
+                        <div class="clearfix"></div>
+                        <p></p>
+                        <p class="marked"></p>
+                        <p></p>
+                        <br />
+                        <pre class="prettyprint language-html prettyprinted" data-type="get"><code><span class="pln">/api/droplets/{id}/status</span></code></pre>
+                        <p>
+                          <h3>Usage and SDK Samples</h3>
+                        </p>
+                        <ul class="nav nav-tabs nav-tabs-examples">
+                          <li class="active"><a href="#examples-Default-apiDropletsIdStatusGet-0-curl">Curl</a></li>
+                          <li class=""><a href="#examples-Default-apiDropletsIdStatusGet-0-java">Java</a></li>
+                          <li class=""><a href="#examples-Default-apiDropletsIdStatusGet-0-android">Android</a></li>
+                          <!--<li class=""><a href="#examples-Default-apiDropletsIdStatusGet-0-groovy">Groovy</a></li>-->
+                          <li class=""><a href="#examples-Default-apiDropletsIdStatusGet-0-objc">Obj-C</a></li>
+                          <li class=""><a href="#examples-Default-apiDropletsIdStatusGet-0-javascript">JavaScript</a></li>
+                          <!--<li class=""><a href="#examples-Default-apiDropletsIdStatusGet-0-angular">Angular</a></li>-->
+                          <li class=""><a href="#examples-Default-apiDropletsIdStatusGet-0-csharp">C#</a></li>
+                          <li class=""><a href="#examples-Default-apiDropletsIdStatusGet-0-php">PHP</a></li>
+                          <li class=""><a href="#examples-Default-apiDropletsIdStatusGet-0-perl">Perl</a></li>
+                          <li class=""><a href="#examples-Default-apiDropletsIdStatusGet-0-python">Python</a></li>
+                        </ul>
+
+                        <div class="tab-content">
+                          <div class="tab-pane active" id="examples-Default-apiDropletsIdStatusGet-0-curl">
+                           <pre class="prettyprint"><code class="language-bsh">curl -X GET\
+"//api/droplets/{id}/status"</code></pre>
+                          </div>
+                          <div class="tab-pane" id="examples-Default-apiDropletsIdStatusGet-0-java">
+                            <pre class="prettyprint"><code class="language-java">import io.swagger.client.*;
+import io.swagger.client.auth.*;
+import io.swagger.client.model.*;
+import io.swagger.client.api.DefaultApi;
+
+import java.io.File;
+import java.util.*;
+
+public class DefaultApiExample {
+
+    public static void main(String[] args) {
+        
+        DefaultApi apiInstance = new DefaultApi();
+         id = ; //  | 
+        try {
+            apiInstance.apiDropletsIdStatusGet(id);
+        } catch (ApiException e) {
+            System.err.println("Exception when calling DefaultApi#apiDropletsIdStatusGet");
+            e.printStackTrace();
+        }
+    }
+}</code></pre>
+                          </div>
+
+                          <div class="tab-pane" id="examples-Default-apiDropletsIdStatusGet-0-android">
+                            <pre class="prettyprint"><code class="language-java">import io.swagger.client.api.DefaultApi;
+
+public class DefaultApiExample {
+
+    public static void main(String[] args) {
+        DefaultApi apiInstance = new DefaultApi();
+         id = ; //  | 
+        try {
+            apiInstance.apiDropletsIdStatusGet(id);
+        } catch (ApiException e) {
+            System.err.println("Exception when calling DefaultApi#apiDropletsIdStatusGet");
+            e.printStackTrace();
+        }
+    }
+}</code></pre>
+                          </div>
+  <!--
+  <div class="tab-pane" id="examples-Default-apiDropletsIdStatusGet-0-groovy">
+  <pre class="prettyprint language-json prettyprinted" data-type="json"><code>Coming Soon!</code></pre>
+  </div> -->
+                            <div class="tab-pane" id="examples-Default-apiDropletsIdStatusGet-0-objc">
+                              <pre class="prettyprint"><code class="language-cpp"> *id = ; // 
+
+DefaultApi *apiInstance = [[DefaultApi alloc] init];
+
+[apiInstance apiDropletsIdStatusGetWith:id
+              completionHandler: ^(NSError* error) {
+                            if (error) {
+                                NSLog(@"Error: %@", error);
+                            }
+                        }];
+</code></pre>
+                            </div>
+
+                            <div class="tab-pane" id="examples-Default-apiDropletsIdStatusGet-0-javascript">
+                              <pre class="prettyprint"><code class="language-js">var MyApi = require('my_api');
+
+var api = new MyApi.DefaultApi()
+var id = ; // {{}} 
+
+var callback = function(error, data, response) {
+  if (error) {
+    console.error(error);
+  } else {
+    console.log('API called successfully.');
+  }
+};
+api.apiDropletsIdStatusGet(id, callback);
+</code></pre>
+                            </div>
+
+                            <!--<div class="tab-pane" id="examples-Default-apiDropletsIdStatusGet-0-angular">
+              <pre class="prettyprint language-json prettyprinted" data-type="json"><code>Coming Soon!</code></pre>
+            </div>-->
+                            <div class="tab-pane" id="examples-Default-apiDropletsIdStatusGet-0-csharp">
+                              <pre class="prettyprint"><code class="language-cs">using System;
+using System.Diagnostics;
+using IO.Swagger.Api;
+using IO.Swagger.Client;
+using IO.Swagger.Model;
+
+namespace Example
+{
+    public class apiDropletsIdStatusGetExample
+    {
+        public void main()
+        {
+
+            var apiInstance = new DefaultApi();
+            var id = new (); //  | 
+
+            try
+            {
+                apiInstance.apiDropletsIdStatusGet(id);
+            }
+            catch (Exception e)
+            {
+                Debug.Print("Exception when calling DefaultApi.apiDropletsIdStatusGet: " + e.Message );
+            }
+        }
+    }
+}
+</code></pre>
+                            </div>
+
+                            <div class="tab-pane" id="examples-Default-apiDropletsIdStatusGet-0-php">
+                              <pre class="prettyprint"><code class="language-php"><&#63;php
+require_once(__DIR__ . '/vendor/autoload.php');
+
+$api_instance = new Swagger\Client\ApiDefaultApi();
+$id = ; //  | 
+
+try {
+    $api_instance->apiDropletsIdStatusGet($id);
+} catch (Exception $e) {
+    echo 'Exception when calling DefaultApi->apiDropletsIdStatusGet: ', $e->getMessage(), PHP_EOL;
+}
+?></code></pre>
+                            </div>
+
+                            <div class="tab-pane" id="examples-Default-apiDropletsIdStatusGet-0-perl">
+                              <pre class="prettyprint"><code class="language-perl">use Data::Dumper;
+use WWW::SwaggerClient::Configuration;
+use WWW::SwaggerClient::DefaultApi;
+
+my $api_instance = WWW::SwaggerClient::DefaultApi->new();
+my $id = ; #  | 
+
+eval { 
+    $api_instance->apiDropletsIdStatusGet(id => $id);
+};
+if ($@) {
+    warn "Exception when calling DefaultApi->apiDropletsIdStatusGet: $@\n";
+}</code></pre>
+                            </div>
+
+                            <div class="tab-pane" id="examples-Default-apiDropletsIdStatusGet-0-python">
+                              <pre class="prettyprint"><code class="language-python">from __future__ import print_statement
+import time
+import swagger_client
+from swagger_client.rest import ApiException
+from pprint import pprint
+
+# create an instance of the API class
+api_instance = swagger_client.DefaultApi()
+id =  #  | 
+
+try: 
+    api_instance.api_droplets_id_status_get(id)
+except ApiException as e:
+    print("Exception when calling DefaultApi->apiDropletsIdStatusGet: %s\n" % e)</code></pre>
+                            </div>
+                          </div>
+
+                          <h2>Parameters</h2>
+
+                            <div class="methodsubtabletitle">Path parameters</div>
+                            <table id="methodsubtable">
+                                <tr>
+                                  <th width="150px">Name</th>
+                                  <th>Description</th>
+                                </tr>
+                                  <tr><td style="width:150px;">id*</td>
+                                  <td>
+                                  
+                                  
+                                      <div id="d2e199_apiDropletsIdStatusGet_id">
+                                          <div class="json-schema-view">
+                                              <div class="primitive">
+                                                  <span class="type">
+                                                      
+                                                  </span>
+                                  
+                                              </div>
+                                                  <div class="inner required">
+                                                      Required
+                                                  </div>
+                                          </div>
+                                      </div>
+                                  </td>
+                                  </tr>
+                            </table>
+
+
+
+
+
+                          <h2>Responses</h2>
+                        </article>
+                      </div>
+                      <hr>
+                    <div id="api-Default-apiDropletsPost">
+                      <article id="api-Default-apiDropletsPost-0" data-group="User" data-name="apiDropletsPost" data-version="0">
+                        <div class="pull-left">
+                          <h1>apiDropletsPost</h1>
+                          <p></p>
+                        </div>
+                        <div class="pull-right"></div>
+                        <div class="clearfix"></div>
+                        <p></p>
+                        <p class="marked"></p>
+                        <p></p>
+                        <br />
+                        <pre class="prettyprint language-html prettyprinted" data-type="post"><code><span class="pln">/api/droplets</span></code></pre>
+                        <p>
+                          <h3>Usage and SDK Samples</h3>
+                        </p>
+                        <ul class="nav nav-tabs nav-tabs-examples">
+                          <li class="active"><a href="#examples-Default-apiDropletsPost-0-curl">Curl</a></li>
+                          <li class=""><a href="#examples-Default-apiDropletsPost-0-java">Java</a></li>
+                          <li class=""><a href="#examples-Default-apiDropletsPost-0-android">Android</a></li>
+                          <!--<li class=""><a href="#examples-Default-apiDropletsPost-0-groovy">Groovy</a></li>-->
+                          <li class=""><a href="#examples-Default-apiDropletsPost-0-objc">Obj-C</a></li>
+                          <li class=""><a href="#examples-Default-apiDropletsPost-0-javascript">JavaScript</a></li>
+                          <!--<li class=""><a href="#examples-Default-apiDropletsPost-0-angular">Angular</a></li>-->
+                          <li class=""><a href="#examples-Default-apiDropletsPost-0-csharp">C#</a></li>
+                          <li class=""><a href="#examples-Default-apiDropletsPost-0-php">PHP</a></li>
+                          <li class=""><a href="#examples-Default-apiDropletsPost-0-perl">Perl</a></li>
+                          <li class=""><a href="#examples-Default-apiDropletsPost-0-python">Python</a></li>
+                        </ul>
+
+                        <div class="tab-content">
+                          <div class="tab-pane active" id="examples-Default-apiDropletsPost-0-curl">
+                           <pre class="prettyprint"><code class="language-bsh">curl -X POST\
+"//api/droplets"</code></pre>
+                          </div>
+                          <div class="tab-pane" id="examples-Default-apiDropletsPost-0-java">
+                            <pre class="prettyprint"><code class="language-java">import io.swagger.client.*;
+import io.swagger.client.auth.*;
+import io.swagger.client.model.*;
+import io.swagger.client.api.DefaultApi;
+
+import java.io.File;
+import java.util.*;
+
+public class DefaultApiExample {
+
+    public static void main(String[] args) {
+        
+        DefaultApi apiInstance = new DefaultApi();
+        try {
+            apiInstance.apiDropletsPost();
+        } catch (ApiException e) {
+            System.err.println("Exception when calling DefaultApi#apiDropletsPost");
+            e.printStackTrace();
+        }
+    }
+}</code></pre>
+                          </div>
+
+                          <div class="tab-pane" id="examples-Default-apiDropletsPost-0-android">
+                            <pre class="prettyprint"><code class="language-java">import io.swagger.client.api.DefaultApi;
+
+public class DefaultApiExample {
+
+    public static void main(String[] args) {
+        DefaultApi apiInstance = new DefaultApi();
+        try {
+            apiInstance.apiDropletsPost();
+        } catch (ApiException e) {
+            System.err.println("Exception when calling DefaultApi#apiDropletsPost");
+            e.printStackTrace();
+        }
+    }
+}</code></pre>
+                          </div>
+  <!--
+  <div class="tab-pane" id="examples-Default-apiDropletsPost-0-groovy">
+  <pre class="prettyprint language-json prettyprinted" data-type="json"><code>Coming Soon!</code></pre>
+  </div> -->
+                            <div class="tab-pane" id="examples-Default-apiDropletsPost-0-objc">
+                              <pre class="prettyprint"><code class="language-cpp">
+DefaultApi *apiInstance = [[DefaultApi alloc] init];
+
+[apiInstance apiDropletsPostWithCompletionHandler: 
+              ^(NSError* error) {
+                            if (error) {
+                                NSLog(@"Error: %@", error);
+                            }
+                        }];
+</code></pre>
+                            </div>
+
+                            <div class="tab-pane" id="examples-Default-apiDropletsPost-0-javascript">
+                              <pre class="prettyprint"><code class="language-js">var MyApi = require('my_api');
+
+var api = new MyApi.DefaultApi()
+var callback = function(error, data, response) {
+  if (error) {
+    console.error(error);
+  } else {
+    console.log('API called successfully.');
+  }
+};
+api.apiDropletsPost(callback);
+</code></pre>
+                            </div>
+
+                            <!--<div class="tab-pane" id="examples-Default-apiDropletsPost-0-angular">
+              <pre class="prettyprint language-json prettyprinted" data-type="json"><code>Coming Soon!</code></pre>
+            </div>-->
+                            <div class="tab-pane" id="examples-Default-apiDropletsPost-0-csharp">
+                              <pre class="prettyprint"><code class="language-cs">using System;
+using System.Diagnostics;
+using IO.Swagger.Api;
+using IO.Swagger.Client;
+using IO.Swagger.Model;
+
+namespace Example
+{
+    public class apiDropletsPostExample
+    {
+        public void main()
+        {
+
+            var apiInstance = new DefaultApi();
+
+            try
+            {
+                apiInstance.apiDropletsPost();
+            }
+            catch (Exception e)
+            {
+                Debug.Print("Exception when calling DefaultApi.apiDropletsPost: " + e.Message );
+            }
+        }
+    }
+}
+</code></pre>
+                            </div>
+
+                            <div class="tab-pane" id="examples-Default-apiDropletsPost-0-php">
+                              <pre class="prettyprint"><code class="language-php"><&#63;php
+require_once(__DIR__ . '/vendor/autoload.php');
+
+$api_instance = new Swagger\Client\ApiDefaultApi();
+
+try {
+    $api_instance->apiDropletsPost();
+} catch (Exception $e) {
+    echo 'Exception when calling DefaultApi->apiDropletsPost: ', $e->getMessage(), PHP_EOL;
+}
+?></code></pre>
+                            </div>
+
+                            <div class="tab-pane" id="examples-Default-apiDropletsPost-0-perl">
+                              <pre class="prettyprint"><code class="language-perl">use Data::Dumper;
+use WWW::SwaggerClient::Configuration;
+use WWW::SwaggerClient::DefaultApi;
+
+my $api_instance = WWW::SwaggerClient::DefaultApi->new();
+
+eval { 
+    $api_instance->apiDropletsPost();
+};
+if ($@) {
+    warn "Exception when calling DefaultApi->apiDropletsPost: $@\n";
+}</code></pre>
+                            </div>
+
+                            <div class="tab-pane" id="examples-Default-apiDropletsPost-0-python">
+                              <pre class="prettyprint"><code class="language-python">from __future__ import print_statement
+import time
+import swagger_client
+from swagger_client.rest import ApiException
+from pprint import pprint
+
+# create an instance of the API class
+api_instance = swagger_client.DefaultApi()
+
+try: 
+    api_instance.api_droplets_post()
+except ApiException as e:
+    print("Exception when calling DefaultApi->apiDropletsPost: %s\n" % e)</code></pre>
+                            </div>
+                          </div>
+
+                          <h2>Parameters</h2>
+
+
+
+
+
+
+                          <h2>Responses</h2>
+                        </article>
+                      </div>
+                      <hr>
                     <div id="api-Default-docsAsyncapiGet">
                       <article id="api-Default-docsAsyncapiGet-0" data-group="User" data-name="docsAsyncapiGet" data-version="0">
                         <div class="pull-left">
