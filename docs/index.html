@@ -715,8 +715,8 @@
                     <li data-group="Default" data-name="openapiGet" class="">
                       <a href="#api-Default-openapiGet">openapiGet</a>
                     </li>
-                    <li data-group="Default" data-name="rootGet" class="">
-                      <a href="#api-Default-rootGet">rootGet</a>
+                    <li data-group="Default" data-name="sendPost" class="">
+                      <a href="#api-Default-sendPost">sendPost</a>
                     </li>
           </ul>
         </nav>
@@ -1330,10 +1330,10 @@ except ApiException as e:
                         </article>
                       </div>
                       <hr>
-                    <div id="api-Default-rootGet">
-                      <article id="api-Default-rootGet-0" data-group="User" data-name="rootGet" data-version="0">
+                    <div id="api-Default-sendPost">
+                      <article id="api-Default-sendPost-0" data-group="User" data-name="sendPost" data-version="0">
                         <div class="pull-left">
-                          <h1>rootGet</h1>
+                          <h1>sendPost</h1>
                           <p></p>
                         </div>
                         <div class="pull-right"></div>
@@ -1342,30 +1342,30 @@ except ApiException as e:
                         <p class="marked"></p>
                         <p></p>
                         <br />
-                        <pre class="prettyprint language-html prettyprinted" data-type="get"><code><span class="pln">/</span></code></pre>
+                        <pre class="prettyprint language-html prettyprinted" data-type="post"><code><span class="pln">/send</span></code></pre>
                         <p>
                           <h3>Usage and SDK Samples</h3>
                         </p>
                         <ul class="nav nav-tabs nav-tabs-examples">
-                          <li class="active"><a href="#examples-Default-rootGet-0-curl">Curl</a></li>
-                          <li class=""><a href="#examples-Default-rootGet-0-java">Java</a></li>
-                          <li class=""><a href="#examples-Default-rootGet-0-android">Android</a></li>
-                          <!--<li class=""><a href="#examples-Default-rootGet-0-groovy">Groovy</a></li>-->
-                          <li class=""><a href="#examples-Default-rootGet-0-objc">Obj-C</a></li>
-                          <li class=""><a href="#examples-Default-rootGet-0-javascript">JavaScript</a></li>
-                          <!--<li class=""><a href="#examples-Default-rootGet-0-angular">Angular</a></li>-->
-                          <li class=""><a href="#examples-Default-rootGet-0-csharp">C#</a></li>
-                          <li class=""><a href="#examples-Default-rootGet-0-php">PHP</a></li>
-                          <li class=""><a href="#examples-Default-rootGet-0-perl">Perl</a></li>
-                          <li class=""><a href="#examples-Default-rootGet-0-python">Python</a></li>
+                          <li class="active"><a href="#examples-Default-sendPost-0-curl">Curl</a></li>
+                          <li class=""><a href="#examples-Default-sendPost-0-java">Java</a></li>
+                          <li class=""><a href="#examples-Default-sendPost-0-android">Android</a></li>
+                          <!--<li class=""><a href="#examples-Default-sendPost-0-groovy">Groovy</a></li>-->
+                          <li class=""><a href="#examples-Default-sendPost-0-objc">Obj-C</a></li>
+                          <li class=""><a href="#examples-Default-sendPost-0-javascript">JavaScript</a></li>
+                          <!--<li class=""><a href="#examples-Default-sendPost-0-angular">Angular</a></li>-->
+                          <li class=""><a href="#examples-Default-sendPost-0-csharp">C#</a></li>
+                          <li class=""><a href="#examples-Default-sendPost-0-php">PHP</a></li>
+                          <li class=""><a href="#examples-Default-sendPost-0-perl">Perl</a></li>
+                          <li class=""><a href="#examples-Default-sendPost-0-python">Python</a></li>
                         </ul>
 
                         <div class="tab-content">
-                          <div class="tab-pane active" id="examples-Default-rootGet-0-curl">
-                           <pre class="prettyprint"><code class="language-bsh">curl -X GET\
-"//"</code></pre>
+                          <div class="tab-pane active" id="examples-Default-sendPost-0-curl">
+                           <pre class="prettyprint"><code class="language-bsh">curl -X POST\
+"//send"</code></pre>
                           </div>
-                          <div class="tab-pane" id="examples-Default-rootGet-0-java">
+                          <div class="tab-pane" id="examples-Default-sendPost-0-java">
                             <pre class="prettyprint"><code class="language-java">import io.swagger.client.*;
 import io.swagger.client.auth.*;
 import io.swagger.client.model.*;
@@ -1380,16 +1380,16 @@ public class DefaultApiExample {
         
         DefaultApi apiInstance = new DefaultApi();
         try {
-            apiInstance.rootGet();
+            apiInstance.sendPost();
         } catch (ApiException e) {
-            System.err.println("Exception when calling DefaultApi#rootGet");
+            System.err.println("Exception when calling DefaultApi#sendPost");
             e.printStackTrace();
         }
     }
 }</code></pre>
                           </div>
 
-                          <div class="tab-pane" id="examples-Default-rootGet-0-android">
+                          <div class="tab-pane" id="examples-Default-sendPost-0-android">
                             <pre class="prettyprint"><code class="language-java">import io.swagger.client.api.DefaultApi;
 
 public class DefaultApiExample {
@@ -1397,23 +1397,23 @@ public class DefaultApiExample {
     public static void main(String[] args) {
         DefaultApi apiInstance = new DefaultApi();
         try {
-            apiInstance.rootGet();
+            apiInstance.sendPost();
         } catch (ApiException e) {
-            System.err.println("Exception when calling DefaultApi#rootGet");
+            System.err.println("Exception when calling DefaultApi#sendPost");
             e.printStackTrace();
         }
     }
 }</code></pre>
                           </div>
   <!--
-  <div class="tab-pane" id="examples-Default-rootGet-0-groovy">
+  <div class="tab-pane" id="examples-Default-sendPost-0-groovy">
   <pre class="prettyprint language-json prettyprinted" data-type="json"><code>Coming Soon!</code></pre>
   </div> -->
-                            <div class="tab-pane" id="examples-Default-rootGet-0-objc">
+                            <div class="tab-pane" id="examples-Default-sendPost-0-objc">
                               <pre class="prettyprint"><code class="language-cpp">
 DefaultApi *apiInstance = [[DefaultApi alloc] init];
 
-[apiInstance rootGetWithCompletionHandler: 
+[apiInstance sendPostWithCompletionHandler: 
               ^(NSError* error) {
                             if (error) {
                                 NSLog(@"Error: %@", error);
@@ -1422,7 +1422,7 @@ DefaultApi *apiInstance = [[DefaultApi alloc] init];
 </code></pre>
                             </div>
 
-                            <div class="tab-pane" id="examples-Default-rootGet-0-javascript">
+                            <div class="tab-pane" id="examples-Default-sendPost-0-javascript">
                               <pre class="prettyprint"><code class="language-js">var MyApi = require('my_api');
 
 var api = new MyApi.DefaultApi()
@@ -1433,14 +1433,14 @@ var callback = function(error, data, response) {
     console.log('API called successfully.');
   }
 };
-api.rootGet(callback);
+api.sendPost(callback);
 </code></pre>
                             </div>
 
-                            <!--<div class="tab-pane" id="examples-Default-rootGet-0-angular">
+                            <!--<div class="tab-pane" id="examples-Default-sendPost-0-angular">
               <pre class="prettyprint language-json prettyprinted" data-type="json"><code>Coming Soon!</code></pre>
             </div>-->
-                            <div class="tab-pane" id="examples-Default-rootGet-0-csharp">
+                            <div class="tab-pane" id="examples-Default-sendPost-0-csharp">
                               <pre class="prettyprint"><code class="language-cs">using System;
 using System.Diagnostics;
 using IO.Swagger.Api;
@@ -1449,7 +1449,7 @@ using IO.Swagger.Model;
 
 namespace Example
 {
-    public class rootGetExample
+    public class sendPostExample
     {
         public void main()
         {
@@ -1458,11 +1458,11 @@ namespace Example
 
             try
             {
-                apiInstance.rootGet();
+                apiInstance.sendPost();
             }
             catch (Exception e)
             {
-                Debug.Print("Exception when calling DefaultApi.rootGet: " + e.Message );
+                Debug.Print("Exception when calling DefaultApi.sendPost: " + e.Message );
             }
         }
     }
@@ -1470,21 +1470,21 @@ namespace Example
 </code></pre>
                             </div>
 
-                            <div class="tab-pane" id="examples-Default-rootGet-0-php">
+                            <div class="tab-pane" id="examples-Default-sendPost-0-php">
                               <pre class="prettyprint"><code class="language-php"><&#63;php
 require_once(__DIR__ . '/vendor/autoload.php');
 
 $api_instance = new Swagger\Client\ApiDefaultApi();
 
 try {
-    $api_instance->rootGet();
+    $api_instance->sendPost();
 } catch (Exception $e) {
-    echo 'Exception when calling DefaultApi->rootGet: ', $e->getMessage(), PHP_EOL;
+    echo 'Exception when calling DefaultApi->sendPost: ', $e->getMessage(), PHP_EOL;
 }
 ?></code></pre>
                             </div>
 
-                            <div class="tab-pane" id="examples-Default-rootGet-0-perl">
+                            <div class="tab-pane" id="examples-Default-sendPost-0-perl">
                               <pre class="prettyprint"><code class="language-perl">use Data::Dumper;
 use WWW::SwaggerClient::Configuration;
 use WWW::SwaggerClient::DefaultApi;
@@ -1492,14 +1492,14 @@ use WWW::SwaggerClient::DefaultApi;
 my $api_instance = WWW::SwaggerClient::DefaultApi->new();
 
 eval { 
-    $api_instance->rootGet();
+    $api_instance->sendPost();
 };
 if ($@) {
-    warn "Exception when calling DefaultApi->rootGet: $@\n";
+    warn "Exception when calling DefaultApi->sendPost: $@\n";
 }</code></pre>
                             </div>
 
-                            <div class="tab-pane" id="examples-Default-rootGet-0-python">
+                            <div class="tab-pane" id="examples-Default-sendPost-0-python">
                               <pre class="prettyprint"><code class="language-python">from __future__ import print_statement
 import time
 import swagger_client
@@ -1510,9 +1510,9 @@ from pprint import pprint
 api_instance = swagger_client.DefaultApi()
 
 try: 
-    api_instance.root_get()
+    api_instance.send_post()
 except ApiException as e:
-    print("Exception when calling DefaultApi->rootGet: %s\n" % e)</code></pre>
+    print("Exception when calling DefaultApi->sendPost: %s\n" % e)</code></pre>
                             </div>
                           </div>
 
