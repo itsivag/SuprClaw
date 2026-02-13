@@ -31,6 +31,7 @@ dependencies {
     implementation("io.ktor:ktor-client-core")
     implementation("io.ktor:ktor-client-cio")
     implementation("io.ktor:ktor-client-content-negotiation")
+    implementation("io.ktor:ktor-client-websockets")
     implementation("io.github.cdimascio:dotenv-kotlin:6.5.1")
     implementation("ch.qos.logback:logback-classic:$logback_version")
     implementation("io.ktor:ktor-server-config-yaml")
