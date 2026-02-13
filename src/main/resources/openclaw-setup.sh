@@ -13,43 +13,84 @@ echo "AI Model: {{AI_MODEL}}"
 # Wait for system to be fully ready
 sleep 10
 
-# Set environment variables for Google Gemini
-export GOOGLE_API_KEY="{{GOOGLE_API_KEY}}"
+# Set environment variables for OpenAI
+export OPENAI_API_KEY="{{OPENAI_API_KEY}}"
 export AI_PROVIDER="{{AI_PROVIDER}}"
 export AI_MODEL="{{AI_MODEL}}"
 
-echo "export GOOGLE_API_KEY=\"{{GOOGLE_API_KEY}}\"" >> /root/.bashrc
+echo "export OPENAI_API_KEY=\"{{OPENAI_API_KEY}}\"" >> /root/.bashrc
 echo "export AI_PROVIDER=\"{{AI_PROVIDER}}\"" >> /root/.bashrc
 echo "export AI_MODEL=\"{{AI_MODEL}}\"" >> /root/.bashrc
 
-echo "GOOGLE_API_KEY=\"{{GOOGLE_API_KEY}}\"" >> /etc/environment
+echo "OPENAI_API_KEY=\"{{OPENAI_API_KEY}}\"" >> /etc/environment
 echo "AI_PROVIDER=\"{{AI_PROVIDER}}\"" >> /etc/environment
 echo "AI_MODEL=\"{{AI_MODEL}}\"" >> /etc/environment
 
-# Create OpenClaw config directory
+# Create OpenClaw config directory and workspace
 mkdir -p /root/.openclaw
+mkdir -p /root/.openclaw/workspace
 
-# Create OpenClaw config file with Gemini settings
-cat > /root/.openclaw/config.json <<EOF
+# Create proper OpenClaw config file (JSON5 format)
+cat > /root/.openclaw/openclaw.json <<'CONFIGEOF'
 {
-  "ai": {
-    "provider": "{{AI_PROVIDER}}",
-    "model": "{{AI_MODEL}}",
-    "apiKey": "{{GOOGLE_API_KEY}}"
+  env: {
+    OPENAI_API_KEY: "{{OPENAI_API_KEY}}"
   },
-  "gateway": {
-    "port": 18789
+  agents: {
+    defaults: {
+      model: {
+        primary: "{{AI_PROVIDER}}/{{AI_MODEL}}"
+      },
+      workspace: "~/.openclaw/workspace"
+    }
+  },
+  gateway: {
+    mode: "local",
+    port: 18789,
+    bind: "loopback"
   }
 }
-EOF
+CONFIGEOF
+
+echo "Created OpenClaw config at /root/.openclaw/openclaw.json"
+cat /root/.openclaw/openclaw.json
 
 # Run OpenClaw onboarding (non-interactive)
 echo "Running OpenClaw onboarding..."
 openclaw onboard --install-daemon --provider {{AI_PROVIDER}} || echo "Onboarding completed with warnings"
 
-# Start OpenClaw gateway
+# Wait a bit for onboarding to complete
+sleep 5
+
+# Run doctor to check for issues
+echo "Running OpenClaw doctor..."
+openclaw doctor --fix || true
+
+# Start OpenClaw gateway as daemon
 echo "Starting OpenClaw gateway..."
-nohup openclaw gateway --port 18789 > /var/log/openclaw-gateway.log 2>&1 &
+
+# Try using OpenClaw's restart command first (uses daemon)
+openclaw restart || {
+    echo "Restart failed, starting manually..."
+    nohup openclaw gateway --port 18789 > /var/log/openclaw-gateway.log 2>&1 &
+    echo $! > /var/run/openclaw-gateway.pid
+}
+
+# Wait for gateway to start
+sleep 10
+
+# Verify gateway started
+if lsof -nP -iTCP:18789 -sTCP:LISTEN > /dev/null 2>&1; then
+    echo "✅ Gateway started successfully on port 18789"
+    ps aux | grep openclaw | grep -v grep
+else
+    echo "❌ Gateway failed to start! Check logs:"
+    tail -50 /var/log/openclaw-gateway.log
+
+    # Try one more time with verbose output
+    echo "Attempting to start with verbose output..."
+    openclaw gateway --port 18789 --verbose
+fi
 
 echo "=== OpenClaw Setup Completed at $(date) ==="
 echo "Bot '{{BOT_NAME}}' is ready with {{AI_PROVIDER}} ({{AI_MODEL}})!"
