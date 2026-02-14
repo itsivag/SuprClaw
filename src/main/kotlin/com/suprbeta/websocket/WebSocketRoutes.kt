@@ -1,5 +1,6 @@
 package com.suprbeta.websocket
 
+import com.suprbeta.firebase.FirebaseAuthService
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.response.*
@@ -10,7 +11,10 @@ import io.ktor.websocket.*
 /**
  * Configure WebSocket routes for the proxy
  */
-fun Application.configureWebSocketRoutes(sessionManager: ProxySessionManager) {
+fun Application.configureWebSocketRoutes(
+    sessionManager: ProxySessionManager,
+    authService: FirebaseAuthService
+) {
     val logger = log
 
     routing {
@@ -24,15 +28,27 @@ fun Application.configureWebSocketRoutes(sessionManager: ProxySessionManager) {
                 return@webSocket
             }
 
+            // Verify Firebase token
+            val user = authService.verifyToken(token)
+            if (user == null) {
+                logger.warn("WebSocket connection rejected: invalid or expired token")
+                close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "Invalid or expired token"))
+                return@webSocket
+            }
+
             val platform = call.request.queryParameters["platform"]
 
-            logger.info("New WebSocket connection request with token: ${token.take(10)}...")
+            logger.info("New WebSocket connection request for user: ${user.uid}")
 
-            // Create proxy session
+            // Create proxy session with verified user information
             val session = sessionManager.createSession(
                 clientSession = this,
                 token = token,
-                platform = platform
+                platform = platform,
+                userId = user.uid,
+                userEmail = user.email,
+                emailVerified = user.emailVerified,
+                authProvider = user.provider
             )
 
             try {
@@ -76,6 +92,10 @@ fun Application.configureWebSocketRoutes(sessionManager: ProxySessionManager) {
                     appendLine("Session Details:")
                     activeSessions.forEach { (sessionId, session) ->
                         appendLine("  - $sessionId:")
+                        appendLine("    User ID: ${session.metadata.userId}")
+                        appendLine("    Email: ${session.metadata.userEmail ?: "none"}")
+                        appendLine("    Email Verified: ${session.metadata.emailVerified}")
+                        appendLine("    Auth Provider: ${session.metadata.authProvider ?: "unknown"}")
                         appendLine("    Platform: ${session.metadata.platform ?: "unknown"}")
                         appendLine("    Connected: ${session.metadata.connectedAt}")
                         appendLine("    Messages Sent: ${session.metadata.getSentCount()}")

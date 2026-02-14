@@ -34,6 +34,13 @@ class DigitalOceanService(
     val geminiApiKey: String = dotenv["GEMINI_API_KEY"]
         ?: throw IllegalStateException("GEMINI_API_KEY not found in environment")
 
+    // SSH keys to add to droplets (prevents password email from DigitalOcean)
+    // Can be SSH key IDs or fingerprints, comma-separated
+    private val sshKeys: List<String>? = dotenv["DIGITALOCEAN_SSH_KEYS"]
+        ?.split(",")
+        ?.map { it.trim() }
+        ?.filter { it.isNotEmpty() }
+
     /**
      * Creates a droplet with minimal bootstrap user-data (only creates openclaw user).
      * The password is templated into cloud-config for SSH access during onboarding.
@@ -50,8 +57,15 @@ class DigitalOceanService(
             image = DEFAULT_IMAGE,
             monitoring = DEFAULT_MONITORING,
             vpc_uuid = DEFAULT_VPC_UUID,
-            user_data = userData
+            user_data = userData,
+            ssh_keys = sshKeys // Add SSH keys to prevent password email
         )
+
+        if (sshKeys != null) {
+            application.log.info("Creating droplet with ${sshKeys.size} SSH key(s) - password email will be disabled")
+        } else {
+            application.log.warn("No SSH keys configured - DigitalOcean will send password email")
+        }
 
         val response: HttpResponse = httpClient.post(API_BASE_URL) {
             contentType(ContentType.Application.Json)

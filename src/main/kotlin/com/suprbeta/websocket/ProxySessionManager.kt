@@ -30,15 +30,27 @@ class ProxySessionManager(
      * @param clientSession The mobile client's WebSocket session
      * @param token Authentication token
      * @param platform Optional platform identifier
+     * @param userId Verified Firebase UID
+     * @param userEmail User email
+     * @param emailVerified Email verification status
+     * @param authProvider Google/Apple SSO provider
      * @return The created ProxySession
      */
     fun createSession(
         clientSession: DefaultWebSocketSession,
         token: String,
-        platform: String? = null
+        platform: String? = null,
+        userId: String,
+        userEmail: String?,
+        emailVerified: Boolean,
+        authProvider: String?
     ): ProxySession {
         val metadata = SessionMetadata(
             clientToken = token,
+            userId = userId,
+            userEmail = userEmail,
+            emailVerified = emailVerified,
+            authProvider = authProvider,
             platform = platform
         )
 
@@ -48,7 +60,7 @@ class ProxySessionManager(
         )
 
         sessions[session.sessionId] = session
-        logger.info("Created proxy session ${session.sessionId} for platform: ${platform ?: "unknown"}")
+        logger.info("Created proxy session ${session.sessionId} for user: $userId (${userEmail ?: "no email"}), platform: ${platform ?: "unknown"}")
 
         return session
     }

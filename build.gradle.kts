@@ -18,6 +18,11 @@ kotlin {
     jvmToolchain(21)
 }
 
+repositories {
+    mavenCentral()
+    google()
+}
+
 dependencies {
     implementation("org.openfolder:kotlin-asyncapi-ktor:3.1.3")
     implementation("io.ktor:ktor-server-default-headers")
@@ -37,6 +42,7 @@ dependencies {
     implementation("com.hierynomus:sshj:0.39.0")
     implementation("ch.qos.logback:logback-classic:$logback_version")
     implementation("io.ktor:ktor-server-config-yaml")
+    implementation("com.google.firebase:firebase-admin:9.7.1")
     testImplementation("io.ktor:ktor-server-test-host")
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit:$kotlin_version")
 }

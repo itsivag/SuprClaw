@@ -1,9 +1,14 @@
 package com.suprbeta
 
+import com.suprbeta.config.AppConfig
 import com.suprbeta.digitalocean.DigitalOceanService
 import com.suprbeta.digitalocean.DnsService
 import com.suprbeta.digitalocean.DropletProvisioningService
 import com.suprbeta.digitalocean.configureDropletRoutes
+import com.suprbeta.firebase.FirebaseAuthPlugin
+import com.suprbeta.firebase.FirebaseAuthService
+import com.suprbeta.firebase.FirebaseService
+import com.suprbeta.firebase.FirestoreRepository
 import com.suprbeta.websocket.OpenClawConnector
 import com.suprbeta.websocket.ProxySessionManager
 import com.suprbeta.websocket.configureWebSocketRoutes
@@ -27,14 +32,18 @@ fun main(args: Array<String>) {
 }
 
 fun Application.module() {
+    // Initialize app configuration
+    AppConfig.initialize(this)
+
     configureSerialization()
     configureHTTP()
+    val (firebaseAuthService, firestoreRepository) = configureFirebase()
 
     // Create shared HttpClient for API calls
     val httpClient = createHttpClient()
 
-    configureWebSockets(httpClient)
-    configureDigitalOcean(httpClient)
+    configureWebSockets(httpClient, firebaseAuthService)
+    configureDigitalOcean(httpClient, firestoreRepository)
     configureRouting()
 }
 
@@ -59,7 +68,7 @@ fun createHttpClient(): HttpClient {
     }
 }
 
-fun Application.configureWebSockets(httpClient: HttpClient) {
+fun Application.configureWebSockets(httpClient: HttpClient, authService: FirebaseAuthService) {
     // Configure shared JSON serializer
     val json = Json {
         ignoreUnknownKeys = true
@@ -74,7 +83,7 @@ fun Application.configureWebSockets(httpClient: HttpClient) {
         application = this,
         interceptors = listOf(
             LoggingInterceptor(this),
-            AuthInterceptor()
+            AuthInterceptor(authService, this)
         )
     )
 
@@ -94,7 +103,7 @@ fun Application.configureWebSockets(httpClient: HttpClient) {
     )
 
     // Configure WebSocket routes
-    configureWebSocketRoutes(sessionManager)
+    configureWebSocketRoutes(sessionManager, authService)
 
     // Graceful shutdown - close all sessions when application stops
     monitor.subscribe(ApplicationStopped) {
@@ -109,10 +118,35 @@ fun Application.configureWebSockets(httpClient: HttpClient) {
     log.info("WebSocket proxy initialized and ready")
 }
 
-fun Application.configureDigitalOcean(httpClient: HttpClient) {
+fun Application.configureDigitalOcean(httpClient: HttpClient, firestoreRepository: FirestoreRepository) {
     val digitalOceanService = DigitalOceanService(httpClient, this)
     val dnsService = DnsService(httpClient, this)
-    val provisioningService = DropletProvisioningService(digitalOceanService, dnsService, this)
-    configureDropletRoutes(digitalOceanService, provisioningService)
+    val provisioningService = DropletProvisioningService(digitalOceanService, dnsService, firestoreRepository, this)
+    configureDropletRoutes(digitalOceanService, provisioningService, firestoreRepository)
     log.info("DigitalOcean service initialized with SSH provisioning and DNS management")
+}
+
+fun Application.configureFirebase(): Pair<FirebaseAuthService, FirestoreRepository> {
+    // Initialize Firebase services
+    val firebaseService = FirebaseService(this)
+    val firestoreRepository = FirestoreRepository(firebaseService.firestore, this)
+    val firebaseAuthService = FirebaseAuthService(firebaseService, this)
+
+    // Install HTTP authentication plugin
+    install(FirebaseAuthPlugin) {
+        authService = firebaseAuthService
+    }
+
+    // Graceful shutdown - close Firebase when application stops
+    monitor.subscribe(ApplicationStopped) {
+        log.info("Application stopping - shutting down Firebase")
+        runBlocking {
+            firebaseService.shutdown()
+        }
+        log.info("Firebase shutdown complete")
+    }
+
+    log.info("Firebase Authentication and Firestore initialized and ready")
+
+    return Pair(firebaseAuthService, firestoreRepository)
 }

@@ -35,6 +35,7 @@ jobs:
           cp build/libs/*.jar deploy/
           cp .env deploy/ || echo "Warning: .env not found in repo"
           cp setup-wildcard-ssl.sh deploy/
+          cp src/main/resources/application-vps.yaml deploy/
           tar -czf suprclaw-deploy.tar.gz -C deploy .
 
       - name: Setup SSH key
@@ -83,6 +84,32 @@ jobs:
 
             # Move JAR to correct location
             mv *.jar build/libs/ 2>/dev/null || true
+
+            # Create/update systemd service to use VPS configuration
+            sudo tee /etc/systemd/system/suprclaw-backend.service > /dev/null << 'EOF'
+            [Unit]
+            Description=SuprClaw Backend API
+            After=network.target
+
+            [Service]
+            Type=simple
+            User=suprclaw
+            WorkingDirectory=/home/suprclaw/SuprClaw
+            ExecStart=/usr/bin/java -jar /home/suprclaw/SuprClaw/build/libs/SuprClaw-all.jar -config=/home/suprclaw/SuprClaw/application-vps.yaml
+            Restart=always
+            RestartSec=10
+            StandardOutput=journal
+            StandardError=journal
+            SyslogIdentifier=suprclaw-backend
+
+            Environment="JAVA_OPTS=-Xmx512m -Xms256m"
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+
+            # Reload systemd to pick up service changes
+            sudo systemctl daemon-reload
 
             # Fix SSL certificate permissions (if needed)
             if [ -d "/etc/letsencrypt/live/suprclaw.com" ]; then
