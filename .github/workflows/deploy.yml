@@ -1,0 +1,100 @@
+name: Deploy Backend to Production
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'gradle'
+
+      - name: Build with Gradle
+        run: ./gradlew clean build --no-daemon
+
+      - name: Create deployment package
+        run: |
+          mkdir -p deploy
+          cp build/libs/*.jar deploy/
+          cp .env deploy/ || echo "Warning: .env not found in repo"
+          cp setup-wildcard-ssl.sh deploy/
+          tar -czf suprclaw-deploy.tar.gz -C deploy .
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
+
+      - name: Upload to server
+        run: |
+          scp -i ~/.ssh/deploy_key suprclaw-deploy.tar.gz ${{ secrets.DEPLOY_USER }}@${{ secrets.SERVER_IP }}:~/
+
+      - name: Deploy on server
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ secrets.DEPLOY_USER }}@${{ secrets.SERVER_IP }} << 'ENDSSH'
+            cd ~
+
+            # Backup current deployment
+            if [ -d "SuprClaw" ]; then
+              mv SuprClaw SuprClaw.backup.$(date +%Y%m%d_%H%M%S)
+            fi
+
+            # Extract new deployment
+            mkdir -p SuprClaw
+            tar -xzf suprclaw-deploy.tar.gz -C SuprClaw/
+            cd SuprClaw
+
+            # Create necessary directories
+            mkdir -p logs build/libs
+
+            # Move JAR to correct location
+            mv *.jar build/libs/ 2>/dev/null || true
+
+            # Fix SSL certificate permissions (if needed)
+            if [ -d "/etc/letsencrypt/live/suprclaw.com" ]; then
+              sudo chmod 755 /etc/letsencrypt/live /etc/letsencrypt/archive
+              sudo chmod 755 /etc/letsencrypt/live/suprclaw.com /etc/letsencrypt/archive/suprclaw.com
+              sudo chmod 644 /etc/letsencrypt/archive/suprclaw.com/*.pem
+              sudo chmod 640 /etc/letsencrypt/archive/suprclaw.com/privkey*.pem
+              sudo chgrp suprclaw /etc/letsencrypt/archive/suprclaw.com/privkey*.pem
+            fi
+
+            # Restart service
+            sudo systemctl restart suprclaw-backend
+
+            # Wait for service to start
+            sleep 5
+
+            # Check service status
+            if sudo systemctl is-active --quiet suprclaw-backend; then
+              echo "✅ Deployment successful! Service is running."
+              sudo systemctl status suprclaw-backend --no-pager
+            else
+              echo "❌ Deployment failed! Service is not running."
+              sudo journalctl -u suprclaw-backend -n 50 --no-pager
+              exit 1
+            fi
+          ENDSSH
+
+      - name: Verify deployment
+        run: |
+          sleep 5
+          curl -f https://api.suprclaw.com/ || echo "Warning: API health check failed"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -f ~/.ssh/deploy_key
+          rm -f suprclaw-deploy.tar.gz

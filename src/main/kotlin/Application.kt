@@ -1,6 +1,7 @@
 package com.suprbeta
 
 import com.suprbeta.digitalocean.DigitalOceanService
+import com.suprbeta.digitalocean.DnsService
 import com.suprbeta.digitalocean.DropletProvisioningService
 import com.suprbeta.digitalocean.configureDropletRoutes
 import com.suprbeta.websocket.OpenClawConnector
@@ -110,7 +111,8 @@ fun Application.configureWebSockets(httpClient: HttpClient) {
 
 fun Application.configureDigitalOcean(httpClient: HttpClient) {
     val digitalOceanService = DigitalOceanService(httpClient, this)
-    val provisioningService = DropletProvisioningService(digitalOceanService, this)
+    val dnsService = DnsService(httpClient, this)
+    val provisioningService = DropletProvisioningService(digitalOceanService, dnsService, this)
     configureDropletRoutes(digitalOceanService, provisioningService)
-    log.info("DigitalOcean service initialized with SSH provisioning")
+    log.info("DigitalOcean service initialized with SSH provisioning and DNS management")
 }
