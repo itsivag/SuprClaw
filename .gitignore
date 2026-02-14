@@ -34,3 +34,19 @@ out/
 
 ### VS Code ###
 .vscode/
+
+### Environment Variables & Secrets ###
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+deploy/
+
+### SSH Keys ###
+github_actions_deploy
+github_actions_deploy.pub
+
+### Deployment ###
+suprclaw-deploy.tar.gz
+SuprClaw.backup.*

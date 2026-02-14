@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit
  */
 class DropletProvisioningService(
     private val digitalOceanService: DigitalOceanService,
+    private val dnsService: DnsService,
     private val application: Application
 ) {
     private val logger = application.log
@@ -46,7 +47,8 @@ class DropletProvisioningService(
             ProvisioningStatus.PHASE_WAITING_ACTIVE to 0.125,
             ProvisioningStatus.PHASE_WAITING_SSH to 0.25,
             ProvisioningStatus.PHASE_ONBOARDING to 0.4,
-            ProvisioningStatus.PHASE_CONFIGURING to 0.625,
+            ProvisioningStatus.PHASE_CONFIGURING to 0.55,
+            ProvisioningStatus.PHASE_DNS to 0.65,
             ProvisioningStatus.PHASE_VERIFYING to 0.75,
             ProvisioningStatus.PHASE_NGINX to 0.875,
             ProvisioningStatus.PHASE_COMPLETE to 1.0,
@@ -119,22 +121,42 @@ class DropletProvisioningService(
                 statuses[dropletId] = current.copy(gateway_token = gatewayToken)
             }
 
-            // Phase 6 — Gateway verification
+            // Phase 6 — DNS configuration (MANDATORY - fail if this fails)
+            updateStatus(dropletId, ProvisioningStatus.PHASE_DNS, "Creating DNS record...", ipAddress)
+            // Use droplet name as subdomain (sanitize it first)
+            val statusNow = statuses[dropletId]
+            val dropletName = statusNow?.droplet_name ?: "droplet-$dropletId"
+            val sanitizedName = dropletName.lowercase().replace(Regex("[^a-z0-9-]"), "-")
+
+            // Create DNS record - this will throw if it fails, triggering cleanup
+            val subdomain = dnsService.createDnsRecord(sanitizedName, ipAddress)
+            logger.info("✅ Subdomain configured: $subdomain")
+
+            // Update status with subdomain
+            val statusAfterDns = statuses[dropletId]
+            if (statusAfterDns != null) {
+                statuses[dropletId] = statusAfterDns.copy(
+                    subdomain = subdomain,
+                    gateway_token = gatewayToken
+                )
+            }
+
+            // Phase 7 — Gateway verification
             updateStatus(dropletId, ProvisioningStatus.PHASE_VERIFYING, "Verifying gateway status...", ipAddress)
             verifyGateway(ipAddress, password)
 
-            // Phase 7 — Nginx reverse proxy
-            updateStatus(dropletId, ProvisioningStatus.PHASE_NGINX, "Installing and configuring nginx reverse proxy...", ipAddress)
-            setupNginxReverseProxy(ipAddress, password)
+            // Phase 7 — Nginx reverse proxy + SSL
+            updateStatus(dropletId, ProvisioningStatus.PHASE_NGINX, "Installing nginx and obtaining SSL certificate...", ipAddress)
+            setupNginxReverseProxy(ipAddress, password, subdomain)
 
             // Phase 8 — Complete
             updateStatus(
                 dropletId, ProvisioningStatus.PHASE_COMPLETE,
-                "Provisioning complete. Gateway exposed at http://$ipAddress (port 80 → $GATEWAY_PORT).",
+                "Provisioning complete. Secure gateway available at https://$subdomain",
                 ipAddress,
                 completedAt = Instant.now().toString()
             )
-            logger.info("✅ Droplet $dropletId provisioning complete at http://$ipAddress")
+            logger.info("✅ Droplet $dropletId provisioning complete at https://$subdomain")
 
         } catch (e: Exception) {
             logger.error("❌ Droplet $dropletId provisioning failed, deleting droplet...", e)
@@ -312,21 +334,20 @@ class DropletProvisioningService(
         throw IllegalStateException("Gateway did not become ready within ${GATEWAY_VERIFY_TIMEOUT_S}s")
     }
 
-    // ── Phase 7 — Nginx reverse proxy ───────────────────────────────────
+    // ── Phase 7 — Nginx reverse proxy + SSL ────────────────────────────
 
-    private fun setupNginxReverseProxy(ipAddress: String, password: String) {
+    private fun setupNginxReverseProxy(ipAddress: String, password: String, subdomain: String) {
         logger.info("Installing nginx on $ipAddress...")
 
-        // Install nginx
+        // Install nginx only (no certbot needed - using wildcard cert)
         runSshCommand(ipAddress, password, "sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nginx")
 
-        // Build the nginx config as a plain string, then base64 encode it
-        // to avoid all shell escaping issues (heredocs don't work inside bash -l -c '...')
-        val nginxConfig = """
+        // Build initial HTTP-only nginx config for Let's Encrypt verification
+        val nginxConfigHttp = """
 server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    server_name _;
+    listen 80;
+    listen [::]:80;
+    server_name $subdomain;
 
     location / {
         proxy_pass http://127.0.0.1:$GATEWAY_PORT;
@@ -343,18 +364,66 @@ server {
 }
 """.trimIndent()
 
-        val encoded = java.util.Base64.getEncoder().encodeToString(nginxConfig.toByteArray())
+        val encoded = java.util.Base64.getEncoder().encodeToString(nginxConfigHttp.toByteArray())
         runSshCommand(ipAddress, password, "echo $encoded | base64 -d | sudo tee /etc/nginx/sites-available/openclaw > /dev/null")
 
         // Enable site and disable default
         runSshCommand(ipAddress, password, "sudo ln -sf /etc/nginx/sites-available/openclaw /etc/nginx/sites-enabled/openclaw")
         runSshCommand(ipAddress, password, "sudo rm -f /etc/nginx/sites-enabled/default")
 
-        // Test and reload
+        // Test and reload nginx
         runSshCommand(ipAddress, password, "sudo nginx -t")
         runSshCommand(ipAddress, password, "sudo systemctl reload nginx")
 
-        logger.info("Nginx reverse proxy configured: port 80 -> $GATEWAY_PORT")
+        logger.info("Nginx configured for HTTP: port 80 -> $GATEWAY_PORT")
+
+        // Copy wildcard SSL certificate from backend to droplet
+        logger.info("Deploying wildcard SSL certificate to $subdomain...")
+        copySslCertificates(ipAddress, password)
+
+        // Update nginx config to use SSL
+        val nginxConfigHttps = """
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $subdomain;
+    return 301 https://${'$'}server_name${'$'}request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name $subdomain;
+
+    ssl_certificate /etc/ssl/certs/suprclaw.com/fullchain.pem;
+    ssl_certificate_key /etc/ssl/certs/suprclaw.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    location / {
+        proxy_pass http://127.0.0.1:$GATEWAY_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade ${'$'}http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host ${'$'}host;
+        proxy_set_header X-Real-IP ${'$'}remote_addr;
+        proxy_set_header X-Forwarded-For ${'$'}proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto ${'$'}scheme;
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+    }
+}
+""".trimIndent()
+
+        val encodedHttps = java.util.Base64.getEncoder().encodeToString(nginxConfigHttps.toByteArray())
+        runSshCommand(ipAddress, password, "echo $encodedHttps | base64 -d | sudo tee /etc/nginx/sites-available/openclaw > /dev/null")
+
+        // Reload nginx with SSL config
+        runSshCommand(ipAddress, password, "sudo nginx -t")
+        runSshCommand(ipAddress, password, "sudo systemctl reload nginx")
+
+        logger.info("✅ SSL configured for $subdomain using wildcard certificate")
 
         // Configure UFW firewall — allow SSH first (critical!), then HTTP, then enable
         runSshCommand(ipAddress, password, "sudo ufw allow OpenSSH")
@@ -362,6 +431,38 @@ server {
         runSshCommand(ipAddress, password, "sudo ufw --force enable")
 
         logger.info("UFW firewall enabled: SSH + Nginx allowed")
+    }
+
+    // ── SSL Certificate helper ─────────────────────────────────────────
+
+    /**
+     * Copies wildcard SSL certificate from backend server to droplet via SSH
+     */
+    private fun copySslCertificates(ipAddress: String, password: String) {
+        val certPath = "/etc/letsencrypt/live/suprclaw.com"
+
+        // Read certificate files from local filesystem
+        val fullchain = java.io.File("$certPath/fullchain.pem").readText()
+        val privkey = java.io.File("$certPath/privkey.pem").readText()
+
+        // Base64 encode to avoid escaping issues
+        val fullchainEncoded = java.util.Base64.getEncoder().encodeToString(fullchain.toByteArray())
+        val privkeyEncoded = java.util.Base64.getEncoder().encodeToString(privkey.toByteArray())
+
+        // Create SSL directory on droplet
+        runSshCommand(ipAddress, password, "sudo mkdir -p /etc/ssl/certs/suprclaw.com")
+
+        // Copy fullchain.pem
+        runSshCommand(ipAddress, password, "echo $fullchainEncoded | base64 -d | sudo tee /etc/ssl/certs/suprclaw.com/fullchain.pem > /dev/null")
+
+        // Copy privkey.pem
+        runSshCommand(ipAddress, password, "echo $privkeyEncoded | base64 -d | sudo tee /etc/ssl/certs/suprclaw.com/privkey.pem > /dev/null")
+
+        // Set proper permissions
+        runSshCommand(ipAddress, password, "sudo chmod 644 /etc/ssl/certs/suprclaw.com/fullchain.pem")
+        runSshCommand(ipAddress, password, "sudo chmod 600 /etc/ssl/certs/suprclaw.com/privkey.pem")
+
+        logger.info("SSL certificates copied to $ipAddress")
     }
 
     // ── SSH helper ──────────────────────────────────────────────────────
