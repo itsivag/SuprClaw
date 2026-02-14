@@ -39,6 +39,19 @@ class DropletProvisioningService(
         private const val SSH_CONNECT_TIMEOUT_MS = 10_000    // 10s per SSH attempt
         private const val ONBOARDING_MAX_RETRIES = 3
         private const val GATEWAY_VERIFY_TIMEOUT_S = 30
+
+        // Progress values for each phase (0.0 to 1.0)
+        private val PHASE_PROGRESS = mapOf(
+            ProvisioningStatus.PHASE_CREATING to 0.0,
+            ProvisioningStatus.PHASE_WAITING_ACTIVE to 0.125,
+            ProvisioningStatus.PHASE_WAITING_SSH to 0.25,
+            ProvisioningStatus.PHASE_ONBOARDING to 0.4,
+            ProvisioningStatus.PHASE_CONFIGURING to 0.625,
+            ProvisioningStatus.PHASE_VERIFYING to 0.75,
+            ProvisioningStatus.PHASE_NGINX to 0.875,
+            ProvisioningStatus.PHASE_COMPLETE to 1.0,
+            ProvisioningStatus.PHASE_FAILED to 0.0
+        )
     }
 
     // ── Phase 1 — Droplet Creation ──────────────────────────────────────
@@ -61,6 +74,7 @@ class DropletProvisioningService(
             droplet_id = dropletId,
             droplet_name = name,
             phase = ProvisioningStatus.PHASE_CREATING,
+            progress = 0.0,
             message = "Droplet created, waiting for it to become active...",
             started_at = Instant.now().toString()
         )
@@ -90,9 +104,20 @@ class DropletProvisioningService(
             updateStatus(dropletId, ProvisioningStatus.PHASE_ONBOARDING, "Running OpenClaw onboarding via SSH...", ipAddress)
             runOnboardingWithRetries(ipAddress, password, geminiApiKey)
 
-            // Phase 5 — Model configuration
-            updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Setting AI model...", ipAddress)
+            // Phase 5 — Configuration (model + gateway token)
+            updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Configuring AI model and gateway...", ipAddress)
             runSshCommand(ipAddress, password, "openclaw models set google/gemini-2.5-flash")
+
+            // Generate and set gateway token
+            val gatewayToken = generateGatewayToken()
+            runSshCommand(ipAddress, password, "openclaw config set gateway.auth.token $gatewayToken")
+            logger.info("Gateway token set for droplet $dropletId: $gatewayToken")
+
+            // Update status with the token
+            val current = statuses[dropletId]
+            if (current != null) {
+                statuses[dropletId] = current.copy(gateway_token = gatewayToken)
+            }
 
             // Phase 6 — Gateway verification
             updateStatus(dropletId, ProvisioningStatus.PHASE_VERIFYING, "Verifying gateway status...", ipAddress)
@@ -391,12 +416,24 @@ server {
         completedAt: String? = null
     ) {
         val current = statuses[dropletId] ?: return
+        val progress = PHASE_PROGRESS[phase] ?: current.progress
         statuses[dropletId] = current.copy(
             phase = phase,
+            progress = progress,
             message = message,
             ip_address = ipAddress ?: current.ip_address,
             completed_at = completedAt
         )
+    }
+
+    /**
+     * Generates a cryptographically secure random gateway token
+     */
+    private fun generateGatewayToken(): String {
+        val chars = "abcdef0123456789"
+        return (1..48)
+            .map { chars.random() }
+            .joinToString("")
     }
 
 }

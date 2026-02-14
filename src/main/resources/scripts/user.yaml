@@ -1,14 +1,14 @@
 #cloud-config
-ssh_pwauth: true
-chpasswd:
-  expire: false
-  users:
-    - name: openclaw
-      password: {{PASSWORD}}
-      type: text
 users:
   - name: openclaw
     shell: /bin/bash
     groups: sudo
     sudo: ALL=(ALL) NOPASSWD:ALL
     lock_passwd: false
+
+ssh_pwauth: true
+
+chpasswd:
+  expire: false
+  list:
+    - openclaw:{{PASSWORD}}
