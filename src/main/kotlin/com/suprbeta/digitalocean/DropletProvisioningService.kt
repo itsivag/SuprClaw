@@ -1,6 +1,8 @@
 package com.suprbeta.digitalocean
 
+import com.suprbeta.config.AppConfig
 import com.suprbeta.digitalocean.models.ProvisioningStatus
+import com.suprbeta.digitalocean.models.UserDroplet
 import io.ktor.server.application.*
 import kotlinx.coroutines.delay
 import net.schmizz.sshj.SSHClient
@@ -22,6 +24,7 @@ import java.util.concurrent.TimeUnit
 class DropletProvisioningService(
     private val digitalOceanService: DigitalOceanService,
     private val dnsService: DnsService,
+    private val firestoreRepository: com.suprbeta.firebase.FirestoreRepository,
     private val application: Application
 ) {
     private val logger = application.log
@@ -89,7 +92,7 @@ class DropletProvisioningService(
      * Internal entry point that drives the provisioning coroutine.
      * Called as fire-and-forget from the route handler.
      */
-    suspend fun provisionDroplet(dropletId: Long, password: String, geminiApiKey: String) {
+    suspend fun provisionDroplet(dropletId: Long, password: String, geminiApiKey: String): UserDroplet {
         try {
             // Phase 2 — Wait for active + IP
             val ipAddress = waitForDropletReady(dropletId)
@@ -145,18 +148,47 @@ class DropletProvisioningService(
             updateStatus(dropletId, ProvisioningStatus.PHASE_VERIFYING, "Verifying gateway status...", ipAddress)
             verifyGateway(ipAddress, password)
 
-            // Phase 7 — Nginx reverse proxy + SSL
-            updateStatus(dropletId, ProvisioningStatus.PHASE_NGINX, "Installing nginx and obtaining SSL certificate...", ipAddress)
-            setupNginxReverseProxy(ipAddress, password, subdomain)
+            // Phase 7 — Nginx reverse proxy + SSL (only for VPS/production)
+            if (AppConfig.sslEnabled) {
+                updateStatus(dropletId, ProvisioningStatus.PHASE_NGINX, "Installing nginx and obtaining SSL certificate...", ipAddress)
+                setupNginxReverseProxy(ipAddress, password, subdomain)
+            } else {
+                logger.info("ℹ️ Skipping Nginx/SSL setup (running in local mode)")
+            }
 
             // Phase 8 — Complete
+            val gatewayUrl = if (AppConfig.sslEnabled) "https://$subdomain" else "http://$ipAddress:$GATEWAY_PORT"
             updateStatus(
                 dropletId, ProvisioningStatus.PHASE_COMPLETE,
-                "Provisioning complete. Secure gateway available at https://$subdomain",
+                "Provisioning complete. Gateway available at $gatewayUrl",
                 ipAddress,
                 completedAt = Instant.now().toString()
             )
-            logger.info("✅ Droplet $dropletId provisioning complete at https://$subdomain")
+            logger.info("✅ Droplet $dropletId provisioning complete at $gatewayUrl")
+
+            // Create and save user droplet to Firestore
+            val userId = dropletName // Use droplet name as userId (dropletName already defined above)
+            val userDroplet = UserDroplet(
+                userId = userId,
+                dropletId = dropletId,
+                dropletName = dropletName,
+                gatewayUrl = gatewayUrl,
+                gatewayToken = gatewayToken,
+                ipAddress = ipAddress,
+                subdomain = subdomain.takeIf { AppConfig.sslEnabled },
+                createdAt = Instant.now().toString(),
+                status = "active",
+                sslEnabled = AppConfig.sslEnabled
+            )
+
+            try {
+                firestoreRepository.saveUserDroplet(userDroplet)
+                logger.info("💾 User droplet saved to Firestore: userId=$userId, dropletId=$dropletId")
+            } catch (e: Exception) {
+                logger.error("Failed to save user droplet to Firestore (droplet still provisioned successfully)", e)
+            }
+
+            return userDroplet
 
         } catch (e: Exception) {
             logger.error("❌ Droplet $dropletId provisioning failed, deleting droplet...", e)
@@ -184,6 +216,8 @@ class DropletProvisioningService(
                 started_at = Instant.now().toString(),
                 completed_at = Instant.now().toString()
             )
+
+            throw e // Re-throw exception after cleanup
         }
     }
 
@@ -470,8 +504,29 @@ server {
     /**
      * Runs a command over SSH as the openclaw user with password auth.
      * Uses a login shell (bash -l) so PAM session + systemd user bus are available.
+     * Includes retry logic for transient network issues.
      */
     private fun runSshCommand(ipAddress: String, password: String, command: String): String {
+        var lastException: Exception? = null
+        val maxRetries = 3
+
+        repeat(maxRetries) { attempt ->
+            try {
+                return runSshCommandOnce(ipAddress, password, command)
+            } catch (e: Exception) {
+                lastException = e
+                if (attempt < maxRetries - 1) {
+                    val delayMs = 2000L * (attempt + 1) // 2s, 4s, 6s
+                    logger.warn("SSH command attempt ${attempt + 1} failed, retrying in ${delayMs}ms: ${e.message}")
+                    Thread.sleep(delayMs)
+                }
+            }
+        }
+
+        throw lastException ?: RuntimeException("SSH command failed after $maxRetries attempts")
+    }
+
+    private fun runSshCommandOnce(ipAddress: String, password: String, command: String): String {
         val ssh = SSHClient()
         try {
             ssh.addHostKeyVerifier(PromiscuousVerifier())

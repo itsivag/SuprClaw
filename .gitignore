@@ -43,6 +43,11 @@ out/
 *.key
 deploy/
 
+### Firebase Credentials ###
+google-services.json
+**/google-services.json
+resources/google-services.json
+
 ### SSH Keys ###
 github_actions_deploy
 github_actions_deploy.pub

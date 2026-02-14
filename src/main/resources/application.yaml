@@ -7,3 +7,9 @@ ktor:
     watch:
       - com.suprbeta
   development: true
+
+# Deployment environment configuration
+deployment:
+  environment: local  # Options: local, vps
+  ssl:
+    enabled: false    # Set to true for production/VPS with SSL certificates

@@ -8,6 +8,10 @@ import java.util.concurrent.atomic.AtomicLong
  */
 data class SessionMetadata(
     val clientToken: String,
+    val userId: String?,           // Firebase UID
+    val userEmail: String?,        // User email
+    val emailVerified: Boolean,    // Email verification status
+    val authProvider: String?,     // "google.com" or "apple.com"
     val connectedAt: Instant = Instant.now(),
     val platform: String? = null,
     val messagesSent: AtomicLong = AtomicLong(0),
