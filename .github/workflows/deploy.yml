@@ -17,10 +17,17 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '21'
-          cache: 'gradle'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: wrapper
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
 
       - name: Build with Gradle
-        run: ./gradlew clean build --no-daemon
+        run: ./gradlew clean build --no-daemon --stacktrace
 
       - name: Create deployment package
         run: |
