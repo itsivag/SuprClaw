@@ -14,5 +14,8 @@ data class DropletInfo(
     val id: Long?,
     val name: String,
     val status: String?,
-    val ip_address: String? = null
+    val ip_address: String? = null,
+    val subdomain: String? = null,
+    val gateway_port: Int = 18789,
+    val gateway_token: String? = null
 )
