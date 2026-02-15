@@ -44,7 +44,7 @@ fun Application.module() {
 
     configureWebSockets(httpClient, firebaseAuthService)
     configureDigitalOcean(httpClient, firestoreRepository)
-    configureRouting()
+    configureRouting(firestoreRepository)
 }
 
 fun Application.configureSerialization() {
