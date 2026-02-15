@@ -87,25 +87,25 @@ jobs:
 
             # Create/update systemd service
             sudo tee /etc/systemd/system/suprclaw-backend.service > /dev/null << 'EOF'
-[Unit]
-Description=SuprClaw Backend API
-After=network.target
+            [Unit]
+            Description=SuprClaw Backend API
+            After=network.target
 
-[Service]
-Type=simple
-User=suprclaw
-WorkingDirectory=/home/suprclaw/SuprClaw
-EnvironmentFile=/home/suprclaw/SuprClaw/.env
-ExecStart=/usr/bin/java -Xmx1024m -Xms512m -jar /home/suprclaw/SuprClaw/build/libs/SuprClaw-all.jar
-Restart=always
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=suprclaw-backend
+            [Service]
+            Type=simple
+            User=suprclaw
+            WorkingDirectory=/home/suprclaw/SuprClaw
+            EnvironmentFile=/home/suprclaw/SuprClaw/.env
+            ExecStart=/usr/bin/java -Xmx1024m -Xms512m -jar /home/suprclaw/SuprClaw/build/libs/SuprClaw-all.jar
+            Restart=always
+            RestartSec=10
+            StandardOutput=journal
+            StandardError=journal
+            SyslogIdentifier=suprclaw-backend
 
-[Install]
-WantedBy=multi-user.target
-EOF
+            [Install]
+            WantedBy=multi-user.target
+            EOF
 
             # Reload systemd to pick up service changes
             sudo systemctl daemon-reload
