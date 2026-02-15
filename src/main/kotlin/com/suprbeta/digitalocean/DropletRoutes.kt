@@ -47,26 +47,19 @@ fun Application.configureDropletRoutes(
                     }
 
                     // Return immediately with initial status as UserDroplet
-                    val initialStatus = provisioningService.statuses[result.dropletId]
-
-                    // Construct gateway URL from initial status
-                    val gatewayUrl = when {
-                        initialStatus?.subdomain != null -> "https://${initialStatus.subdomain}"
-                        initialStatus?.ip_address != null -> "http://${initialStatus.ip_address}:${initialStatus.gateway_port}"
-                        else -> ""
-                    }
-
+                    // Note: Gateway URL and token are empty until provisioning completes
+                    // Client should poll /api/droplets/my-droplet to get full info when ready
                     val userDroplet = UserDroplet(
                         userId = user.uid,
                         dropletId = result.dropletId,
                         dropletName = request.name,
-                        gatewayUrl = gatewayUrl,
-                        gatewayToken = initialStatus?.gateway_token ?: "",
-                        ipAddress = initialStatus?.ip_address ?: "",
-                        subdomain = initialStatus?.subdomain,
+                        gatewayUrl = "", // Empty until provisioning completes
+                        gatewayToken = "", // Empty until provisioning completes
+                        ipAddress = "",
+                        subdomain = null,
                         createdAt = java.time.Instant.now().toString(),
-                        status = initialStatus?.phase ?: ProvisioningStatus.PHASE_CREATING,
-                        sslEnabled = initialStatus?.subdomain != null
+                        status = "provisioning", // Provisioning in progress
+                        sslEnabled = true
                     )
 
                     call.respond(HttpStatusCode.Accepted, userDroplet)
