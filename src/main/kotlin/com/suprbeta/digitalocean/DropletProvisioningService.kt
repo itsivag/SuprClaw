@@ -538,7 +538,7 @@ server {
             try {
                 // Wrap in bash -l to get a real login session (PAM + systemd user bus)
                 val cmd = session.exec("bash -l -c '${command.replace("'", "'\\''")}'")
-                cmd.join(120, TimeUnit.SECONDS)
+                cmd.join(300, TimeUnit.SECONDS)  // 5 minutes for long-running commands like onboarding
 
                 val stdout = cmd.inputStream.bufferedReader().readText()
                 val stderr = cmd.errorStream.bufferedReader().readText()
