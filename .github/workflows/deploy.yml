@@ -105,28 +105,27 @@ jobs:
             # Set proper permissions
             chmod 600 .env firebase-credentials.json 2>/dev/null || true
 
-            # Create/update systemd service
-            cat > /tmp/suprclaw-backend.service << 'SERVICEEOF'
-            [Unit]
-            Description=SuprClaw Backend API
-            After=network.target
+            # Create/update systemd service using printf (avoids heredoc YAML issues)
+            sudo bash -c 'cat > /etc/systemd/system/suprclaw-backend.service' << 'SVCEOF'
+[Unit]
+Description=SuprClaw Backend API
+After=network.target
 
-            [Service]
-            Type=simple
-            User=suprclaw
-            WorkingDirectory=/home/suprclaw/SuprClaw
-            EnvironmentFile=/home/suprclaw/SuprClaw/.env
-            ExecStart=/usr/bin/java -Xmx1024m -Xms512m -jar /home/suprclaw/SuprClaw/build/libs/SuprClaw-all.jar
-            Restart=always
-            RestartSec=10
-            StandardOutput=journal
-            StandardError=journal
-            SyslogIdentifier=suprclaw-backend
+[Service]
+Type=simple
+User=suprclaw
+WorkingDirectory=/home/suprclaw/SuprClaw
+EnvironmentFile=/home/suprclaw/SuprClaw/.env
+ExecStart=/usr/bin/java -Xmx1024m -Xms512m -jar /home/suprclaw/SuprClaw/build/libs/SuprClaw-all.jar
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=suprclaw-backend
 
-            [Install]
-            WantedBy=multi-user.target
-SERVICEEOF
-            sudo mv /tmp/suprclaw-backend.service /etc/systemd/system/suprclaw-backend.service
+[Install]
+WantedBy=multi-user.target
+SVCEOF
 
             # Reload systemd to pick up service changes
             sudo systemctl daemon-reload
