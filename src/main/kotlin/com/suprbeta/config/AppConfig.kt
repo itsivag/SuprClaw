@@ -3,41 +3,13 @@ package com.suprbeta.config
 import io.ktor.server.application.*
 
 /**
- * Application deployment configuration
+ * Application deployment configuration - always runs in VPS mode
  */
 object AppConfig {
-    private var _environment: DeploymentEnvironment = DeploymentEnvironment.LOCAL
-    private var _sslEnabled: Boolean = false
+    // Always use VPS configuration with SSL enabled
+    val sslEnabled: Boolean = true
 
-    val environment: DeploymentEnvironment
-        get() = _environment
-
-    val sslEnabled: Boolean
-        get() = _sslEnabled
-
-    val isLocal: Boolean
-        get() = _environment == DeploymentEnvironment.LOCAL
-
-    val isVps: Boolean
-        get() = _environment == DeploymentEnvironment.VPS
-
-    /**
-     * Initialize configuration from Ktor application environment
-     */
     fun initialize(application: Application) {
-        val envString = application.environment.config.propertyOrNull("deployment.environment")?.getString() ?: "local"
-        _environment = when (envString.lowercase()) {
-            "vps", "production", "prod" -> DeploymentEnvironment.VPS
-            else -> DeploymentEnvironment.LOCAL
-        }
-
-        _sslEnabled = application.environment.config.propertyOrNull("deployment.ssl.enabled")?.getString()?.toBoolean() ?: false
-
-        application.log.info("📝 Deployment environment: $_environment (SSL: $_sslEnabled)")
+        application.log.info("📝 Deployment mode: VPS (SSL: $sslEnabled)")
     }
-}
-
-enum class DeploymentEnvironment {
-    LOCAL,
-    VPS
 }
