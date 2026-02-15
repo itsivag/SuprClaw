@@ -92,7 +92,7 @@ class DropletProvisioningService(
      * Internal entry point that drives the provisioning coroutine.
      * Called as fire-and-forget from the route handler.
      */
-    suspend fun provisionDroplet(dropletId: Long, password: String, geminiApiKey: String): UserDroplet {
+    suspend fun provisionDroplet(dropletId: Long, password: String, geminiApiKey: String, userId: String): UserDroplet {
         try {
             // Phase 2 — Wait for active + IP
             val ipAddress = waitForDropletReady(dropletId)
@@ -167,7 +167,6 @@ class DropletProvisioningService(
             logger.info("✅ Droplet $dropletId provisioning complete at $gatewayUrl")
 
             // Create and save user droplet to Firestore
-            val userId = dropletName // Use droplet name as userId (dropletName already defined above)
             val userDroplet = UserDroplet(
                 userId = userId,
                 dropletId = dropletId,
