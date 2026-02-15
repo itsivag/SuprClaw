@@ -25,6 +25,28 @@ class FirestoreRepository(
         private const val PROVISIONING_COLLECTION = "provisioning_status"
         private const val SESSIONS_COLLECTION = "proxy_sessions"
         private const val USER_DROPLETS_COLLECTION = "user_droplets"
+        private const val HEALTH_CHECKS_COLLECTION = "health_checks"
+    }
+
+    // ==================== Health Check / Test Operations ====================
+
+    /**
+     * Writes test data to Firestore to verify connectivity and gRPC is working
+     */
+    suspend fun writeHealthCheck(): Map<String, Any> {
+        val testData = mapOf(
+            "test_id" to "health-check-${System.currentTimeMillis()}",
+            "timestamp" to java.time.Instant.now().toString(),
+            "message" to "Firestore connection test - can be deleted",
+            "can_delete" to true
+        )
+
+        firestore.collection(HEALTH_CHECKS_COLLECTION)
+            .document("latest")
+            .set(testData)
+            .await()
+
+        return testData
     }
 
     // ==================== Provisioning Status Operations ====================
