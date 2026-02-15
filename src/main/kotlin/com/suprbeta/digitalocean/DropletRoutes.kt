@@ -1,8 +1,6 @@
 package com.suprbeta.digitalocean
 
 import com.suprbeta.digitalocean.models.CreateDropletNameRequest
-import com.suprbeta.digitalocean.models.CreateDropletResponse
-import com.suprbeta.digitalocean.models.DropletInfo
 import com.suprbeta.digitalocean.models.ProvisioningStatus
 import com.suprbeta.digitalocean.models.UserDroplet
 import com.suprbeta.firebase.authenticated
@@ -26,7 +24,7 @@ fun Application.configureDropletRoutes(
                 /**
                  * POST /api/droplets
                  * Creates a droplet and kicks off background SSH-based provisioning.
-                 * Returns immediately with droplet ID + status URL for polling.
+                 * Returns immediately with UserDroplet containing gateway connection info.
                  */
                 post {
                     val user = call.attributes[firebaseUserKey]
@@ -48,21 +46,30 @@ fun Application.configureDropletRoutes(
                         )
                     }
 
-                    // Return immediately with initial status
+                    // Return immediately with initial status as UserDroplet
                     val initialStatus = provisioningService.statuses[result.dropletId]
 
-                    val response = CreateDropletResponse(
-                        droplet = DropletInfo(
-                            id = result.dropletId,
-                            name = request.name,
-                            status = initialStatus?.phase ?: ProvisioningStatus.PHASE_CREATING,
-                            ip_address = initialStatus?.ip_address
-                        ),
-                        setup_status_url = "/api/droplets/${result.dropletId}/status",
-                        message = initialStatus?.message ?: "Provisioning started. Poll the status URL for progress."
+                    // Construct gateway URL from initial status
+                    val gatewayUrl = when {
+                        initialStatus?.subdomain != null -> "https://${initialStatus.subdomain}"
+                        initialStatus?.ip_address != null -> "http://${initialStatus.ip_address}:${initialStatus.gateway_port}"
+                        else -> ""
+                    }
+
+                    val userDroplet = UserDroplet(
+                        userId = user.uid,
+                        dropletId = result.dropletId,
+                        dropletName = request.name,
+                        gatewayUrl = gatewayUrl,
+                        gatewayToken = initialStatus?.gateway_token ?: "",
+                        ipAddress = initialStatus?.ip_address ?: "",
+                        subdomain = initialStatus?.subdomain,
+                        createdAt = java.time.Instant.now().toString(),
+                        status = initialStatus?.phase ?: ProvisioningStatus.PHASE_CREATING,
+                        sslEnabled = initialStatus?.subdomain != null
                     )
 
-                    call.respond(HttpStatusCode.Accepted, response)
+                    call.respond(HttpStatusCode.Accepted, userDroplet)
                 } catch (e: Exception) {
                     log.error("Error creating droplet", e)
                     call.respond(
