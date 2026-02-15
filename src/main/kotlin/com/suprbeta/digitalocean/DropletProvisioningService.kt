@@ -116,6 +116,10 @@ class DropletProvisioningService(
             // Generate and set gateway token
             val gatewayToken = generateGatewayToken()
             runSshCommand(ipAddress, password, "openclaw config set gateway.auth.token $gatewayToken")
+            runSshCommand(ipAddress, password, "openclaw config set gateway.remote.token $gatewayToken")
+            runSshCommand(ipAddress, password, "openclaw config set gateway.mode local")
+            runSshCommand(ipAddress, password, "openclaw doctor --fix")
+            runSshCommand(ipAddress, password, "openclaw gateway restart")
             logger.info("Gateway token set for droplet $dropletId: $gatewayToken")
 
             // Update status with the token
