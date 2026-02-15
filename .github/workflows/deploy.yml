@@ -69,8 +69,10 @@ jobs:
           ssh -i ~/.ssh/deploy_key ${{ secrets.DEPLOY_USER }}@${{ secrets.SERVER_IP }} << 'ENDSSH'
             cd ~
 
-            # Backup current deployment
+            # Backup config files BEFORE moving directory
             if [ -d "SuprClaw" ]; then
+              cp SuprClaw/.env ~/.env.backup 2>/dev/null || echo "No .env to backup"
+              cp SuprClaw/firebase-credentials.json ~/.firebase-credentials.backup 2>/dev/null || echo "No firebase-credentials.json to backup"
               mv SuprClaw SuprClaw.backup.$(date +%Y%m%d_%H%M%S)
             fi
 
@@ -84,6 +86,24 @@ jobs:
 
             # Move JAR to correct location
             mv *.jar build/libs/ 2>/dev/null || true
+
+            # Restore config files from backup
+            if [ -f ~/.env.backup ]; then
+              mv ~/.env.backup .env
+              echo "✅ Restored .env from backup"
+            else
+              echo "⚠️  Warning: No .env backup found - service may fail to start"
+            fi
+
+            if [ -f ~/.firebase-credentials.backup ]; then
+              mv ~/.firebase-credentials.backup firebase-credentials.json
+              echo "✅ Restored firebase-credentials.json from backup"
+            else
+              echo "⚠️  Warning: No firebase-credentials.json backup found"
+            fi
+
+            # Set proper permissions
+            chmod 600 .env firebase-credentials.json 2>/dev/null || true
 
             # Create/update systemd service
             sudo tee /etc/systemd/system/suprclaw-backend.service > /dev/null << 'EOF'
