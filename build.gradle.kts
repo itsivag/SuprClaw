@@ -47,8 +47,12 @@ dependencies {
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit:$kotlin_version")
 }
 
-// Fix gRPC "Could not find policy 'pick_first'" error
-// This merges META-INF/services files from all gRPC dependencies
 tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar") {
     mergeServiceFiles()
+    // ensure all grpc services are kept
+    transform(com.github.jengelman.gradle.plugins.shadow.transformers.ServiceFileTransformer::class.java)
+
+    manifest {
+        attributes["Main-Class"] = application.mainClass
+    }
 }
