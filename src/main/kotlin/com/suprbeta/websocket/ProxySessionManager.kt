@@ -178,6 +178,13 @@ class ProxySessionManager(
             val frame = json.decodeFromString<WebSocketFrame>(messageText)
             session.metadata.incrementReceived()
 
+            // Intercept and drop ConnectRequest from client to prevent double-auth with VPS
+            // The proxy already handled the handshake with the VPS.
+            if (frame.type == "req" && frame.method == "connect") {
+                logger.info("Intercepted and dropped ConnectRequest from client (handshake handled by proxy) for session ${session.sessionId}")
+                return
+            }
+
             when (val result = messagePipeline.processInbound(frame, session)) {
                 is InterceptorResult.Continue -> {
                     val processedJson = json.encodeToString(result.frame)
@@ -215,7 +222,7 @@ class ProxySessionManager(
                     session.metadata.clientToken,
                     session.metadata.platform ?: "unknown"
                 )
-                return
+                // Continue to forward the challenge to the client so it can satisfy its handshake
             }
 
             when (val result = messagePipeline.processOutbound(frame, session)) {

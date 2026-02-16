@@ -163,7 +163,7 @@ class DropletProvisioningService(
 
             // Phase 8 — Complete
             val vpsGatewayUrl = if (AppConfig.sslEnabled) "https://$subdomain" else "http://$ipAddress:$GATEWAY_PORT"
-            val proxyGatewayUrl = "wss://api.suprclaw.com/ws"
+            val proxyGatewayUrl = "wss://api.suprclaw.com"
             
             updateStatus(
                 dropletId, ProvisioningStatus.PHASE_COMPLETE,
