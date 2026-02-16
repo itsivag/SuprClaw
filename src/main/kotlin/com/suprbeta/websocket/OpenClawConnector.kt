@@ -41,7 +41,7 @@ class OpenClawConnector(
                     .replace("https://", "wss://")
 
                 val session = httpClient.webSocketSession(
-                    urlString = "$wsUrl/ws?token=$token"
+                    urlString = "$wsUrl/ws"
                 )
 
                 logger.info("Connected to OpenClaw VPS successfully at $vpsGatewayUrl")
