@@ -20,7 +20,8 @@ fun Application.configureWebSocketRoutes(
     routing {
         // WebSocket endpoint for mobile clients
         webSocket("/ws") {
-            val token = call.request.queryParameters["token"]
+            val authHeader = call.request.headers[HttpHeaders.Authorization]
+            val token = authHeader?.removePrefix("Bearer ")?.trim()
 
             if (token.isNullOrBlank()) {
                 logger.warn("WebSocket connection rejected: missing token")
