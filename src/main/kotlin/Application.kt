@@ -42,7 +42,7 @@ fun Application.module() {
     // Create shared HttpClient for API calls
     val httpClient = createHttpClient()
 
-    configureWebSockets(httpClient, firebaseAuthService)
+    configureWebSockets(httpClient, firebaseAuthService, firestoreRepository)
     configureDigitalOcean(httpClient, firestoreRepository)
     configureRouting()
 }
@@ -68,7 +68,7 @@ fun createHttpClient(): HttpClient {
     }
 }
 
-fun Application.configureWebSockets(httpClient: HttpClient, authService: FirebaseAuthService) {
+fun Application.configureWebSockets(httpClient: HttpClient, authService: FirebaseAuthService, firestoreRepository: FirestoreRepository) {
     // Configure shared JSON serializer
     val json = Json {
         ignoreUnknownKeys = true
@@ -94,12 +94,13 @@ fun Application.configureWebSockets(httpClient: HttpClient, authService: Firebas
         json = json
     )
 
-    // Initialize session manager
+    // Initialize session manager with Firestore for VPS routing
     val sessionManager = ProxySessionManager(
         application = this,
         openClawConnector = openClawConnector,
         messagePipeline = messagePipeline,
-        json = json
+        json = json,
+        firestoreRepository = firestoreRepository
     )
 
     // Configure WebSocket routes

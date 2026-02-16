@@ -6,6 +6,7 @@ import com.google.cloud.firestore.DocumentSnapshot
 import com.google.cloud.firestore.QuerySnapshot
 import com.suprbeta.digitalocean.models.ProvisioningStatus
 import com.suprbeta.digitalocean.models.UserDroplet
+import com.suprbeta.digitalocean.models.UserDropletInternal
 import io.ktor.server.application.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -178,10 +179,10 @@ class FirestoreRepository(
     // ==================== User Droplets Operations ====================
 
     /**
-     * Saves or updates a user's droplet information
+     * Saves or updates a user's droplet information (internal version with VPS URL)
      * One user can have only one droplet
      */
-    suspend fun saveUserDroplet(droplet: UserDroplet) {
+    suspend fun saveUserDroplet(droplet: UserDropletInternal) {
         try {
             application.log.info("Saving droplet for user: ${droplet.userId}")
 
@@ -198,12 +199,13 @@ class FirestoreRepository(
     }
 
     /**
-     * Retrieves a user's droplet by user ID
+     * Retrieves a user's droplet by user ID (internal version with VPS URL)
      * Returns null if user has no droplet
+     * Used by backend services that need access to VPS gateway URL
      */
-    suspend fun getUserDroplet(userId: String): UserDroplet? {
+    suspend fun getUserDropletInternal(userId: String): UserDropletInternal? {
         return try {
-            application.log.debug("Fetching droplet for user: $userId")
+            application.log.debug("Fetching internal droplet for user: $userId")
 
             val docRef = firestore.collection(USER_DROPLETS_COLLECTION)
                 .document(userId)
@@ -211,7 +213,7 @@ class FirestoreRepository(
             val snapshot: DocumentSnapshot = docRef.get().await()
 
             if (snapshot.exists()) {
-                val droplet = snapshot.toObject(UserDroplet::class.java)
+                val droplet = snapshot.toObject(UserDropletInternal::class.java)
                 application.log.debug("Found droplet for user $userId: dropletId=${droplet?.dropletId}")
                 droplet
             } else {
@@ -222,6 +224,15 @@ class FirestoreRepository(
             application.log.error("Failed to fetch user droplet for user $userId", e)
             null
         }
+    }
+
+    /**
+     * Retrieves a user's droplet by user ID (client-safe version without VPS URL)
+     * Returns null if user has no droplet
+     * Used by API endpoints that return data to clients
+     */
+    suspend fun getUserDroplet(userId: String): UserDroplet? {
+        return getUserDropletInternal(userId)?.toUserDroplet()
     }
 
     /**

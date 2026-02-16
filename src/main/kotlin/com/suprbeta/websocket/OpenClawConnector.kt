@@ -1,6 +1,5 @@
 package com.suprbeta.websocket
 
-import com.suprbeta.config.WebSocketConfig
 import com.suprbeta.websocket.models.*
 import io.ktor.client.*
 import io.ktor.client.plugins.websocket.*
@@ -24,25 +23,26 @@ class OpenClawConnector(
      * Connect to OpenClaw VPS with retry logic
      *
      * @param token Authentication token
+     * @param vpsGatewayUrl The VPS gateway URL to connect to (e.g., https://subdomain.suprclaw.com)
      * @return WebSocketSession if successful, null if all retries failed
      */
-    suspend fun connect(token: String): DefaultWebSocketSession? {
+    suspend fun connect(token: String, vpsGatewayUrl: String): DefaultWebSocketSession? {
         val maxRetries = 3
         val retryDelay = 1000L // 1 second
 
         repeat(maxRetries) { attempt ->
             try {
-                logger.info("Connecting to OpenClaw VPS (attempt ${attempt + 1}/$maxRetries)...")
+                logger.info("Connecting to OpenClaw VPS at $vpsGatewayUrl (attempt ${attempt + 1}/$maxRetries)...")
 
                 val session = httpClient.webSocketSession(
-                    urlString = "${WebSocketConfig.OPENCLAW_WS_URL}?token=$token"
+                    urlString = "$vpsGatewayUrl/ws?token=$token"
                 )
 
-                logger.info("Connected to OpenClaw VPS successfully")
+                logger.info("Connected to OpenClaw VPS successfully at $vpsGatewayUrl")
                 return session
 
             } catch (e: Exception) {
-                logger.error("Failed to connect to OpenClaw VPS (attempt ${attempt + 1}/$maxRetries): ${e.message}")
+                logger.error("Failed to connect to OpenClaw VPS at $vpsGatewayUrl (attempt ${attempt + 1}/$maxRetries): ${e.message}")
 
                 if (attempt < maxRetries - 1) {
                     delay(retryDelay)
@@ -50,7 +50,7 @@ class OpenClawConnector(
             }
         }
 
-        logger.error("Failed to connect to OpenClaw VPS after $maxRetries attempts")
+        logger.error("Failed to connect to OpenClaw VPS at $vpsGatewayUrl after $maxRetries attempts")
         return null
     }
 

@@ -3,6 +3,7 @@ package com.suprbeta.digitalocean
 import com.suprbeta.config.AppConfig
 import com.suprbeta.digitalocean.models.ProvisioningStatus
 import com.suprbeta.digitalocean.models.UserDroplet
+import com.suprbeta.digitalocean.models.UserDropletInternal
 import io.ktor.server.application.*
 import kotlinx.coroutines.delay
 import net.schmizz.sshj.SSHClient
@@ -161,21 +162,24 @@ class DropletProvisioningService(
             }
 
             // Phase 8 — Complete
-            val gatewayUrl = if (AppConfig.sslEnabled) "https://$subdomain" else "http://$ipAddress:$GATEWAY_PORT"
+            val vpsGatewayUrl = if (AppConfig.sslEnabled) "https://$subdomain" else "http://$ipAddress:$GATEWAY_PORT"
+            val proxyGatewayUrl = "wss://api.suprclaw.com/ws"
+            
             updateStatus(
                 dropletId, ProvisioningStatus.PHASE_COMPLETE,
-                "Provisioning complete. Gateway available at $gatewayUrl",
+                "Provisioning complete. Connect via proxy at $proxyGatewayUrl",
                 ipAddress,
                 completedAt = Instant.now().toString()
             )
-            logger.info("✅ Droplet $dropletId provisioning complete at $gatewayUrl")
+            logger.info("✅ Droplet $dropletId provisioning complete. VPS: $vpsGatewayUrl, Proxy: $proxyGatewayUrl")
 
-            // Create and save user droplet to Firestore
-            val userDroplet = UserDroplet(
+            // Create internal droplet with both URLs
+            val userDropletInternal = UserDropletInternal(
                 userId = userId,
                 dropletId = dropletId,
                 dropletName = dropletName,
-                gatewayUrl = gatewayUrl,
+                gatewayUrl = proxyGatewayUrl,           // Proxy URL for clients
+                vpsGatewayUrl = vpsGatewayUrl,          // Actual VPS URL for backend routing
                 gatewayToken = gatewayToken,
                 ipAddress = ipAddress,
                 subdomain = subdomain.takeIf { AppConfig.sslEnabled },
@@ -185,13 +189,14 @@ class DropletProvisioningService(
             )
 
             try {
-                firestoreRepository.saveUserDroplet(userDroplet)
+                firestoreRepository.saveUserDroplet(userDropletInternal)
                 logger.info("💾 User droplet saved to Firestore: userId=$userId, dropletId=$dropletId")
             } catch (e: Exception) {
                 logger.error("Failed to save user droplet to Firestore (droplet still provisioned successfully)", e)
             }
 
-            return userDroplet
+            // Return client-safe version (without VPS URL)
+            return userDropletInternal.toUserDroplet()
 
         } catch (e: Exception) {
             logger.error("❌ Droplet $dropletId provisioning failed, deleting droplet...", e)
