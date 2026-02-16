@@ -201,10 +201,6 @@ class ProxySessionManager(
 
             when (val result = messagePipeline.processInbound(frame, session)) {
                 is InterceptorResult.Continue -> {
-                    logger.info(
-                        "Forwarding inbound frame for session ${session.sessionId}: " +
-                        "type=${frame.type ?: "unknown"} method=${frame.method ?: "none"} id=${frame.id ?: "none"}"
-                    )
                     val processedJson = json.encodeToString(result.frame)
                     openClawSession.send(Frame.Text(processedJson))
                     session.metadata.incrementSent()
@@ -251,10 +247,6 @@ class ProxySessionManager(
 
             when (val result = messagePipeline.processOutbound(frame, session)) {
                 is InterceptorResult.Continue -> {
-                    logger.info(
-                        "Forwarding outbound frame for session ${session.sessionId}: " +
-                        "type=${frame.type ?: "unknown"} event=${frame.event ?: "none"} id=${frame.id ?: "none"}"
-                    )
                     val processedJson = json.encodeToString(result.frame)
                     session.clientSession.send(Frame.Text(processedJson))
                     session.metadata.incrementSent()

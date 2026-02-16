@@ -379,10 +379,7 @@ class DropletProvisioningService(
     // ── Phase 7 — Nginx reverse proxy + SSL ────────────────────────────
 
     private fun setupNginxReverseProxy(ipAddress: String, password: String, subdomain: String) {
-        logger.info("Installing nginx on $ipAddress...")
-
-        // Install nginx only (no certbot needed - using wildcard cert)
-        runSshCommand(ipAddress, password, "sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nginx")
+        logger.info("Configuring nginx on $ipAddress...")
 
         // Build initial HTTP-only nginx config for Let's Encrypt verification
         val nginxConfigHttp = """
