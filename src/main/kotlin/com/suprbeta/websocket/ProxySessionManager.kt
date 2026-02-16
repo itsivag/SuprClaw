@@ -7,16 +7,17 @@ import com.suprbeta.websocket.pipeline.InterceptorResult
 import com.suprbeta.websocket.pipeline.MessagePipeline
 import io.ktor.server.application.*
 import io.ktor.websocket.*
-import kotlinx.coroutines.*
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.*
 import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Manages proxy sessions between mobile clients and OpenClaw VPS
  */
 class ProxySessionManager(
-    private val application: Application,
+    application: Application,
     private val openClawConnector: OpenClawConnector,
     private val messagePipeline: MessagePipeline,
     private val json: Json,
@@ -239,10 +240,49 @@ class ProxySessionManager(
                 openClawConnector.handleConnectChallenge(
                     session.openclawSession!!,
                     upstreamToken,
+                    frame.payload,
                     session.metadata.platform ?: "unknown"
                 )
                 // Do not forward challenge to client to avoid duplicate connect handshakes.
                 return
+            }
+
+            // Validate granted scopes after OpenClaw connect response.
+            if (frame.type == "res" && frame.id == "1") {
+                val grantedScopes = frame.result
+                    ?.jsonObject
+                    ?.get("grantedScopes")
+                    ?.jsonArray
+                    ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+
+                if (!grantedScopes.isNullOrEmpty()) {
+                    if (!grantedScopes.contains("operator.write")) {
+                        logger.error(
+                            "OpenClaw connected without operator.write scope for session ${session.sessionId}. " +
+                            "Granted scopes: $grantedScopes"
+                        )
+                    } else {
+                        logger.info("OpenClaw granted scopes for session ${session.sessionId}: $grantedScopes")
+                    }
+                }
+            }
+
+            // Surface pairing state with requestId + local device identity for fast diagnosis.
+            if (frame.error != null) {
+                val errorObj = frame.error.jsonObject
+                val message = errorObj["message"]?.jsonPrimitive?.contentOrNull
+                if (message == "pairing required") {
+                    val requestId = errorObj["details"]
+                        ?.jsonObject
+                        ?.get("requestId")
+                        ?.jsonPrimitive
+                        ?.contentOrNull
+
+                    logger.error(
+                        "OpenClaw pairing required for session ${session.sessionId}. " +
+                        "requestId=${requestId ?: "unknown"} deviceId=${openClawConnector.getDeviceId()}"
+                    )
+                }
             }
 
             when (val result = messagePipeline.processOutbound(frame, session)) {
