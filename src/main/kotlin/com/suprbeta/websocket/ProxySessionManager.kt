@@ -98,8 +98,8 @@ class ProxySessionManager(
             logger.info("Routing user $userId to VPS: ${userDroplet.vpsGatewayUrl}")
             
             val openClawSession = openClawConnector.connect(
-                token = session.metadata.clientToken,
-                vpsGatewayUrl = userDroplet.vpsGatewayUrl ?: ""
+                token = userDroplet.gatewayToken,
+                vpsGatewayUrl = userDroplet.vpsGatewayUrl
             )
 
             if (openClawSession == null) {
@@ -177,13 +177,6 @@ class ProxySessionManager(
         try {
             val frame = json.decodeFromString<WebSocketFrame>(messageText)
             session.metadata.incrementReceived()
-
-            // Intercept and drop ConnectRequest from client to prevent double-auth with VPS
-            // The proxy already handled the handshake with the VPS.
-            if (frame.type == "req" && frame.method == "connect") {
-                logger.info("Intercepted and dropped ConnectRequest from client (handshake handled by proxy) for session ${session.sessionId}")
-                return
-            }
 
             when (val result = messagePipeline.processInbound(frame, session)) {
                 is InterceptorResult.Continue -> {

@@ -33,9 +33,11 @@ class OpenClawConnector(
         repeat(maxRetries) { attempt ->
             try {
                 logger.info("Connecting to OpenClaw VPS at $vpsGatewayUrl (attempt ${attempt + 1}/$maxRetries)...")
+                val wsUrl = vpsGatewayUrl
+                    .replace("https://", "wss://")
 
                 val session = httpClient.webSocketSession(
-                    urlString = "$vpsGatewayUrl/ws?token=$token"
+                    urlString = "$wsUrl/ws?token=$token"
                 )
 
                 logger.info("Connected to OpenClaw VPS successfully at $vpsGatewayUrl")
