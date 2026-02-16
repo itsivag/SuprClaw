@@ -6,8 +6,12 @@ import io.ktor.client.plugins.websocket.*
 import io.ktor.server.application.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.delay
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 
 /**
  * Handles connections to the OpenClaw VPS WebSocket server
@@ -70,36 +74,40 @@ class OpenClawConnector(
         platform: String = "proxy"
     ) {
         try {
-            val connectRequest = ConnectRequest(
-                type = "req",
-                id = "1",
-                method = "connect",
-                params = ConnectParams(
-                    minProtocol = 3,
-                    maxProtocol = 3,
-                    client = ClientInfo(
-                        id = "suprclaw-proxy",
-                        version = "1.0.0",
-                        platform = platform,
-                        mode = "proxy"
-                    ),
-                    role = "operator",
-                    scopes = listOf(
-                        "operator.read",
-                        "operator.write",
-                        "operator.admin",
-                        "operator.approvals"
-                    ),
-                    caps = emptyList(),
-                    commands = emptyList(),
-                    permissions = emptyMap(),
-                    auth = AuthInfo(token = token),
-                    locale = "en-US",
-                    userAgent = "suprclaw-proxy/1.0.0"
-                )
-            )
-
-            val requestJson = json.encodeToString(connectRequest)
+            // Build a strict request frame to match OpenClaw protocol expectations exactly.
+            val requestJson = buildJsonObject {
+                put("type", "req")
+                put("id", "1")
+                put("method", "connect")
+                putJsonObject("params") {
+                    put("minProtocol", 3)
+                    put("maxProtocol", 3)
+                    putJsonObject("client") {
+                        put("id", "cli")
+                        put("version", "2026.2.9")
+                        put("platform", platform)
+                        put("mode", "node")
+                    }
+                    put("role", "operator")
+                    put(
+                        "scopes",
+                        buildJsonArray {
+                            add(JsonPrimitive("operator.read"))
+                            add(JsonPrimitive("operator.write"))
+                            add(JsonPrimitive("operator.admin"))
+                            add(JsonPrimitive("operator.approvals"))
+                        }
+                    )
+                    put("caps", buildJsonArray { })
+                    put("commands", buildJsonArray { })
+                    putJsonObject("permissions") { }
+                    putJsonObject("auth") {
+                        put("token", token)
+                    }
+                    put("locale", "en-US")
+                    put("userAgent", "openclaw-kmp/2026.2.9")
+                }
+            }.toString()
             session.send(Frame.Text(requestJson))
 
             logger.info("Sent ConnectRequest to OpenClaw VPS (auto-handled connect.challenge)")

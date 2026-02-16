@@ -41,6 +41,14 @@ class LoggingInterceptor(
             logger.info(logMessage)
         }
 
+        // Keep request/response flow visible in production logs during proxy bring-up.
+        if (frame.method == "chat.send" || frame.method == "send") {
+            logger.info(logMessage)
+        }
+        if (frame.type == "res" && frame.id != null) {
+            logger.info(logMessage)
+        }
+
         return InterceptorResult.Continue(frame)
     }
 }
