@@ -11,7 +11,7 @@ data class UserDroplet(
     val userId: String = "",              // Firebase user ID (document ID)
     val dropletId: Long = 0,              // DigitalOcean droplet ID
     val dropletName: String = "",         // Droplet name (usually same as userId)
-    val gatewayUrl: String = "",          // Gateway URL (https://subdomain.suprclaw.com or http://ip:port)
+    val gatewayUrl: String = "",          // Proxy WebSocket URL (wss://api.suprclaw.com/ws)
     val gatewayToken: String = "",        // Authentication token for gateway
     val ipAddress: String = "",           // Droplet IP address
     val subdomain: String? = null,        // Subdomain (if SSL enabled)

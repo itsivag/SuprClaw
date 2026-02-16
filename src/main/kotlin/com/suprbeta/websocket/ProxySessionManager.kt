@@ -19,7 +19,8 @@ class ProxySessionManager(
     private val application: Application,
     private val openClawConnector: OpenClawConnector,
     private val messagePipeline: MessagePipeline,
-    private val json: Json
+    private val json: Json,
+    private val firestoreRepository: com.suprbeta.firebase.FirestoreRepository
 ) {
     private val logger = application.log
     private val sessions = ConcurrentHashMap<String, ProxySession>()
@@ -67,13 +68,39 @@ class ProxySessionManager(
 
     /**
      * Establish connection to OpenClaw VPS for a proxy session
+     * Looks up the user's droplet from Firestore and connects to their specific VPS
      *
      * @param session The proxy session
      * @return true if connection successful, false otherwise
      */
     suspend fun establishOpenClawConnection(session: ProxySession): Boolean {
         try {
-            val openClawSession = openClawConnector.connect(session.metadata.clientToken)
+            // Verify userId is not null
+            val userId = session.metadata.userId
+            if (userId == null) {
+                logger.error("User ID is null for session ${session.sessionId} - cannot establish connection")
+                return false
+            }
+            
+            // Look up user's droplet from Firestore to get their VPS gateway URL
+            val userDroplet = firestoreRepository.getUserDropletInternal(userId)
+            
+            if (userDroplet == null) {
+                logger.error("No droplet found for user $userId - cannot establish connection")
+                return false
+            }
+            
+            if (userDroplet.vpsGatewayUrl.isBlank()) {
+                logger.error("VPS gateway URL is blank for user $userId - cannot establish connection")
+                return false
+            }
+            
+            logger.info("Routing user $userId to VPS: ${userDroplet.vpsGatewayUrl}")
+            
+            val openClawSession = openClawConnector.connect(
+                token = session.metadata.clientToken,
+                vpsGatewayUrl = userDroplet.vpsGatewayUrl ?: ""
+            )
 
             if (openClawSession == null) {
                 logger.error("Failed to connect to OpenClaw VPS for session ${session.sessionId}")
@@ -81,7 +108,7 @@ class ProxySessionManager(
             }
 
             session.openclawSession = openClawSession
-            logger.info("Established OpenClaw connection for session ${session.sessionId}")
+            logger.info("Established OpenClaw connection for session ${session.sessionId} to ${userDroplet.vpsGatewayUrl}")
 
             return true
 
