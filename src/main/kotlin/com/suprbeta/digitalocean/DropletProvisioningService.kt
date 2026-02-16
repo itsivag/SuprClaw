@@ -126,8 +126,14 @@ class DropletProvisioningService(
 
             // Approve static proxy device ID on every newly created droplet.
             staticProxyDeviceId?.let { deviceId ->
-                runSshCommand(ipAddress, password, "openclaw devices approve $deviceId")
-                logger.info("Approved static proxy device on droplet $dropletId: $deviceId")
+                try {
+                    runSshCommand(ipAddress, password, "openclaw devices approve $deviceId")
+                    logger.info("Approved static proxy device on droplet $dropletId: $deviceId")
+                } catch (e: Exception) {
+                    logger.warn(
+                        "Static device auto-approval skipped on droplet $dropletId (likely no pending request yet): ${e.message}"
+                    )
+                }
             } ?: logger.warn("SUPRCLAW static proxy device ID not resolved; skipping device auto-approval on droplet $dropletId")
 
             logger.info("Gateway token set for droplet $dropletId: $gatewayToken")
