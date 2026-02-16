@@ -86,7 +86,7 @@ class OpenClawConnector(
                         put("id", "cli")
                         put("version", "2026.2.9")
                         put("platform", platform)
-                        put("mode", "node")
+                        put("mode", "cli")
                     }
                     put("role", "operator")
                     put(
