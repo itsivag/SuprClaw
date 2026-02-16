@@ -67,6 +67,7 @@ fun Application.configureWebSocketRoutes(
                 sessionManager.startMessageForwarding(session, this)
 
                 logger.info("Session ${session.sessionId} fully initialized and forwarding messages")
+                closeReason.await()
 
             } catch (e: Exception) {
                 logger.error("Error during WebSocket session ${session.sessionId}: ${e.message}", e)

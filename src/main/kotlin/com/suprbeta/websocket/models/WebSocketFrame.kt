@@ -14,6 +14,7 @@ data class WebSocketFrame(
     val id: String? = null,
     val method: String? = null,
     val params: JsonElement? = null,
+    val payload: JsonElement? = null,
     val result: JsonElement? = null,
     val error: JsonElement? = null
 )

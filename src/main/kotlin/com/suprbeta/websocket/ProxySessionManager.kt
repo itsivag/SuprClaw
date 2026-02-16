@@ -108,6 +108,7 @@ class ProxySessionManager(
             }
 
             session.openclawSession = openClawSession
+            session.openClawGatewayToken = userDroplet.gatewayToken
             logger.info("Established OpenClaw connection for session ${session.sessionId} to ${userDroplet.vpsGatewayUrl}")
 
             return true
@@ -143,6 +144,13 @@ class ProxySessionManager(
             } catch (e: Exception) {
                 logger.error("Inbound forwarding error for session ${session.sessionId}: ${e.message}", e)
             } finally {
+                val clientCloseReason = withTimeoutOrNull(1_000) { session.clientSession.closeReason.await() }
+                if (clientCloseReason != null) {
+                    logger.info(
+                        "Client websocket closed for session ${session.sessionId}: " +
+                        "${clientCloseReason.code} (${clientCloseReason.message})"
+                    )
+                }
                 logger.info("Inbound forwarding stopped for session ${session.sessionId}")
             }
         }
@@ -158,6 +166,13 @@ class ProxySessionManager(
             } catch (e: Exception) {
                 logger.error("Outbound forwarding error for session ${session.sessionId}: ${e.message}", e)
             } finally {
+                val upstreamCloseReason = withTimeoutOrNull(1_000) { openClawSession.closeReason.await() }
+                if (upstreamCloseReason != null) {
+                    logger.info(
+                        "OpenClaw websocket closed for session ${session.sessionId}: " +
+                        "${upstreamCloseReason.code} (${upstreamCloseReason.message})"
+                    )
+                }
                 logger.info("Outbound forwarding stopped for session ${session.sessionId}")
             }
         }
@@ -178,8 +193,18 @@ class ProxySessionManager(
             val frame = json.decodeFromString<WebSocketFrame>(messageText)
             session.metadata.incrementReceived()
 
+            // Proxy handles connect.challenge upstream; drop duplicate client connect requests.
+            if (frame.method == "connect") {
+                logger.info("Dropping duplicate client connect request for session ${session.sessionId}")
+                return
+            }
+
             when (val result = messagePipeline.processInbound(frame, session)) {
                 is InterceptorResult.Continue -> {
+                    logger.info(
+                        "Forwarding inbound frame for session ${session.sessionId}: " +
+                        "type=${frame.type ?: "unknown"} method=${frame.method ?: "none"} id=${frame.id ?: "none"}"
+                    )
                     val processedJson = json.encodeToString(result.frame)
                     openClawSession.send(Frame.Text(processedJson))
                     session.metadata.incrementSent()
@@ -210,16 +235,26 @@ class ProxySessionManager(
             // Auto-handle connect.challenge from OpenClaw
             if (frame.event == "connect.challenge") {
                 logger.info("Received connect.challenge from OpenClaw for session ${session.sessionId}")
+                val upstreamToken = session.openClawGatewayToken
+                if (upstreamToken.isNullOrBlank()) {
+                    logger.error("Gateway token missing for session ${session.sessionId}; cannot complete OpenClaw handshake")
+                    return
+                }
                 openClawConnector.handleConnectChallenge(
                     session.openclawSession!!,
-                    session.metadata.clientToken,
+                    upstreamToken,
                     session.metadata.platform ?: "unknown"
                 )
-                // Continue to forward the challenge to the client so it can satisfy its handshake
+                // Do not forward challenge to client to avoid duplicate connect handshakes.
+                return
             }
 
             when (val result = messagePipeline.processOutbound(frame, session)) {
                 is InterceptorResult.Continue -> {
+                    logger.info(
+                        "Forwarding outbound frame for session ${session.sessionId}: " +
+                        "type=${frame.type ?: "unknown"} event=${frame.event ?: "none"} id=${frame.id ?: "none"}"
+                    )
                     val processedJson = json.encodeToString(result.frame)
                     session.clientSession.send(Frame.Text(processedJson))
                     session.metadata.incrementSent()

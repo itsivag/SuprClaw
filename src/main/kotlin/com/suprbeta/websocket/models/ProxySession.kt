@@ -11,6 +11,7 @@ data class ProxySession(
     val sessionId: String = UUID.randomUUID().toString(),
     val clientSession: DefaultWebSocketSession,
     var openclawSession: DefaultWebSocketSession? = null,
+    var openClawGatewayToken: String? = null,
     val metadata: SessionMetadata,
     var forwardingJobs: Pair<Job, Job>? = null // (inbound job, outbound job)
 ) {

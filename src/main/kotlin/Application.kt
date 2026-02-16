@@ -18,6 +18,7 @@ import com.suprbeta.websocket.pipeline.MessagePipeline
 import configureRouting
 import io.ktor.client.*
 import io.ktor.client.engine.cio.*
+import io.ktor.client.plugins.*
 import io.ktor.client.plugins.websocket.*
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
@@ -28,6 +29,7 @@ import io.ktor.client.plugins.contentnegotiation.ContentNegotiation as ClientCon
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation as ServerContentNegotiation
 
 fun main(args: Array<String>) {
+    configureJvmNetworking()
     EngineMain.main(args)
 }
 
@@ -58,6 +60,19 @@ fun Application.configureSerialization() {
 
 fun createHttpClient(): HttpClient {
     return HttpClient(CIO) {
+        engine {
+            // Keep engine-level retries deterministic; OpenClawConnector already retries 3 times.
+            endpoint {
+                connectTimeout = 20_000
+                connectAttempts = 1
+            }
+            requestTimeout = 30_000
+        }
+        install(HttpTimeout) {
+            connectTimeoutMillis = 20_000
+            requestTimeoutMillis = 30_000
+            socketTimeoutMillis = 30_000
+        }
         install(WebSockets)
         install(ClientContentNegotiation) {
             json(Json {
@@ -65,6 +80,14 @@ fun createHttpClient(): HttpClient {
                 prettyPrint = true
             })
         }
+    }
+}
+
+private fun configureJvmNetworking() {
+    val preferIpv4 = (System.getenv("PREFER_IPV4_STACK") ?: "false").equals("true", ignoreCase = true)
+    if (preferIpv4) {
+        System.setProperty("java.net.preferIPv4Stack", "true")
+        System.setProperty("java.net.preferIPv6Addresses", "false")
     }
 }
 
