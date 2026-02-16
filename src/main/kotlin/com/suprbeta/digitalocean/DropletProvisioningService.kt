@@ -4,8 +4,17 @@ import com.suprbeta.config.AppConfig
 import com.suprbeta.digitalocean.models.ProvisioningStatus
 import com.suprbeta.digitalocean.models.UserDroplet
 import com.suprbeta.digitalocean.models.UserDropletInternal
+import com.suprbeta.websocket.OpenClawConnector
+import com.suprbeta.websocket.models.WebSocketFrame
 import io.ktor.server.application.*
+import io.ktor.websocket.*
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import net.schmizz.sshj.SSHClient
 import net.schmizz.sshj.transport.verification.PromiscuousVerifier
 import java.io.IOException
@@ -26,11 +35,11 @@ class DropletProvisioningService(
     private val digitalOceanService: DigitalOceanService,
     private val dnsService: DnsService,
     private val firestoreRepository: com.suprbeta.firebase.FirestoreRepository,
+    private val openClawConnector: OpenClawConnector,
     private val application: Application
 ) {
     private val logger = application.log
-    private val staticProxyDeviceId: String? =
-        System.getenv("SUPRCLAW_STATIC_DEVICE_ID")?.trim()?.takeIf { it.isNotEmpty() }
+    private val json = Json { ignoreUnknownKeys = true }
 
     /** In-memory status map keyed by droplet ID. */
     val statuses = ConcurrentHashMap<Long, ProvisioningStatus>()
@@ -124,18 +133,6 @@ class DropletProvisioningService(
             runSshCommand(ipAddress, password, "openclaw doctor --fix")
             runSshCommand(ipAddress, password, "openclaw gateway restart")
 
-            // Approve static proxy device ID on every newly created droplet.
-            staticProxyDeviceId?.let { deviceId ->
-                try {
-                    runSshCommand(ipAddress, password, "openclaw devices approve $deviceId")
-                    logger.info("Approved static proxy device on droplet $dropletId: $deviceId")
-                } catch (e: Exception) {
-                    logger.warn(
-                        "Static device auto-approval skipped on droplet $dropletId (likely no pending request yet): ${e.message}"
-                    )
-                }
-            } ?: logger.warn("SUPRCLAW static proxy device ID not resolved; skipping device auto-approval on droplet $dropletId")
-
             logger.info("Gateway token set for droplet $dropletId: $gatewayToken")
 
             // Update status with the token
@@ -187,6 +184,10 @@ class DropletProvisioningService(
                 completedAt = Instant.now().toString()
             )
             logger.info("✅ Droplet $dropletId provisioning complete. VPS: $vpsGatewayUrl, Proxy: $proxyGatewayUrl")
+
+            // Final phase: real first connect, and if pairing is required, approve requestId once.
+            // Per requirement: do not reconnect after approval.
+            approvePairingIfRequired(vpsGatewayUrl, gatewayToken, ipAddress, password, dropletId)
 
             // Create internal droplet with both URLs
             val userDropletInternal = UserDropletInternal(
@@ -579,6 +580,80 @@ server {
             }
         } finally {
             ssh.disconnect()
+        }
+    }
+
+    private suspend fun approvePairingIfRequired(
+        vpsGatewayUrl: String,
+        gatewayToken: String,
+        ipAddress: String,
+        password: String,
+        dropletId: Long
+    ) {
+        val session = openClawConnector.connect(
+            token = gatewayToken,
+            vpsGatewayUrl = vpsGatewayUrl
+        )
+
+        if (session == null) {
+            logger.warn("Final pairing phase skipped for droplet $dropletId: unable to open websocket to $vpsGatewayUrl")
+            return
+        }
+
+        try {
+            val deadlineMs = System.currentTimeMillis() + 25_000L
+            while (System.currentTimeMillis() < deadlineMs) {
+                val inbound = withTimeoutOrNull(2_500L) { session.incoming.receive() } ?: continue
+                if (inbound !is Frame.Text) continue
+
+                val frame = json.decodeFromString<WebSocketFrame>(inbound.readText())
+
+                if (frame.event == "connect.challenge") {
+                    openClawConnector.handleConnectChallenge(
+                        session = session,
+                        token = gatewayToken,
+                        challengePayload = frame.payload,
+                        platform = "android"
+                    )
+                    continue
+                }
+
+                if (frame.type == "res" && frame.id == "1" && frame.error == null) {
+                    logger.info("Final pairing phase: connect succeeded for droplet $dropletId (no approval needed)")
+                    return
+                }
+
+                val errorObj = frame.error?.jsonObject ?: continue
+                val message = errorObj["message"]?.jsonPrimitive?.contentOrNull ?: continue
+
+                if (message == "pairing required") {
+                    val requestId = runCatching {
+                        errorObj["details"]
+                            ?.jsonObject
+                            ?.get("requestId")
+                            ?.jsonPrimitive
+                            ?.contentOrNull
+                    }.getOrNull()
+
+                    if (requestId.isNullOrBlank()) {
+                        logger.warn("Final pairing phase: pairing required without requestId for droplet $dropletId")
+                        return
+                    }
+
+                    runSshCommand(ipAddress, password, "openclaw devices approve $requestId")
+                    logger.info("Final pairing phase: approved requestId=$requestId for droplet $dropletId")
+                    return
+                }
+            }
+
+            logger.warn("Final pairing phase timed out for droplet $dropletId")
+        } catch (e: Exception) {
+            logger.warn("Final pairing phase failed for droplet $dropletId: ${e.message}")
+        } finally {
+            try {
+                session.close()
+            } catch (_: Exception) {
+            }
         }
     }
 

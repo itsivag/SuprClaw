@@ -145,7 +145,21 @@ fun Application.configureWebSockets(httpClient: HttpClient, authService: Firebas
 fun Application.configureDigitalOcean(httpClient: HttpClient, firestoreRepository: FirestoreRepository) {
     val digitalOceanService = DigitalOceanService(httpClient, this)
     val dnsService = DnsService(httpClient, this)
-    val provisioningService = DropletProvisioningService(digitalOceanService, dnsService, firestoreRepository, this)
+    val provisioningConnector = OpenClawConnector(
+        application = this,
+        httpClient = httpClient,
+        json = Json {
+            ignoreUnknownKeys = true
+            prettyPrint = true
+        }
+    )
+    val provisioningService = DropletProvisioningService(
+        digitalOceanService = digitalOceanService,
+        dnsService = dnsService,
+        firestoreRepository = firestoreRepository,
+        openClawConnector = provisioningConnector,
+        application = this
+    )
     configureDropletRoutes(digitalOceanService, provisioningService, firestoreRepository)
     log.info("DigitalOcean service initialized with SSH provisioning and DNS management")
 }
