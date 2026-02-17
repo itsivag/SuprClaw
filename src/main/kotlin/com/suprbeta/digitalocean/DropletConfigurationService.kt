@@ -6,6 +6,8 @@ import io.ktor.server.application.*
 
 interface DropletConfigurationService {
     suspend fun createAgent(userId: String, name: String): String
+
+    suspend fun deleteAgent(userId: String, name: String): String
 }
 
 class DropletConfigurationServiceImpl(
@@ -34,6 +36,27 @@ class DropletConfigurationServiceImpl(
 
         val command = "openclaw agents add $name --workspace /home/openclaw/.openclaw/workspace-$name"
         logger.info("Creating OpenClaw agent '$name' on droplet ${userDroplet.dropletId}")
+        return sshCommandExecutor.runSshCommand(userDroplet.ipAddress, userDroplet.sshKey, command)
+    }
+
+    override suspend fun deleteAgent(userId: String, name: String): String {
+        if (!agentNameRegex.matches(name)) {
+            throw IllegalArgumentException("Invalid agent name. Use only letters, numbers, _ and -")
+        }
+
+        val userDroplet = firestoreRepository.getUserDropletInternal(userId)
+            ?: throw IllegalStateException("No droplet found for user")
+
+        if (!userDroplet.status.equals("active", ignoreCase = true)) {
+            throw IllegalStateException("Droplet is not active")
+        }
+
+        if (userDroplet.sshKey.isBlank()) {
+            throw IllegalStateException("SSH key is not available for this droplet")
+        }
+
+        val command = "openclaw agents remove $name"
+        logger.info("Deleting OpenClaw agent '$name' on droplet ${userDroplet.dropletId}")
         return sshCommandExecutor.runSshCommand(userDroplet.ipAddress, userDroplet.sshKey, command)
     }
 }
