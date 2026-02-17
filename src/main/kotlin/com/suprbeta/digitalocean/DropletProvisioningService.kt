@@ -10,19 +10,12 @@ import io.ktor.server.application.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import net.schmizz.sshj.SSHClient
-import net.schmizz.sshj.transport.verification.PromiscuousVerifier
-import java.io.IOException
-import java.net.InetSocketAddress
-import java.net.Socket
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
 
 /**
  * Orchestrates OpenClaw droplet provisioning using Pattern A (SSH Onboarding).
@@ -36,7 +29,8 @@ class DropletProvisioningService(
     private val dnsService: DnsService,
     private val firestoreRepository: com.suprbeta.firebase.FirestoreRepository,
     private val openClawConnector: OpenClawConnector,
-    private val application: Application
+    private val sshCommandExecutor: SshCommandExecutor,
+    application: Application
 ) {
     private val logger = application.log
     private val json = Json { ignoreUnknownKeys = true }
@@ -45,14 +39,9 @@ class DropletProvisioningService(
     val statuses = ConcurrentHashMap<Long, ProvisioningStatus>()
 
     companion object {
-        private const val SSH_USER = "openclaw"
-        private const val SSH_PORT = 22
         private const val GATEWAY_PORT = 18789
         private const val POLL_INTERVAL_MS = 5_000L
         private const val MAX_POLL_WAIT_MS = 300_000L       // 5 minutes for droplet to become active
-        private const val SSH_PROBE_TIMEOUT_MS = 120_000L   // 2 minutes for SSH port
-        private const val SSH_AUTH_TIMEOUT_MS = 180_000L    // 3 minutes for cloud-init to apply password
-        private const val SSH_CONNECT_TIMEOUT_MS = 10_000    // 10s per SSH attempt
         private const val ONBOARDING_MAX_RETRIES = 3
         private const val GATEWAY_VERIFY_TIMEOUT_S = 30
 
@@ -111,11 +100,11 @@ class DropletProvisioningService(
 
             // Phase 3 — Wait for SSH port
             updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_SSH, "Waiting for SSH port at $ipAddress...")
-            waitForSshReady(ipAddress)
+            sshCommandExecutor.waitForSshReady(ipAddress)
 
             // Phase 3b — Wait for cloud-init to apply password (deterministic probe)
             updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_SSH, "Waiting for cloud-init to finish (probing SSH auth)...", ipAddress)
-            waitForSshAuth(ipAddress, password)
+            sshCommandExecutor.waitForSshAuth(ipAddress, password)
 
             // Phase 4 — Onboarding (with retries)
             updateStatus(dropletId, ProvisioningStatus.PHASE_ONBOARDING, "Running OpenClaw onboarding via SSH...", ipAddress)
@@ -123,15 +112,15 @@ class DropletProvisioningService(
 
             // Phase 5 — Configuration (model + gateway token)
             updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Configuring AI model and gateway...", ipAddress)
-            runSshCommand(ipAddress, password, "openclaw models set google/gemini-2.5-flash")
+            sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw models set google/gemini-2.5-flash")
 
             // Generate and set gateway token
             val gatewayToken = generateGatewayToken()
-            runSshCommand(ipAddress, password, "openclaw config set gateway.auth.token $gatewayToken")
-            runSshCommand(ipAddress, password, "openclaw config set gateway.remote.token $gatewayToken")
-            runSshCommand(ipAddress, password, "openclaw config set gateway.mode local")
-            runSshCommand(ipAddress, password, "openclaw doctor --fix")
-            runSshCommand(ipAddress, password, "openclaw gateway restart")
+            sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw config set gateway.auth.token $gatewayToken")
+            sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw config set gateway.remote.token $gatewayToken")
+            sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw config set gateway.mode local")
+            sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw doctor --fix")
+            sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw gateway restart")
 
             logger.info("Gateway token set for droplet $dropletId: $gatewayToken")
 
@@ -279,57 +268,6 @@ class DropletProvisioningService(
         throw IllegalStateException("Droplet $dropletId did not become active within ${MAX_POLL_WAIT_MS / 1000}s")
     }
 
-    // ── Phase 3 — SSH port probe ────────────────────────────────────────
-
-    private suspend fun waitForSshReady(ipAddress: String) {
-        val deadline = System.currentTimeMillis() + SSH_PROBE_TIMEOUT_MS
-
-        while (System.currentTimeMillis() < deadline) {
-            try {
-                Socket().use { socket ->
-                    socket.connect(InetSocketAddress(ipAddress, SSH_PORT), 3000)
-                }
-                logger.info("SSH port reachable at $ipAddress")
-                return
-            } catch (_: IOException) {
-                delay(2000)
-            }
-        }
-
-        throw IllegalStateException("SSH not reachable at $ipAddress after ${SSH_PROBE_TIMEOUT_MS / 1000}s")
-    }
-
-    /**
-     * Deterministically waits for cloud-init to finish applying password config.
-     * Instead of guessing with a fixed delay, we actively probe SSH auth
-     * every 5 seconds until it succeeds — meaning cloud-init has applied
-     * ssh_pwauth + chpasswd.
-     */
-    private suspend fun waitForSshAuth(ipAddress: String, password: String) {
-        val deadline = System.currentTimeMillis() + SSH_AUTH_TIMEOUT_MS
-
-        while (System.currentTimeMillis() < deadline) {
-            try {
-                val ssh = SSHClient()
-                try {
-                    ssh.addHostKeyVerifier(PromiscuousVerifier())
-                    ssh.connectTimeout = SSH_CONNECT_TIMEOUT_MS
-                    ssh.connect(ipAddress, SSH_PORT)
-                    ssh.authPassword(SSH_USER, password)
-                    logger.info("SSH auth succeeded — cloud-init has applied password config")
-                    return
-                } finally {
-                    ssh.disconnect()
-                }
-            } catch (e: Exception) {
-                logger.info("SSH auth not ready yet (cloud-init still running): ${e.message}")
-                delay(5000)
-            }
-        }
-
-        throw IllegalStateException("SSH auth not available at $ipAddress after ${SSH_AUTH_TIMEOUT_MS / 1000}s — cloud-init may have failed")
-    }
-
     // ── Phase 4 — Onboarding via SSH ────────────────────────────────────
 
     private suspend fun runOnboardingWithRetries(ipAddress: String, password: String, geminiApiKey: String) {
@@ -348,7 +286,7 @@ class DropletProvisioningService(
         repeat(ONBOARDING_MAX_RETRIES) { attempt ->
             try {
                 logger.info("Onboarding attempt ${attempt + 1}/$ONBOARDING_MAX_RETRIES on $ipAddress")
-                val output = runSshCommand(ipAddress, password, command)
+                val output = sshCommandExecutor.runSshCommand(ipAddress, password, command)
 
                 if (output.contains("Installed systemd service") || output.contains("Enabled systemd lingering") || output.contains("onboarding complete", ignoreCase = true)) {
                     logger.info("Onboarding succeeded on attempt ${attempt + 1}")
@@ -380,7 +318,7 @@ class DropletProvisioningService(
 
         while (System.currentTimeMillis() < deadline) {
             try {
-                val output = runSshCommand(ipAddress, password, "openclaw gateway status")
+                val output = sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw gateway status")
                 logger.info("Gateway status: ${output.take(200)}")
                 return  // exit 0 means success
             } catch (e: Exception) {
@@ -420,15 +358,15 @@ server {
 """.trimIndent()
 
         val encoded = java.util.Base64.getEncoder().encodeToString(nginxConfigHttp.toByteArray())
-        runSshCommand(ipAddress, password, "echo $encoded | base64 -d | sudo tee /etc/nginx/sites-available/openclaw > /dev/null")
+        sshCommandExecutor.runSshCommand(ipAddress, password, "echo $encoded | base64 -d | sudo tee /etc/nginx/sites-available/openclaw > /dev/null")
 
         // Enable site and disable default
-        runSshCommand(ipAddress, password, "sudo ln -sf /etc/nginx/sites-available/openclaw /etc/nginx/sites-enabled/openclaw")
-        runSshCommand(ipAddress, password, "sudo rm -f /etc/nginx/sites-enabled/default")
+        sshCommandExecutor.runSshCommand(ipAddress, password, "sudo ln -sf /etc/nginx/sites-available/openclaw /etc/nginx/sites-enabled/openclaw")
+        sshCommandExecutor.runSshCommand(ipAddress, password, "sudo rm -f /etc/nginx/sites-enabled/default")
 
         // Test and reload nginx
-        runSshCommand(ipAddress, password, "sudo nginx -t")
-        runSshCommand(ipAddress, password, "sudo systemctl reload nginx")
+        sshCommandExecutor.runSshCommand(ipAddress, password, "sudo nginx -t")
+        sshCommandExecutor.runSshCommand(ipAddress, password, "sudo systemctl reload nginx")
 
         logger.info("Nginx configured for HTTP: port 80 -> $GATEWAY_PORT")
 
@@ -472,18 +410,18 @@ server {
 """.trimIndent()
 
         val encodedHttps = java.util.Base64.getEncoder().encodeToString(nginxConfigHttps.toByteArray())
-        runSshCommand(ipAddress, password, "echo $encodedHttps | base64 -d | sudo tee /etc/nginx/sites-available/openclaw > /dev/null")
+        sshCommandExecutor.runSshCommand(ipAddress, password, "echo $encodedHttps | base64 -d | sudo tee /etc/nginx/sites-available/openclaw > /dev/null")
 
         // Reload nginx with SSL config
-        runSshCommand(ipAddress, password, "sudo nginx -t")
-        runSshCommand(ipAddress, password, "sudo systemctl reload nginx")
+        sshCommandExecutor.runSshCommand(ipAddress, password, "sudo nginx -t")
+        sshCommandExecutor.runSshCommand(ipAddress, password, "sudo systemctl reload nginx")
 
         logger.info("✅ SSL configured for $subdomain using wildcard certificate")
 
         // Configure UFW firewall — allow SSH first (critical!), then HTTP, then enable
-        runSshCommand(ipAddress, password, "sudo ufw allow OpenSSH")
-        runSshCommand(ipAddress, password, "sudo ufw allow 'Nginx Full'")
-        runSshCommand(ipAddress, password, "sudo ufw --force enable")
+        sshCommandExecutor.runSshCommand(ipAddress, password, "sudo ufw allow OpenSSH")
+        sshCommandExecutor.runSshCommand(ipAddress, password, "sudo ufw allow 'Nginx Full'")
+        sshCommandExecutor.runSshCommand(ipAddress, password, "sudo ufw --force enable")
 
         logger.info("UFW firewall enabled: SSH + Nginx allowed")
     }
@@ -505,82 +443,19 @@ server {
         val privkeyEncoded = java.util.Base64.getEncoder().encodeToString(privkey.toByteArray())
 
         // Create SSL directory on droplet
-        runSshCommand(ipAddress, password, "sudo mkdir -p /etc/ssl/certs/suprclaw.com")
+        sshCommandExecutor.runSshCommand(ipAddress, password, "sudo mkdir -p /etc/ssl/certs/suprclaw.com")
 
         // Copy fullchain.pem
-        runSshCommand(ipAddress, password, "echo $fullchainEncoded | base64 -d | sudo tee /etc/ssl/certs/suprclaw.com/fullchain.pem > /dev/null")
+        sshCommandExecutor.runSshCommand(ipAddress, password, "echo $fullchainEncoded | base64 -d | sudo tee /etc/ssl/certs/suprclaw.com/fullchain.pem > /dev/null")
 
         // Copy privkey.pem
-        runSshCommand(ipAddress, password, "echo $privkeyEncoded | base64 -d | sudo tee /etc/ssl/certs/suprclaw.com/privkey.pem > /dev/null")
+        sshCommandExecutor.runSshCommand(ipAddress, password, "echo $privkeyEncoded | base64 -d | sudo tee /etc/ssl/certs/suprclaw.com/privkey.pem > /dev/null")
 
         // Set proper permissions
-        runSshCommand(ipAddress, password, "sudo chmod 644 /etc/ssl/certs/suprclaw.com/fullchain.pem")
-        runSshCommand(ipAddress, password, "sudo chmod 600 /etc/ssl/certs/suprclaw.com/privkey.pem")
+        sshCommandExecutor.runSshCommand(ipAddress, password, "sudo chmod 644 /etc/ssl/certs/suprclaw.com/fullchain.pem")
+        sshCommandExecutor.runSshCommand(ipAddress, password, "sudo chmod 600 /etc/ssl/certs/suprclaw.com/privkey.pem")
 
         logger.info("SSL certificates copied to $ipAddress")
-    }
-
-    // ── SSH helper ──────────────────────────────────────────────────────
-
-    /**
-     * Runs a command over SSH as the openclaw user with password auth.
-     * Uses a login shell (bash -l) so PAM session + systemd user bus are available.
-     * Includes retry logic for transient network issues.
-     */
-    private fun runSshCommand(ipAddress: String, password: String, command: String): String {
-        var lastException: Exception? = null
-        val maxRetries = 3
-
-        repeat(maxRetries) { attempt ->
-            try {
-                return runSshCommandOnce(ipAddress, password, command)
-            } catch (e: Exception) {
-                lastException = e
-                if (attempt < maxRetries - 1) {
-                    val delayMs = 2000L * (attempt + 1) // 2s, 4s, 6s
-                    logger.warn("SSH command attempt ${attempt + 1} failed, retrying in ${delayMs}ms: ${e.message}")
-                    Thread.sleep(delayMs)
-                }
-            }
-        }
-
-        throw lastException ?: RuntimeException("SSH command failed after $maxRetries attempts")
-    }
-
-    private fun runSshCommandOnce(ipAddress: String, password: String, command: String): String {
-        val ssh = SSHClient()
-        try {
-            ssh.addHostKeyVerifier(PromiscuousVerifier())
-            ssh.connectTimeout = SSH_CONNECT_TIMEOUT_MS
-            ssh.connect(ipAddress, SSH_PORT)
-            ssh.authPassword(SSH_USER, password)
-
-            val session = ssh.startSession()
-            try {
-                // Wrap in bash -l to get a real login session (PAM + systemd user bus)
-                val cmd = session.exec("bash -l -c '${command.replace("'", "'\\''")}'")
-                cmd.join(300, TimeUnit.SECONDS)  // 5 minutes for long-running commands like onboarding
-
-                val stdout = cmd.inputStream.bufferedReader().readText()
-                val stderr = cmd.errorStream.bufferedReader().readText()
-                val exitStatus = cmd.exitStatus
-
-                logger.info("SSH command exit=$exitStatus stdout=${stdout.take(200)}")
-                if (stderr.isNotBlank()) {
-                    logger.info("SSH stderr: ${stderr.take(200)}")
-                }
-
-                if (exitStatus != null && exitStatus != 0) {
-                    throw RuntimeException("SSH command failed (exit=$exitStatus): ${stderr.take(500)}")
-                }
-
-                return stdout
-            } finally {
-                session.close()
-            }
-        } finally {
-            ssh.disconnect()
-        }
     }
 
     private suspend fun approvePairingIfRequired(
@@ -640,7 +515,7 @@ server {
                         return
                     }
 
-                    runSshCommand(ipAddress, password, "openclaw devices approve $requestId")
+                    sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw devices approve $requestId")
                     logger.info("Final pairing phase: approved requestId=$requestId for droplet $dropletId")
                     return
                 }
