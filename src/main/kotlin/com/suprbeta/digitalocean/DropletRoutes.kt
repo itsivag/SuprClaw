@@ -1,6 +1,7 @@
 package com.suprbeta.digitalocean
 
 import com.suprbeta.digitalocean.models.CreateDropletNameRequest
+import com.suprbeta.digitalocean.models.CreateAgentRequest
 import com.suprbeta.digitalocean.models.ProvisioningStatus
 import com.suprbeta.digitalocean.models.UserDroplet
 import com.suprbeta.firebase.authenticated
@@ -15,6 +16,7 @@ import kotlinx.coroutines.launch
 fun Application.configureDropletRoutes(
     digitalOceanService: DigitalOceanService,
     provisioningService: DropletProvisioningService,
+    configuringService: DropletConfigurationService,
     firestoreRepository: com.suprbeta.firebase.FirestoreRepository
 ) {
     routing {
@@ -91,6 +93,45 @@ fun Application.configureDropletRoutes(
                         }
                     } catch (e: Exception) {
                         log.error("Error fetching user droplet", e)
+                        call.respond(
+                            HttpStatusCode.InternalServerError,
+                            mapOf("error" to (e.message ?: "Unknown error occurred"))
+                        )
+                    }
+                }
+
+                /**
+                 * POST /api/droplets/agents
+                 * Creates an agent on the user's droplet through SSH.
+                 */
+                post("agents") {
+                    val user = call.attributes[firebaseUserKey]
+                    log.info("Create agent request for user ${user.uid}")
+
+                    try {
+                        val request = call.receive<CreateAgentRequest>()
+                        val output = configuringService.createAgent(user.uid, request.name)
+
+                        call.respond(
+                            HttpStatusCode.Created,
+                            mapOf(
+                                "name" to request.name,
+                                "message" to "Agent created",
+                                "output" to output.take(500)
+                            )
+                        )
+                    } catch (e: IllegalArgumentException) {
+                        call.respond(
+                            HttpStatusCode.BadRequest,
+                            mapOf("error" to (e.message ?: "Invalid request"))
+                        )
+                    } catch (e: IllegalStateException) {
+                        call.respond(
+                            HttpStatusCode.Conflict,
+                            mapOf("error" to (e.message ?: "Agent creation failed"))
+                        )
+                    } catch (e: Exception) {
+                        log.error("Error creating agent", e)
                         call.respond(
                             HttpStatusCode.InternalServerError,
                             mapOf("error" to (e.message ?: "Unknown error occurred"))
