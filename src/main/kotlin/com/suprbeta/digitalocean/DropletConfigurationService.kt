@@ -7,7 +7,7 @@ import io.ktor.server.application.*
 import java.time.Instant
 
 interface DropletConfigurationService {
-    suspend fun createAgent(userId: String, name: String): String
+    suspend fun createAgent(userId: String, name: String, model: String? = null): String
 
     suspend fun deleteAgent(userId: String, name: String): String
 }
@@ -17,10 +17,14 @@ class DropletConfigurationServiceImpl(
     private val sshCommandExecutor: SshCommandExecutor,
     application: Application
 ) : DropletConfigurationService {
+    companion object {
+        private const val DEFAULT_AGENT_MODEL = "google/gemini-2.5-flash"
+    }
+
     private val logger = application.log
     private val agentNameRegex = Regex("^[a-zA-Z0-9_-]+$")
 
-    override suspend fun createAgent(userId: String, name: String): String {
+    override suspend fun createAgent(userId: String, name: String, model: String?): String {
         if (!agentNameRegex.matches(name)) {
             throw IllegalArgumentException("Invalid agent name. Use only letters, numbers, _ and -")
         }
@@ -38,6 +42,7 @@ class DropletConfigurationServiceImpl(
 
         val workspacePath = "/home/openclaw/.openclaw/workspace-$name"
         val command = "openclaw agents add $name --workspace $workspacePath"
+        val selectedModel = model?.trim()?.ifBlank { DEFAULT_AGENT_MODEL } ?: DEFAULT_AGENT_MODEL
         logger.info("Creating OpenClaw agent '$name' on droplet ${userDroplet.dropletId}")
         val output = sshCommandExecutor.runSshCommand(userDroplet.ipAddress, userDroplet.sshKey, command)
 
@@ -45,6 +50,8 @@ class DropletConfigurationServiceImpl(
             userId = userId,
             agent = UserAgent(
                 name = name,
+                agentId = name,
+                model = selectedModel,
                 workspacePath = workspacePath,
                 dropletId = userDroplet.dropletId,
                 createdAt = Instant.now().toString()

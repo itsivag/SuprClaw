@@ -4,5 +4,6 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class CreateAgentRequest(
-    val name: String
+    val name: String,
+    val model: String? = null
 )

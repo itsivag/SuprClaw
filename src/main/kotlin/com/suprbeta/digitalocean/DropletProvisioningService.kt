@@ -228,6 +228,8 @@ class DropletProvisioningServiceImpl(
                             userId = userId,
                             agent = UserAgent(
                                 name = "main",
+                                agentId = "main",
+                                model = "google/gemini-2.5-flash",
                                 workspacePath = "~/.openclaw/workspace",
                                 dropletId = dropletId,
                                 createdAt = Instant.now().toString()

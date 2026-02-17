@@ -1,6 +1,8 @@
 package com.suprbeta.digitalocean
 
 import com.suprbeta.digitalocean.models.CreateAgentRequest
+import com.suprbeta.digitalocean.models.AgentListResponse
+import com.suprbeta.digitalocean.models.AgentMutationResponse
 import com.suprbeta.firebase.FirestoreRepository
 import com.suprbeta.firebase.authenticated
 import com.suprbeta.firebase.firebaseUserKey
@@ -28,10 +30,10 @@ fun Application.configureAgentRoutes(
                         val agents = firestoreRepository.getUserAgents(user.uid)
                         call.respond(
                             HttpStatusCode.OK,
-                            mapOf(
-                                "userId" to user.uid,
-                                "count" to agents.size,
-                                "agents" to agents
+                            AgentListResponse(
+                                userId = user.uid,
+                                count = agents.size,
+                                agents = agents
                             )
                         )
                     } catch (e: Exception) {
@@ -55,15 +57,17 @@ fun Application.configureAgentRoutes(
                         val dropletId = call.requireOwnedDropletId(user.uid, firestoreRepository) ?: return@post
 
                         val request = call.receive<CreateAgentRequest>()
-                        val output = configuringService.createAgent(user.uid, request.name)
+                        val output = configuringService.createAgent(user.uid, request.name, request.model)
 
                         call.respond(
                             HttpStatusCode.Created,
-                            mapOf(
-                                "dropletId" to dropletId,
-                                "name" to request.name,
-                                "message" to "Agent created",
-                                "output" to output.take(500)
+                            AgentMutationResponse(
+                                dropletId = dropletId,
+                                name = request.name,
+                                model = request.model?.ifBlank { "google/gemini-2.5-flash" }
+                                    ?: "google/gemini-2.5-flash",
+                                message = "Agent created",
+                                output = output.take(500)
                             )
                         )
                     } catch (e: IllegalArgumentException) {
@@ -105,11 +109,11 @@ fun Application.configureAgentRoutes(
                         val output = configuringService.deleteAgent(user.uid, agentName)
                         call.respond(
                             HttpStatusCode.OK,
-                            mapOf(
-                                "dropletId" to dropletId,
-                                "name" to agentName,
-                                "message" to "Agent deleted",
-                                "output" to output.take(500)
+                            AgentMutationResponse(
+                                dropletId = dropletId,
+                                name = agentName,
+                                message = "Agent deleted",
+                                output = output.take(500)
                             )
                         )
                     } catch (e: IllegalArgumentException) {
