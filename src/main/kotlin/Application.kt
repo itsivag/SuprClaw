@@ -3,6 +3,8 @@ package com.suprbeta
 import com.suprbeta.config.AppConfig
 import com.suprbeta.digitalocean.DigitalOceanService
 import com.suprbeta.digitalocean.DnsService
+import com.suprbeta.digitalocean.DropletConfigurationService
+import com.suprbeta.digitalocean.DropletConfigurationServiceImpl
 import com.suprbeta.digitalocean.DropletProvisioningService
 import com.suprbeta.digitalocean.DropletProvisioningServiceImpl
 import com.suprbeta.core.SshCommandExecutorImpl
@@ -164,7 +166,12 @@ fun Application.configureDigitalOcean(httpClient: HttpClient, firestoreRepositor
         sshCommandExecutor = sshCommandExecutor,
         application = this
     )
-    configureDropletRoutes(digitalOceanService, provisioningService, firestoreRepository)
+    val configuringService: DropletConfigurationService = DropletConfigurationServiceImpl(
+        firestoreRepository = firestoreRepository,
+        sshCommandExecutor = sshCommandExecutor,
+        application = this
+    )
+    configureDropletRoutes(digitalOceanService, provisioningService, configuringService, firestoreRepository)
     log.info("DigitalOcean service initialized with SSH provisioning and DNS management")
 }
 

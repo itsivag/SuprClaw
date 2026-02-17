@@ -5,6 +5,7 @@ import com.suprbeta.core.SshCommandExecutor
 import com.suprbeta.digitalocean.models.ProvisioningStatus
 import com.suprbeta.digitalocean.models.UserDroplet
 import com.suprbeta.digitalocean.models.UserDropletInternal
+import com.suprbeta.firebase.FirestoreRepository
 import com.suprbeta.websocket.OpenClawConnector
 import com.suprbeta.websocket.models.WebSocketFrame
 import io.ktor.server.application.*
@@ -48,7 +49,7 @@ interface DropletProvisioningService {
 class DropletProvisioningServiceImpl(
     private val digitalOceanService: DigitalOceanService,
     private val dnsService: DnsService,
-    private val firestoreRepository: com.suprbeta.firebase.FirestoreRepository,
+    private val firestoreRepository: FirestoreRepository,
     private val openClawConnector: OpenClawConnector,
     private val sshCommandExecutor: SshCommandExecutor,
     application: Application
@@ -205,6 +206,7 @@ class DropletProvisioningServiceImpl(
                 gatewayUrl = proxyGatewayUrl,           // Proxy URL for clients
                 vpsGatewayUrl = vpsGatewayUrl,          // Actual VPS URL for backend routing
                 gatewayToken = gatewayToken,
+                sshKey = password,
                 ipAddress = ipAddress,
                 subdomain = subdomain.takeIf { AppConfig.sslEnabled },
                 createdAt = Instant.now().toString(),
