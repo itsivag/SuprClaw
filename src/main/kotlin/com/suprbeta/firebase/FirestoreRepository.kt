@@ -304,6 +304,30 @@ class FirestoreRepository(
         }
     }
 
+    suspend fun getUserAgents(userId: String): List<UserAgent> {
+        return try {
+            application.log.debug("Fetching agents for user: $userId")
+
+            val snapshot: QuerySnapshot = firestore.collection(USERS)
+                .document(userId)
+                .collection(USER_AGENTS_SUBCOLLECTION)
+                .get()
+                .await()
+
+            snapshot.documents.mapNotNull { doc ->
+                try {
+                    doc.toObject(UserAgent::class.java)
+                } catch (e: Exception) {
+                    application.log.warn("Failed to deserialize user agent document ${doc.id} for user $userId", e)
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            application.log.error("Failed to fetch user agents for user $userId", e)
+            emptyList()
+        }
+    }
+
     suspend fun deleteUserAgent(userId: String, agentName: String) {
         try {
             application.log.info("Deleting agent for user: $userId, name=$agentName")

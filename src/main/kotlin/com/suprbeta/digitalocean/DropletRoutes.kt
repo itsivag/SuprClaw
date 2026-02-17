@@ -1,6 +1,5 @@
 package com.suprbeta.digitalocean
 
-import com.suprbeta.digitalocean.models.CreateAgentRequest
 import com.suprbeta.digitalocean.models.CreateDropletNameRequest
 import com.suprbeta.digitalocean.models.UserDroplet
 import com.suprbeta.firebase.FirestoreRepository
@@ -14,9 +13,7 @@ import io.ktor.server.routing.*
 import kotlinx.coroutines.launch
 
 fun Application.configureDropletRoutes(
-    provisioningService: DropletProvisioningService,
-    configuringService: DropletConfigurationService,
-    firestoreRepository: FirestoreRepository
+    provisioningService: DropletProvisioningService, firestoreRepository: FirestoreRepository
 ) {
     routing {
         authenticated {
@@ -34,44 +31,44 @@ fun Application.configureDropletRoutes(
                     try {
                         val request = call.receive<CreateDropletNameRequest>()
 
-                    // Phase 1 — Create droplet
-                    val result = provisioningService.createAndProvision(request.name)
+                        // Phase 1 — Create droplet
+                        val result = provisioningService.createAndProvision(request.name)
 
-                    // Launch provisioning in background (phases 2-8)
-                    launch {
-                        provisioningService.provisionDroplet(
+                        // Launch provisioning in background (phases 2-8)
+                        launch {
+                            provisioningService.provisionDroplet(
+                                dropletId = result.dropletId,
+                                password = result.password,
+                                geminiApiKey = result.geminiApiKey,
+                                userId = user.uid
+                            )
+                        }
+
+                        // Return immediately with initial status as UserDroplet
+                        // Note: Gateway URL and token are empty until provisioning completes
+                        // Client should poll /api/droplets/my-droplet to get full info when ready
+                        val userDroplet = UserDroplet(
+                            userId = user.uid,
                             dropletId = result.dropletId,
-                            password = result.password,
-                            geminiApiKey = result.geminiApiKey,
-                            userId = user.uid
+                            dropletName = request.name,
+                            gatewayUrl = "", // Empty until provisioning completes
+                            gatewayToken = "", // Empty until provisioning completes
+                            ipAddress = "",
+                            subdomain = null,
+                            createdAt = java.time.Instant.now().toString(),
+                            status = "provisioning", // Provisioning in progress
+                            sslEnabled = true
+                        )
+
+                        call.respond(HttpStatusCode.Accepted, userDroplet)
+                    } catch (e: Exception) {
+                        log.error("Error creating droplet", e)
+                        call.respond(
+                            HttpStatusCode.InternalServerError,
+                            mapOf("error" to (e.message ?: "Unknown error occurred"))
                         )
                     }
-
-                    // Return immediately with initial status as UserDroplet
-                    // Note: Gateway URL and token are empty until provisioning completes
-                    // Client should poll /api/droplets/my-droplet to get full info when ready
-                    val userDroplet = UserDroplet(
-                        userId = user.uid,
-                        dropletId = result.dropletId,
-                        dropletName = request.name,
-                        gatewayUrl = "", // Empty until provisioning completes
-                        gatewayToken = "", // Empty until provisioning completes
-                        ipAddress = "",
-                        subdomain = null,
-                        createdAt = java.time.Instant.now().toString(),
-                        status = "provisioning", // Provisioning in progress
-                        sslEnabled = true
-                    )
-
-                    call.respond(HttpStatusCode.Accepted, userDroplet)
-                } catch (e: Exception) {
-                    log.error("Error creating droplet", e)
-                    call.respond(
-                        HttpStatusCode.InternalServerError,
-                        mapOf("error" to (e.message ?: "Unknown error occurred"))
-                    )
                 }
-            }
 
                 /**
                  * GET /api/droplets/my-droplet
@@ -100,94 +97,6 @@ fun Application.configureDropletRoutes(
                 }
 
                 /**
-                 * POST /api/droplets/{id}/agents
-                 * Creates an agent on the specified droplet through SSH.
-                 */
-                post("{id}/agents") {
-                    val user = call.attributes[firebaseUserKey]
-                    log.info("Create agent request for user ${user.uid}")
-
-                    try {
-                        val dropletId = call.requireOwnedDropletId(user.uid, firestoreRepository) ?: return@post
-
-                        val request = call.receive<CreateAgentRequest>()
-                        val output = configuringService.createAgent(user.uid, request.name)
-
-                        call.respond(
-                            HttpStatusCode.Created,
-                            mapOf(
-                                "dropletId" to dropletId,
-                                "name" to request.name,
-                                "message" to "Agent created",
-                                "output" to output.take(500)
-                            )
-                        )
-                    } catch (e: IllegalArgumentException) {
-                        call.respond(
-                            HttpStatusCode.BadRequest,
-                            mapOf("error" to (e.message ?: "Invalid request"))
-                        )
-                    } catch (e: IllegalStateException) {
-                        call.respond(
-                            HttpStatusCode.Conflict,
-                            mapOf("error" to (e.message ?: "Agent creation failed"))
-                        )
-                    } catch (e: Exception) {
-                        log.error("Error creating agent", e)
-                        call.respond(
-                            HttpStatusCode.InternalServerError,
-                            mapOf("error" to (e.message ?: "Unknown error occurred"))
-                        )
-                    }
-                }
-
-                /**
-                 * DELETE /api/droplets/{id}/agents/{name}
-                 * Deletes an agent from the specified droplet through SSH.
-                 */
-                delete("{id}/agents/{name}") {
-                    val user = call.attributes[firebaseUserKey]
-                    log.info("Delete agent request for user ${user.uid}")
-
-                    try {
-                        val dropletId = call.requireOwnedDropletId(user.uid, firestoreRepository) ?: return@delete
-
-                        val agentName = call.parameters["name"].orEmpty()
-                        if (agentName.isBlank()) {
-                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid agent name"))
-                            return@delete
-                        }
-
-                        val output = configuringService.deleteAgent(user.uid, agentName)
-                        call.respond(
-                            HttpStatusCode.OK,
-                            mapOf(
-                                "dropletId" to dropletId,
-                                "name" to agentName,
-                                "message" to "Agent deleted",
-                                "output" to output.take(500)
-                            )
-                        )
-                    } catch (e: IllegalArgumentException) {
-                        call.respond(
-                            HttpStatusCode.BadRequest,
-                            mapOf("error" to (e.message ?: "Invalid request"))
-                        )
-                    } catch (e: IllegalStateException) {
-                        call.respond(
-                            HttpStatusCode.Conflict,
-                            mapOf("error" to (e.message ?: "Agent deletion failed"))
-                        )
-                    } catch (e: Exception) {
-                        log.error("Error deleting agent", e)
-                        call.respond(
-                            HttpStatusCode.InternalServerError,
-                            mapOf("error" to (e.message ?: "Unknown error occurred"))
-                        )
-                    }
-                }
-
-                /**
                  * GET /api/droplets/{id}/status
                  * Returns the current provisioning status for a droplet.
                  */
@@ -202,11 +111,14 @@ fun Application.configureDropletRoutes(
                             return@get
                         }
 
-                    val status = provisioningService.getStatus(dropletId)
-                    if (status == null) {
-                        call.respond(HttpStatusCode.NotFound, mapOf("error" to "No provisioning status found for droplet $dropletId"))
-                        return@get
-                    }
+                        val status = provisioningService.getStatus(dropletId)
+                        if (status == null) {
+                            call.respond(
+                                HttpStatusCode.NotFound,
+                                mapOf("error" to "No provisioning status found for droplet $dropletId")
+                            )
+                            return@get
+                        }
 
                         call.respond(HttpStatusCode.OK, status)
                     } catch (e: Exception) {
@@ -220,28 +132,4 @@ fun Application.configureDropletRoutes(
             }
         }
     }
-}
-
-private suspend fun ApplicationCall.requireOwnedDropletId(
-    userId: String,
-    firestoreRepository: FirestoreRepository
-): Long? {
-    val dropletId = parameters["id"]?.toLongOrNull()
-    if (dropletId == null) {
-        respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid droplet ID"))
-        return null
-    }
-
-    val userDroplet = firestoreRepository.getUserDropletInternal(userId)
-    if (userDroplet == null) {
-        respond(HttpStatusCode.NotFound, mapOf("error" to "No droplet found for user"))
-        return null
-    }
-
-    if (userDroplet.dropletId != dropletId) {
-        respond(HttpStatusCode.Forbidden, mapOf("error" to "Droplet does not belong to user"))
-        return null
-    }
-
-    return dropletId
 }
