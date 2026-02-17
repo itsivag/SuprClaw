@@ -171,7 +171,7 @@ fun Application.configureDigitalOcean(httpClient: HttpClient, firestoreRepositor
         sshCommandExecutor = sshCommandExecutor,
         application = this
     )
-    configureDropletRoutes(digitalOceanService, provisioningService, configuringService, firestoreRepository)
+    configureDropletRoutes(provisioningService, configuringService, firestoreRepository)
     log.info("DigitalOcean service initialized with SSH provisioning and DNS management")
 }
 
