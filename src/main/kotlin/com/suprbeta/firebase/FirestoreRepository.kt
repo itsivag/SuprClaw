@@ -5,6 +5,7 @@ import com.google.cloud.firestore.Firestore
 import com.google.cloud.firestore.DocumentSnapshot
 import com.google.cloud.firestore.QuerySnapshot
 import com.suprbeta.digitalocean.models.ProvisioningStatus
+import com.suprbeta.digitalocean.models.UserAgent
 import com.suprbeta.digitalocean.models.UserDroplet
 import com.suprbeta.digitalocean.models.UserDropletInternal
 import io.ktor.server.application.*
@@ -25,7 +26,9 @@ class FirestoreRepository(
     companion object {
         private const val PROVISIONING_COLLECTION = "provisioning_status"
         private const val SESSIONS_COLLECTION = "proxy_sessions"
-        private const val USER_DROPLETS_COLLECTION = "user_droplets"
+        private const val USERS = "users"
+        private const val USER_DROPLETS_SUBCOLLECTION = "droplets"
+        private const val USER_AGENTS_SUBCOLLECTION = "agents"
     }
 
     // ==================== Provisioning Status Operations ====================
@@ -186,8 +189,11 @@ class FirestoreRepository(
         try {
             application.log.info("Saving droplet for user: ${droplet.userId}")
 
-            val docRef = firestore.collection(USER_DROPLETS_COLLECTION)
-                .document(droplet.userId) // Use userId as document ID
+            val dropletDocId = droplet.dropletId.toString()
+            val docRef = firestore.collection(USERS)
+                .document(droplet.userId)
+                .collection(USER_DROPLETS_SUBCOLLECTION)
+                .document(dropletDocId)
 
             docRef.set(droplet).await()
 
@@ -207,14 +213,29 @@ class FirestoreRepository(
         return try {
             application.log.debug("Fetching internal droplet for user: $userId")
 
-            val docRef = firestore.collection(USER_DROPLETS_COLLECTION)
+            val dropletDocs = firestore.collection(USERS)
                 .document(userId)
+                .collection(USER_DROPLETS_SUBCOLLECTION)
+                .limit(1)
+                .get()
+                .await()
+
+            val dropletDoc = dropletDocs.documents.firstOrNull()
+            if (dropletDoc == null) {
+                application.log.debug("No droplet found for user: $userId")
+                return null
+            }
+
+            val docRef = firestore.collection(USERS)
+                .document(userId)
+                .collection(USER_DROPLETS_SUBCOLLECTION)
+                .document(dropletDoc.id)
 
             val snapshot: DocumentSnapshot = docRef.get().await()
 
             if (snapshot.exists()) {
                 val droplet = snapshot.toObject(UserDropletInternal::class.java)
-                application.log.debug("Found droplet for user $userId: dropletId=${droplet?.dropletId}")
+                application.log.debug("Found droplet for user $userId: dropletId=${droplet?.dropletId}, doc=${dropletDoc.id}")
                 droplet
             } else {
                 application.log.debug("No droplet found for user: $userId")
@@ -242,14 +263,62 @@ class FirestoreRepository(
         try {
             application.log.info("Deleting droplet for user: $userId")
 
-            firestore.collection(USER_DROPLETS_COLLECTION)
+            val dropletDocs = firestore.collection(USERS)
                 .document(userId)
-                .delete()
+                .collection(USER_DROPLETS_SUBCOLLECTION)
+                .get()
                 .await()
+
+            for (dropletDoc in dropletDocs.documents) {
+                firestore.collection(USERS)
+                    .document(userId)
+                    .collection(USER_DROPLETS_SUBCOLLECTION)
+                    .document(dropletDoc.id)
+                    .delete()
+                    .await()
+            }
 
             application.log.info("User droplet deleted successfully for user: $userId")
         } catch (e: Exception) {
             application.log.error("Failed to delete user droplet for user $userId", e)
+        }
+    }
+
+    // ==================== User Agents Operations ====================
+
+    suspend fun saveUserAgent(userId: String, agent: UserAgent) {
+        try {
+            application.log.info("Saving agent for user: $userId, name=${agent.name}")
+
+            firestore.collection(USERS)
+                .document(userId)
+                .collection(USER_AGENTS_SUBCOLLECTION)
+                .document(agent.name)
+                .set(agent)
+                .await()
+
+            application.log.info("✅ User agent saved successfully: userId=$userId, name=${agent.name}")
+        } catch (e: Exception) {
+            application.log.error("Failed to save user agent for user $userId, name=${agent.name}", e)
+            throw e
+        }
+    }
+
+    suspend fun deleteUserAgent(userId: String, agentName: String) {
+        try {
+            application.log.info("Deleting agent for user: $userId, name=$agentName")
+
+            firestore.collection(USERS)
+                .document(userId)
+                .collection(USER_AGENTS_SUBCOLLECTION)
+                .document(agentName)
+                .delete()
+                .await()
+
+            application.log.info("User agent deleted successfully: userId=$userId, name=$agentName")
+        } catch (e: Exception) {
+            application.log.error("Failed to delete user agent for user $userId, name=$agentName", e)
+            throw e
         }
     }
 }
