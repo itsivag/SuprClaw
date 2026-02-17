@@ -4,7 +4,8 @@ import com.suprbeta.config.AppConfig
 import com.suprbeta.digitalocean.DigitalOceanService
 import com.suprbeta.digitalocean.DnsService
 import com.suprbeta.digitalocean.DropletProvisioningService
-import com.suprbeta.digitalocean.SshCommandExecutorImpl
+import com.suprbeta.digitalocean.DropletProvisioningServiceImpl
+import com.suprbeta.core.SshCommandExecutorImpl
 import com.suprbeta.digitalocean.configureDropletRoutes
 import com.suprbeta.firebase.FirebaseAuthPlugin
 import com.suprbeta.firebase.FirebaseAuthService
@@ -155,7 +156,7 @@ fun Application.configureDigitalOcean(httpClient: HttpClient, firestoreRepositor
             prettyPrint = true
         }
     )
-    val provisioningService = DropletProvisioningService(
+    val provisioningService: DropletProvisioningService = DropletProvisioningServiceImpl(
         digitalOceanService = digitalOceanService,
         dnsService = dnsService,
         firestoreRepository = firestoreRepository,
