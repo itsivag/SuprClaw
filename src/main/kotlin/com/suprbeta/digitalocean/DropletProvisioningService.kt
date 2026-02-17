@@ -3,6 +3,7 @@ package com.suprbeta.digitalocean
 import com.suprbeta.config.AppConfig
 import com.suprbeta.core.SshCommandExecutor
 import com.suprbeta.digitalocean.models.ProvisioningStatus
+import com.suprbeta.digitalocean.models.UserAgent
 import com.suprbeta.digitalocean.models.UserDroplet
 import com.suprbeta.digitalocean.models.UserDropletInternal
 import com.suprbeta.firebase.FirestoreRepository
@@ -10,6 +11,8 @@ import com.suprbeta.websocket.OpenClawConnector
 import com.suprbeta.websocket.models.WebSocketFrame
 import io.ktor.server.application.*
 import io.ktor.websocket.*
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
@@ -215,10 +218,30 @@ class DropletProvisioningServiceImpl(
             )
 
             try {
-                firestoreRepository.saveUserDroplet(userDropletInternal)
-                logger.info("💾 User droplet saved to Firestore: userId=$userId, dropletId=$dropletId")
+                coroutineScope {
+                    val saveDroplet = async {
+                        firestoreRepository.saveUserDroplet(userDropletInternal)
+                    }
+
+                    val saveMainAgent = async {
+                        firestoreRepository.saveUserAgent(
+                            userId = userId,
+                            agent = UserAgent(
+                                name = "main",
+                                workspacePath = "~/.openclaw/workspace",
+                                dropletId = dropletId,
+                                createdAt = Instant.now().toString()
+                            )
+                        )
+                    }
+
+                    saveDroplet.await()
+                    saveMainAgent.await()
+                }
+
+                logger.info("💾 User droplet and default main agent saved to Firestore: userId=$userId, dropletId=$dropletId")
             } catch (e: Exception) {
-                logger.error("Failed to save user droplet to Firestore (droplet still provisioned successfully)", e)
+                logger.error("Failed to save user droplet/agent to Firestore (droplet still provisioned successfully)", e)
             }
 
             // Return client-safe version (without VPS URL)
