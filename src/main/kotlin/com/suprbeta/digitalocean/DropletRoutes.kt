@@ -113,7 +113,7 @@ fun Application.configureDropletRoutes(
                             return@get
                         }
 
-                    val status = provisioningService.statuses[dropletId]
+                    val status = provisioningService.getStatus(dropletId)
                     if (status == null) {
                         call.respond(HttpStatusCode.NotFound, mapOf("error" to "No provisioning status found for droplet $dropletId"))
                         return@get

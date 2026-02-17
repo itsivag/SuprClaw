@@ -1,4 +1,4 @@
-package com.suprbeta.digitalocean
+package com.suprbeta.core
 
 import io.ktor.server.application.*
 import kotlinx.coroutines.delay

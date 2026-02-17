@@ -1,6 +1,7 @@
 package com.suprbeta.digitalocean
 
 import com.suprbeta.config.AppConfig
+import com.suprbeta.core.SshCommandExecutor
 import com.suprbeta.digitalocean.models.ProvisioningStatus
 import com.suprbeta.digitalocean.models.UserDroplet
 import com.suprbeta.digitalocean.models.UserDropletInternal
@@ -18,20 +19,40 @@ import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Orchestrates OpenClaw droplet provisioning using Pattern A (SSH Onboarding).
+ * Orchestrates OpenClaw droplet provisioning.
  *
  * After creating a droplet with minimal cloud-init (user creation only),
  * this service polls until the droplet is active, SSHs in, and runs
  * openclaw onboarding remotely — so systemd user daemon works correctly.
  */
-class DropletProvisioningService(
+interface DropletProvisioningService {
+    data class CreateResult(
+        val dropletId: Long,
+        val status: ProvisioningStatus,
+        val password: String,
+        val geminiApiKey: String
+    )
+
+    suspend fun createAndProvision(name: String): CreateResult
+
+    suspend fun provisionDroplet(
+        dropletId: Long,
+        password: String,
+        geminiApiKey: String,
+        userId: String
+    ): UserDroplet
+
+    fun getStatus(dropletId: Long): ProvisioningStatus?
+}
+
+class DropletProvisioningServiceImpl(
     private val digitalOceanService: DigitalOceanService,
     private val dnsService: DnsService,
     private val firestoreRepository: com.suprbeta.firebase.FirestoreRepository,
     private val openClawConnector: OpenClawConnector,
     private val sshCommandExecutor: SshCommandExecutor,
     application: Application
-) {
+) : DropletProvisioningService {
     private val logger = application.log
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -66,9 +87,7 @@ class DropletProvisioningService(
      * Creates the droplet and returns info needed to kick off provisioning.
      * The returned password is held in memory only until SSH completes.
      */
-    data class CreateResult(val dropletId: Long, val status: ProvisioningStatus, val password: String, val geminiApiKey: String)
-
-    suspend fun createAndProvision(name: String): CreateResult {
+    override suspend fun createAndProvision(name: String): DropletProvisioningService.CreateResult {
         val password = UserDataGenerator.generatePassword()
         val geminiApiKey = digitalOceanService.geminiApiKey
 
@@ -86,14 +105,14 @@ class DropletProvisioningService(
         )
         statuses[dropletId] = status
 
-        return CreateResult(dropletId, status, password, geminiApiKey)
+        return DropletProvisioningService.CreateResult(dropletId, status, password, geminiApiKey)
     }
 
     /**
      * Internal entry point that drives the provisioning coroutine.
      * Called as fire-and-forget from the route handler.
      */
-    suspend fun provisionDroplet(dropletId: Long, password: String, geminiApiKey: String, userId: String): UserDroplet {
+    override suspend fun provisionDroplet(dropletId: Long, password: String, geminiApiKey: String, userId: String): UserDroplet {
         try {
             // Phase 2 — Wait for active + IP
             val ipAddress = waitForDropletReady(dropletId)
@@ -233,6 +252,8 @@ class DropletProvisioningService(
             throw e // Re-throw exception after cleanup
         }
     }
+
+    override fun getStatus(dropletId: Long): ProvisioningStatus? = statuses[dropletId]
 
     // ── Phase 2 — Poll until active ─────────────────────────────────────
 

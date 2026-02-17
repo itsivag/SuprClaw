@@ -1,4 +1,4 @@
-package com.suprbeta.digitalocean
+package com.suprbeta.core
 
 interface SshCommandExecutor {
     suspend fun waitForSshReady(ipAddress: String)
