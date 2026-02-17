@@ -4,6 +4,7 @@ import com.suprbeta.config.AppConfig
 import com.suprbeta.digitalocean.DigitalOceanService
 import com.suprbeta.digitalocean.DnsService
 import com.suprbeta.digitalocean.DropletProvisioningService
+import com.suprbeta.digitalocean.SshCommandExecutorImpl
 import com.suprbeta.digitalocean.configureDropletRoutes
 import com.suprbeta.firebase.FirebaseAuthPlugin
 import com.suprbeta.firebase.FirebaseAuthService
@@ -145,6 +146,7 @@ fun Application.configureWebSockets(httpClient: HttpClient, authService: Firebas
 fun Application.configureDigitalOcean(httpClient: HttpClient, firestoreRepository: FirestoreRepository) {
     val digitalOceanService = DigitalOceanService(httpClient, this)
     val dnsService = DnsService(httpClient, this)
+    val sshCommandExecutor = SshCommandExecutorImpl(this)
     val provisioningConnector = OpenClawConnector(
         application = this,
         httpClient = httpClient,
@@ -158,6 +160,7 @@ fun Application.configureDigitalOcean(httpClient: HttpClient, firestoreRepositor
         dnsService = dnsService,
         firestoreRepository = firestoreRepository,
         openClawConnector = provisioningConnector,
+        sshCommandExecutor = sshCommandExecutor,
         application = this
     )
     configureDropletRoutes(digitalOceanService, provisioningService, firestoreRepository)
