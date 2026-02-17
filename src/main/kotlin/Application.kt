@@ -7,6 +7,7 @@ import com.suprbeta.digitalocean.DropletConfigurationService
 import com.suprbeta.digitalocean.DropletConfigurationServiceImpl
 import com.suprbeta.digitalocean.DropletProvisioningService
 import com.suprbeta.digitalocean.DropletProvisioningServiceImpl
+import com.suprbeta.digitalocean.configureAgentRoutes
 import com.suprbeta.core.SshCommandExecutorImpl
 import com.suprbeta.digitalocean.configureDropletRoutes
 import com.suprbeta.firebase.FirebaseAuthPlugin
@@ -171,7 +172,8 @@ fun Application.configureDigitalOcean(httpClient: HttpClient, firestoreRepositor
         sshCommandExecutor = sshCommandExecutor,
         application = this
     )
-    configureDropletRoutes(provisioningService, configuringService, firestoreRepository)
+    configureDropletRoutes(provisioningService, firestoreRepository)
+    configureAgentRoutes(configuringService, firestoreRepository)
     log.info("DigitalOcean service initialized with SSH provisioning and DNS management")
 }
 
