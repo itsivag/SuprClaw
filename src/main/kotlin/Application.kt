@@ -20,6 +20,8 @@ import com.suprbeta.websocket.configureWebSocketRoutes
 import com.suprbeta.websocket.pipeline.AuthInterceptor
 import com.suprbeta.websocket.pipeline.LoggingInterceptor
 import com.suprbeta.websocket.pipeline.MessagePipeline
+import com.suprbeta.websocket.pipeline.UsageInterceptor
+import com.suprbeta.websocket.usage.TokenCalculator
 import configureRouting
 import io.ktor.client.*
 import io.ktor.client.engine.cio.*
@@ -106,12 +108,24 @@ fun Application.configureWebSockets(httpClient: HttpClient, authService: Firebas
     // Install server-side WebSockets plugin
     install(io.ktor.server.websocket.WebSockets)
 
+    val tokenCalculator = TokenCalculator(
+        application = this,
+        httpClient = httpClient,
+        json = json
+    )
+    val usageInterceptor = UsageInterceptor(
+        firestoreRepository = firestoreRepository,
+        tokenCalculator = tokenCalculator,
+        application = this
+    )
+
     // Initialize pipeline with interceptors
     val messagePipeline = MessagePipeline(
         application = this,
         interceptors = listOf(
             LoggingInterceptor(this),
-            AuthInterceptor(authService, this)
+            AuthInterceptor(authService, this),
+            usageInterceptor
         )
     )
 
@@ -127,6 +141,7 @@ fun Application.configureWebSockets(httpClient: HttpClient, authService: Firebas
         application = this,
         openClawConnector = openClawConnector,
         messagePipeline = messagePipeline,
+        usageInterceptor = usageInterceptor,
         json = json,
         firestoreRepository = firestoreRepository
     )

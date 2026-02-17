@@ -5,6 +5,7 @@ import com.suprbeta.websocket.models.SessionMetadata
 import com.suprbeta.websocket.models.WebSocketFrame
 import com.suprbeta.websocket.pipeline.InterceptorResult
 import com.suprbeta.websocket.pipeline.MessagePipeline
+import com.suprbeta.websocket.pipeline.UsageInterceptor
 import io.ktor.server.application.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.CoroutineScope
@@ -20,6 +21,7 @@ class ProxySessionManager(
     application: Application,
     private val openClawConnector: OpenClawConnector,
     private val messagePipeline: MessagePipeline,
+    private val usageInterceptor: UsageInterceptor,
     private val json: Json,
     private val firestoreRepository: com.suprbeta.firebase.FirestoreRepository
 ) {
@@ -76,12 +78,7 @@ class ProxySessionManager(
      */
     suspend fun establishOpenClawConnection(session: ProxySession): Boolean {
         try {
-            // Verify userId is not null
             val userId = session.metadata.userId
-            if (userId == null) {
-                logger.error("User ID is null for session ${session.sessionId} - cannot establish connection")
-                return false
-            }
             
             // Look up user's droplet from Firestore to get their VPS gateway URL
             val userDroplet = firestoreRepository.getUserDropletInternal(userId)
@@ -131,6 +128,9 @@ class ProxySessionManager(
             logger.error("Cannot start message forwarding: OpenClaw not connected for session ${session.sessionId}")
             return
         }
+        if (session.metadata.userId.isBlank()) {
+            throw IllegalStateException("Cannot start message forwarding: missing userId for session ${session.sessionId}")
+        }
 
         val openClawSession = session.openclawSession!!
 
@@ -144,6 +144,7 @@ class ProxySessionManager(
                 }
             } catch (e: Exception) {
                 logger.error("Inbound forwarding error for session ${session.sessionId}: ${e.message}", e)
+                scope.launch { closeSession(session.sessionId) }
             } finally {
                 val clientCloseReason = withTimeoutOrNull(1_000) { session.clientSession.closeReason.await() }
                 if (clientCloseReason != null) {
@@ -166,6 +167,7 @@ class ProxySessionManager(
                 }
             } catch (e: Exception) {
                 logger.error("Outbound forwarding error for session ${session.sessionId}: ${e.message}", e)
+                scope.launch { closeSession(session.sessionId) }
             } finally {
                 val upstreamCloseReason = withTimeoutOrNull(1_000) { openClawSession.closeReason.await() }
                 if (upstreamCloseReason != null) {
@@ -210,9 +212,14 @@ class ProxySessionManager(
                     logger.debug("Dropped inbound message for session ${session.sessionId}: ${result.reason}")
                 }
                 is InterceptorResult.Error -> {
-                    logger.error("Error processing inbound message for session ${session.sessionId}: ${result.message}", result.cause)
+                    throw FatalForwardingException(
+                        "Inbound interceptor error for session ${session.sessionId}: ${result.message}",
+                        result.cause
+                    )
                 }
             }
+        } catch (e: FatalForwardingException) {
+            throw e
         } catch (e: Exception) {
             logger.error("Failed to process inbound message for session ${session.sessionId}: ${e.message}", e)
         }
@@ -295,9 +302,14 @@ class ProxySessionManager(
                     logger.debug("Dropped outbound message for session ${session.sessionId}: ${result.reason}")
                 }
                 is InterceptorResult.Error -> {
-                    logger.error("Error processing outbound message for session ${session.sessionId}: ${result.message}", result.cause)
+                    throw FatalForwardingException(
+                        "Outbound interceptor error for session ${session.sessionId}: ${result.message}",
+                        result.cause
+                    )
                 }
             }
+        } catch (e: FatalForwardingException) {
+            throw e
         } catch (e: Exception) {
             logger.error("Failed to process outbound message for session ${session.sessionId}: ${e.message}", e)
         }
@@ -318,6 +330,10 @@ class ProxySessionManager(
             inbound.cancel()
             outbound.cancel()
         }
+
+        withTimeoutOrNull(2_000) {
+            usageInterceptor.flushSession(sessionId)
+        } ?: logger.warn("Timed out while flushing usage for session $sessionId")
 
         // Close connections
         try {
@@ -357,4 +373,6 @@ class ProxySessionManager(
             closeSession(sessionId)
         }
     }
+
+    private class FatalForwardingException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
 }
