@@ -8,6 +8,7 @@ import com.suprbeta.websocket.pipeline.MessagePipeline
 import com.suprbeta.websocket.pipeline.UsageInterceptor
 import io.ktor.server.application.*
 import io.ktor.websocket.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -132,14 +133,14 @@ class ProxySessionManager(
             throw IllegalStateException("Cannot start message forwarding: missing userId for session ${session.sessionId}")
         }
 
-        val openClawSession = session.openclawSession!!
-
         // Inbound job: Mobile client → OpenClaw VPS
+        // Reads session.openclawSession dynamically so it always uses the current VPS session
+        // even after a transparent reconnect.
         val inboundJob = scope.launch {
             try {
                 for (frame in session.clientSession.incoming) {
                     if (frame is Frame.Text) {
-                        handleInboundMessage(session, frame.readText(), openClawSession)
+                        handleInboundMessage(session, frame.readText())
                     }
                 }
             } catch (e: Exception) {
@@ -157,27 +158,9 @@ class ProxySessionManager(
             }
         }
 
-        // Outbound job: OpenClaw VPS → Mobile client
+        // Outbound job: OpenClaw VPS → Mobile client, with transparent VPS reconnect on drop.
         val outboundJob = scope.launch {
-            try {
-                for (frame in openClawSession.incoming) {
-                    if (frame is Frame.Text) {
-                        handleOutboundMessage(session, frame.readText())
-                    }
-                }
-            } catch (e: Exception) {
-                logger.error("Outbound forwarding error for session ${session.sessionId}: ${e.message}", e)
-                scope.launch { closeSession(session.sessionId) }
-            } finally {
-                val upstreamCloseReason = withTimeoutOrNull(1_000) { openClawSession.closeReason.await() }
-                if (upstreamCloseReason != null) {
-                    logger.info(
-                        "OpenClaw websocket closed for session ${session.sessionId}: " +
-                        "${upstreamCloseReason.code} (${upstreamCloseReason.message})"
-                    )
-                }
-                logger.info("Outbound forwarding stopped for session ${session.sessionId}")
-            }
+            runOutboundWithReconnect(session, scope)
         }
 
         session.forwardingJobs = Pair(inboundJob, outboundJob)
@@ -185,13 +168,67 @@ class ProxySessionManager(
     }
 
     /**
-     * Handle an inbound message from mobile client
+     * Runs the VPS → client outbound forwarding loop with automatic VPS reconnect.
+     * When the VPS WebSocket closes (idle timeout, network drop, etc.) this method
+     * re-establishes the VPS connection and resumes forwarding, so the mobile client
+     * never needs to reconnect for a server-side VPS drop.
+     */
+    private suspend fun runOutboundWithReconnect(session: ProxySession, scope: CoroutineScope) {
+        while (true) {
+            val vpsSession = session.openclawSession ?: break
+
+            try {
+                for (frame in vpsSession.incoming) {
+                    if (frame is Frame.Text) {
+                        handleOutboundMessage(session, frame.readText())
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e // propagate job cancellation — do not reconnect
+            } catch (e: Exception) {
+                logger.error("Outbound forwarding error for session ${session.sessionId}: ${e.message}", e)
+            }
+
+            val upstreamCloseReason = withTimeoutOrNull(1_000) { vpsSession.closeReason.await() }
+            if (upstreamCloseReason != null) {
+                logger.info(
+                    "OpenClaw websocket closed for session ${session.sessionId}: " +
+                    "${upstreamCloseReason.code} (${upstreamCloseReason.message})"
+                )
+            }
+            logger.info("Outbound forwarding stopped for session ${session.sessionId}")
+
+            // Null the session before reconnect so the inbound job drops messages
+            // gracefully instead of trying to send on the closed session.
+            session.openclawSession = null
+
+            logger.info("Attempting VPS reconnect for session ${session.sessionId}...")
+            val reconnected = establishOpenClawConnection(session)
+            if (!reconnected) {
+                logger.error("VPS reconnect failed for session ${session.sessionId}, closing client session")
+                scope.launch { closeSession(session.sessionId) }
+                return
+            }
+            logger.info("VPS reconnected for session ${session.sessionId}, resuming outbound forwarding")
+            // Loop continues — next iteration picks up session.openclawSession set by establishOpenClawConnection
+        }
+    }
+
+    /**
+     * Handle an inbound message from mobile client.
+     * Reads session.openclawSession at call-time so it always targets the current VPS
+     * session — including after a transparent reconnect.
      */
     private suspend fun handleInboundMessage(
         session: ProxySession,
-        messageText: String,
-        openClawSession: DefaultWebSocketSession
+        messageText: String
     ) {
+        val openClawSession = session.openclawSession
+        if (openClawSession == null) {
+            logger.warn("VPS session unavailable for ${session.sessionId}, dropping inbound message (reconnect in progress)")
+            return
+        }
+
         try {
             val frame = json.decodeFromString<WebSocketFrame>(messageText)
             session.metadata.incrementReceived()
