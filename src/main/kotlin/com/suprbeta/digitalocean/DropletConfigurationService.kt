@@ -77,7 +77,7 @@ class DropletConfigurationServiceImpl(
             throw IllegalStateException("SSH key is not available for this droplet")
         }
 
-        val command = "openclaw agents remove $name"
+        val command = "openclaw agents delete $name --force"
         logger.info("Deleting OpenClaw agent '$name' on droplet ${userDroplet.dropletId}")
         val output = sshCommandExecutor.runSshCommand(userDroplet.ipAddress, userDroplet.sshKey, command)
         firestoreRepository.deleteUserAgent(userId, name)
