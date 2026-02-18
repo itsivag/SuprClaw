@@ -53,6 +53,11 @@ class DropletConfigurationServiceImpl(
         val command = "openclaw agents delete $name --force"
         logger.info("Deleting OpenClaw agent '$name' on droplet ${userDroplet.dropletId}")
         val output = sshCommandExecutor.runSshCommand(userDroplet.ipAddress, userDroplet.sshKey, command)
+
+        val workspacePath = "/home/openclaw/.openclaw/workspace-$name"
+        sshCommandExecutor.runSshCommand(userDroplet.ipAddress, userDroplet.sshKey, "rm -rf $workspacePath")
+        logger.info("Deleted workspace '$workspacePath' on droplet ${userDroplet.dropletId}")
+
         firestoreRepository.deleteUserAgent(userId, name)
         return output
     }
