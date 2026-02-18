@@ -2,6 +2,7 @@ package com.suprbeta.digitalocean
 
 import com.suprbeta.core.SshCommandExecutor
 import com.suprbeta.digitalocean.models.UserAgent
+import com.suprbeta.digitalocean.models.UserDropletInternal
 import com.suprbeta.firebase.FirestoreRepository
 import io.ktor.server.application.*
 import java.time.Instant
@@ -25,21 +26,7 @@ class DropletConfigurationServiceImpl(
     private val agentNameRegex = Regex("^[a-zA-Z0-9_-]+$")
 
     override suspend fun createAgent(userId: String, name: String, model: String?): String {
-        if (!agentNameRegex.matches(name)) {
-            throw IllegalArgumentException("Invalid agent name. Use only letters, numbers, _ and -")
-        }
-
-        val userDroplet = firestoreRepository.getUserDropletInternal(userId)
-            ?: throw IllegalStateException("No droplet found for user")
-
-        if (!userDroplet.status.equals("active", ignoreCase = true)) {
-            throw IllegalStateException("Droplet is not active")
-        }
-
-        if (userDroplet.sshKey.isBlank()) {
-            throw IllegalStateException("SSH key is not available for this droplet")
-        }
-
+        val userDroplet = validateAndGetDroplet(userId, name)
         val workspacePath = "/home/openclaw/.openclaw/workspace-$name"
         val command = "openclaw agents add $name --workspace $workspacePath"
         val selectedModel = model?.trim()?.ifBlank { DEFAULT_AGENT_MODEL } ?: DEFAULT_AGENT_MODEL
@@ -62,6 +49,15 @@ class DropletConfigurationServiceImpl(
     }
 
     override suspend fun deleteAgent(userId: String, name: String): String {
+        val userDroplet = validateAndGetDroplet(userId, name)
+        val command = "openclaw agents delete $name --force"
+        logger.info("Deleting OpenClaw agent '$name' on droplet ${userDroplet.dropletId}")
+        val output = sshCommandExecutor.runSshCommand(userDroplet.ipAddress, userDroplet.sshKey, command)
+        firestoreRepository.deleteUserAgent(userId, name)
+        return output
+    }
+
+    private suspend fun validateAndGetDroplet(userId: String, name: String): UserDropletInternal {
         if (!agentNameRegex.matches(name)) {
             throw IllegalArgumentException("Invalid agent name. Use only letters, numbers, _ and -")
         }
@@ -77,10 +73,6 @@ class DropletConfigurationServiceImpl(
             throw IllegalStateException("SSH key is not available for this droplet")
         }
 
-        val command = "openclaw agents delete $name --force"
-        logger.info("Deleting OpenClaw agent '$name' on droplet ${userDroplet.dropletId}")
-        val output = sshCommandExecutor.runSshCommand(userDroplet.ipAddress, userDroplet.sshKey, command)
-        firestoreRepository.deleteUserAgent(userId, name)
-        return output
+        return userDroplet
     }
 }
