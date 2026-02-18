@@ -41,7 +41,6 @@ class UsageInterceptor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val queue = Channel<UsageWorkItem>(Channel.UNLIMITED)
     private val pendingQueueBySession = ConcurrentHashMap<String, AtomicInteger>()
-    private val modelCache = ConcurrentHashMap<String, String>()
     private val sessionBuffers = ConcurrentHashMap<String, SessionDayBuffer>()
     private val writeJobsBySession = ConcurrentHashMap<String, MutableSet<Job>>()
 
@@ -141,22 +140,8 @@ class UsageInterceptor(
         snapshot?.let { launchWrite(it) }
     }
 
-    private suspend fun resolveModel(userId: String, agentId: String): String {
-        val cacheKey = "$userId:$agentId"
-        modelCache[cacheKey]?.let { return it }
-
-        val model = runCatching {
-            firestoreRepository.getUserAgentByAgentId(userId, agentId)
-                ?.model
-                ?.ifBlank { TokenCalculator.DEFAULT_MODEL }
-                ?: TokenCalculator.DEFAULT_MODEL
-        }.getOrElse { error ->
-            logger.warn("Agent model lookup failed for user=$userId agentId=$agentId: ${error.message}")
-            TokenCalculator.DEFAULT_MODEL
-        }
-
-        modelCache[cacheKey] = model
-        return model
+    private fun resolveModel(userId: String, agentId: String): String {
+        return TokenCalculator.DEFAULT_MODEL
     }
 
     private fun extractAgentId(frame: WebSocketFrame): String? {

@@ -1,20 +1,21 @@
 package com.suprbeta.digitalocean
 
 import com.suprbeta.core.SshCommandExecutor
-import com.suprbeta.digitalocean.models.UserAgent
+import com.suprbeta.digitalocean.models.AgentInsert
 import com.suprbeta.digitalocean.models.UserDropletInternal
 import com.suprbeta.firebase.FirestoreRepository
+import com.suprbeta.supabase.SupabaseAgentRepository
 import io.ktor.server.application.*
-import java.time.Instant
 
 interface DropletConfigurationService {
-    suspend fun createAgent(userId: String, name: String, model: String? = null): String
+    suspend fun createAgent(userId: String, name: String, role: String, model: String? = null): String
 
     suspend fun deleteAgent(userId: String, name: String): String
 }
 
 class DropletConfigurationServiceImpl(
     private val firestoreRepository: FirestoreRepository,
+    private val agentRepository: SupabaseAgentRepository,
     private val sshCommandExecutor: SshCommandExecutor,
     application: Application
 ) : DropletConfigurationService {
@@ -25,23 +26,20 @@ class DropletConfigurationServiceImpl(
     private val logger = application.log
     private val agentNameRegex = Regex("^[a-zA-Z0-9_-]+$")
 
-    override suspend fun createAgent(userId: String, name: String, model: String?): String {
+    override suspend fun createAgent(userId: String, name: String, role: String, model: String?): String {
         val userDroplet = validateAndGetDroplet(userId, name)
         val workspacePath = "/home/openclaw/.openclaw/workspace-$name"
-        val command = "openclaw agents add $name --workspace $workspacePath"
         val selectedModel = model?.trim()?.ifBlank { DEFAULT_AGENT_MODEL } ?: DEFAULT_AGENT_MODEL
+        val command = "openclaw agents add $name --workspace $workspacePath --model $selectedModel"
         logger.info("Creating OpenClaw agent '$name' on droplet ${userDroplet.dropletId}")
         val output = sshCommandExecutor.runSshCommand(userDroplet.ipAddress, userDroplet.sshKey, command)
 
-        firestoreRepository.saveUserAgent(
-            userId = userId,
-            agent = UserAgent(
+        agentRepository.saveAgent(
+            AgentInsert(
                 name = name,
-                agentId = name,
-                model = selectedModel,
-                workspacePath = workspacePath,
-                dropletId = userDroplet.dropletId,
-                createdAt = Instant.now().toString()
+                role = role,
+                sessionKey = "agent:$name:main",
+                isLead = false
             )
         )
 
@@ -58,7 +56,7 @@ class DropletConfigurationServiceImpl(
         sshCommandExecutor.runSshCommand(userDroplet.ipAddress, userDroplet.sshKey, "rm -rf $workspacePath")
         logger.info("Deleted workspace '$workspacePath' on droplet ${userDroplet.dropletId}")
 
-        firestoreRepository.deleteUserAgent(userId, name)
+        agentRepository.deleteAgent(name)
         return output
     }
 

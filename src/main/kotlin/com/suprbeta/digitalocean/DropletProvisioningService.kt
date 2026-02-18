@@ -3,10 +3,11 @@ package com.suprbeta.digitalocean
 import com.suprbeta.config.AppConfig
 import com.suprbeta.core.SshCommandExecutor
 import com.suprbeta.digitalocean.models.ProvisioningStatus
-import com.suprbeta.digitalocean.models.UserAgent
+import com.suprbeta.digitalocean.models.AgentInsert
 import com.suprbeta.digitalocean.models.UserDroplet
 import com.suprbeta.digitalocean.models.UserDropletInternal
 import com.suprbeta.firebase.FirestoreRepository
+import com.suprbeta.supabase.SupabaseAgentRepository
 import com.suprbeta.websocket.OpenClawConnector
 import com.suprbeta.websocket.models.WebSocketFrame
 import io.ktor.server.application.*
@@ -53,6 +54,7 @@ class DropletProvisioningServiceImpl(
     private val digitalOceanService: DigitalOceanService,
     private val dnsService: DnsService,
     private val firestoreRepository: FirestoreRepository,
+    private val agentRepository: SupabaseAgentRepository,
     private val openClawConnector: OpenClawConnector,
     private val sshCommandExecutor: SshCommandExecutor,
     application: Application
@@ -224,15 +226,12 @@ class DropletProvisioningServiceImpl(
                     }
 
                     val saveMainAgent = async {
-                        firestoreRepository.saveUserAgent(
-                            userId = userId,
-                            agent = UserAgent(
+                        agentRepository.saveAgent(
+                            AgentInsert(
                                 name = "main",
-                                agentId = "main",
-                                model = "google/gemini-2.5-flash",
-                                workspacePath = "~/.openclaw/workspace",
-                                dropletId = dropletId,
-                                createdAt = Instant.now().toString()
+                                role = "main",
+                                sessionKey = "agent:main:main",
+                                isLead = true
                             )
                         )
                     }
@@ -241,7 +240,7 @@ class DropletProvisioningServiceImpl(
                     saveMainAgent.await()
                 }
 
-                logger.info("💾 User droplet and default main agent saved to Firestore: userId=$userId, dropletId=$dropletId")
+                logger.info("💾 User droplet saved to Firestore and default main agent saved to Supabase: userId=$userId, dropletId=$dropletId")
             } catch (e: Exception) {
                 logger.error("Failed to save user droplet/agent to Firestore (droplet still provisioned successfully)", e)
             }

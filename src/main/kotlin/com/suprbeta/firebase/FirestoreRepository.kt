@@ -7,7 +7,6 @@ import com.google.cloud.firestore.FieldValue
 import com.google.cloud.firestore.QuerySnapshot
 import com.google.cloud.firestore.SetOptions
 import com.suprbeta.digitalocean.models.ProvisioningStatus
-import com.suprbeta.digitalocean.models.UserAgent
 import com.suprbeta.digitalocean.models.UserDroplet
 import com.suprbeta.digitalocean.models.UserDropletInternal
 import com.suprbeta.websocket.models.TokenUsageDelta
@@ -31,9 +30,11 @@ class FirestoreRepository(
         private const val SESSIONS_COLLECTION = "proxy_sessions"
         private const val USERS = "users"
         private const val USER_DROPLETS_SUBCOLLECTION = "droplets"
-        private const val USER_AGENTS_SUBCOLLECTION = "agents"
         private const val USER_USAGE_SUBCOLLECTION = "usage"
+        private const val USER_MESSAGE_QUEUE_SUBCOLLECTION = "message_queue"
     }
+
+    data class QueuedMessage(val docId: String, val payload: String)
 
     // ==================== Provisioning Status Operations ====================
 
@@ -288,101 +289,59 @@ class FirestoreRepository(
         }
     }
 
-    // ==================== User Agents Operations ====================
+    // ==================== Message Queue Operations ====================
 
-    suspend fun saveUserAgent(userId: String, agent: UserAgent) {
+    suspend fun enqueueMessage(userId: String, payload: String) {
         try {
-            application.log.info("Saving agent for user: $userId, name=${agent.name}")
-
             firestore.collection(USERS)
                 .document(userId)
-                .collection(USER_AGENTS_SUBCOLLECTION)
-                .document(agent.name)
-                .set(agent)
+                .collection(USER_MESSAGE_QUEUE_SUBCOLLECTION)
+                .add(
+                    mapOf(
+                        "payload" to payload,
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                )
                 .await()
-
-            application.log.info("✅ User agent saved successfully: userId=$userId, name=${agent.name}")
         } catch (e: Exception) {
-            application.log.error("Failed to save user agent for user $userId, name=${agent.name}", e)
+            application.log.error("Failed to enqueue message for user $userId", e)
             throw e
         }
     }
 
-    suspend fun getUserAgents(userId: String): List<UserAgent> {
+    suspend fun getQueuedMessages(userId: String): List<QueuedMessage> {
         return try {
-            application.log.debug("Fetching agents for user: $userId")
-
-            val snapshot: QuerySnapshot = firestore.collection(USERS)
+            val snapshot = firestore.collection(USERS)
                 .document(userId)
-                .collection(USER_AGENTS_SUBCOLLECTION)
+                .collection(USER_MESSAGE_QUEUE_SUBCOLLECTION)
+                .orderBy("createdAt")
                 .get()
                 .await()
 
             snapshot.documents.mapNotNull { doc ->
-                try {
-                    doc.toObject(UserAgent::class.java)
-                } catch (e: Exception) {
-                    application.log.warn("Failed to deserialize user agent document ${doc.id} for user $userId", e)
-                    null
-                }
+                val payload = doc.getString("payload") ?: return@mapNotNull null
+                QueuedMessage(docId = doc.id, payload = payload)
             }
         } catch (e: Exception) {
-            application.log.error("Failed to fetch user agents for user $userId", e)
+            application.log.error("Failed to fetch queued messages for user $userId", e)
             emptyList()
         }
     }
 
-    suspend fun getUserAgentByAgentId(userId: String, agentId: String): UserAgent? {
-        return try {
-            val byField = firestore.collection(USERS)
-                .document(userId)
-                .collection(USER_AGENTS_SUBCOLLECTION)
-                .whereEqualTo("agentId", agentId)
-                .limit(1)
-                .get()
-                .await()
-                .documents
-                .firstOrNull()
-                ?.toObject(UserAgent::class.java)
-
-            if (byField != null) {
-                return if (byField.agentId.isBlank()) byField.copy(agentId = agentId) else byField
-            }
-
-            val byDocumentId = firestore.collection(USERS)
-                .document(userId)
-                .collection(USER_AGENTS_SUBCOLLECTION)
-                .document(agentId)
-                .get()
-                .await()
-
-            if (!byDocumentId.exists()) {
-                return null
-            }
-
-            byDocumentId.toObject(UserAgent::class.java)?.let { agent ->
-                if (agent.agentId.isBlank()) agent.copy(agentId = agentId) else agent
-            }
-        } catch (e: Exception) {
-            application.log.error("Failed to fetch user agent for user $userId, agentId=$agentId", e)
-            null
-        }
-    }
-
-    suspend fun deleteUserAgent(userId: String, agentName: String) {
+    suspend fun deleteQueuedMessages(userId: String, docIds: List<String>) {
+        if (docIds.isEmpty()) return
         try {
-            application.log.info("Deleting agent for user: $userId, name=$agentName")
-
-            firestore.collection(USERS)
-                .document(userId)
-                .collection(USER_AGENTS_SUBCOLLECTION)
-                .document(agentName)
-                .delete()
-                .await()
-
-            application.log.info("User agent deleted successfully: userId=$userId, name=$agentName")
+            val batch = firestore.batch()
+            for (docId in docIds) {
+                val docRef = firestore.collection(USERS)
+                    .document(userId)
+                    .collection(USER_MESSAGE_QUEUE_SUBCOLLECTION)
+                    .document(docId)
+                batch.delete(docRef)
+            }
+            batch.commit().await()
         } catch (e: Exception) {
-            application.log.error("Failed to delete user agent for user $userId, name=$agentName", e)
+            application.log.error("Failed to delete queued messages for user $userId", e)
             throw e
         }
     }

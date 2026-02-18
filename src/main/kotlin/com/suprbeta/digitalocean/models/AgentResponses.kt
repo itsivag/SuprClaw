@@ -13,7 +13,7 @@ data class AgentListResponse(
 data class AgentMutationResponse(
     val dropletId: Long,
     val name: String,
-    val model: String? = null,
+    val role: String? = null,
     val message: String,
     val output: String
 )
