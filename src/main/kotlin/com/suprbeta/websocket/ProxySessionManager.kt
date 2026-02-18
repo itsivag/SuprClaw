@@ -159,7 +159,9 @@ class ProxySessionManager(
         }
 
         // Outbound job: OpenClaw VPS → Mobile client, with transparent VPS reconnect on drop.
+        // Drains any queued messages before starting live forwarding.
         val outboundJob = scope.launch {
+            drainMessageQueue(session)
             runOutboundWithReconnect(session, scope)
         }
 
@@ -332,8 +334,13 @@ class ProxySessionManager(
             when (val result = messagePipeline.processOutbound(frame, session)) {
                 is InterceptorResult.Continue -> {
                     val processedJson = json.encodeToString(result.frame)
-                    session.clientSession.send(Frame.Text(processedJson))
-                    session.metadata.incrementSent()
+                    try {
+                        session.clientSession.send(Frame.Text(processedJson))
+                        session.metadata.incrementSent()
+                    } catch (e: Exception) {
+                        firestoreRepository.enqueueMessage(session.metadata.userId, processedJson)
+                        logger.warn("Client disconnected — queued message for user ${session.metadata.userId}")
+                    }
                 }
                 is InterceptorResult.Drop -> {
                     logger.debug("Dropped outbound message for session ${session.sessionId}: ${result.reason}")
@@ -350,6 +357,23 @@ class ProxySessionManager(
         } catch (e: Exception) {
             logger.error("Failed to process outbound message for session ${session.sessionId}: ${e.message}", e)
         }
+    }
+
+    private suspend fun drainMessageQueue(session: ProxySession) {
+        val pending = firestoreRepository.getQueuedMessages(session.metadata.userId)
+        if (pending.isEmpty()) return
+        logger.info("Delivering ${pending.size} queued messages to user ${session.metadata.userId}")
+        val delivered = mutableListOf<String>()
+        for (msg in pending) {
+            try {
+                session.clientSession.send(Frame.Text(msg.payload))
+                delivered += msg.docId
+            } catch (e: Exception) {
+                logger.warn("Failed to deliver queued message ${msg.docId}, leaving in queue")
+                break
+            }
+        }
+        if (delivered.isNotEmpty()) firestoreRepository.deleteQueuedMessages(session.metadata.userId, delivered)
     }
 
     /**

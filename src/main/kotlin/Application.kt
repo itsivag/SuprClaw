@@ -14,6 +14,9 @@ import com.suprbeta.firebase.FirebaseAuthPlugin
 import com.suprbeta.firebase.FirebaseAuthService
 import com.suprbeta.firebase.FirebaseService
 import com.suprbeta.firebase.FirestoreRepository
+import com.suprbeta.supabase.SupabaseAgentRepository
+import com.suprbeta.supabase.SupabaseService
+import io.github.jan.supabase.SupabaseClient
 import com.suprbeta.websocket.OpenClawConnector
 import com.suprbeta.websocket.ProxySessionManager
 import com.suprbeta.websocket.configureWebSocketRoutes
@@ -47,12 +50,14 @@ fun Application.module() {
     configureSerialization()
     configureHTTP()
     val (firebaseAuthService, firestoreRepository) = configureFirebase()
+    val supabaseClient = configureSupabase()
+    val agentRepository = SupabaseAgentRepository(supabaseClient, this)
 
     // Create shared HttpClient for API calls
     val httpClient = createHttpClient()
 
     configureWebSockets(httpClient, firebaseAuthService, firestoreRepository)
-    configureDigitalOcean(httpClient, firestoreRepository)
+    configureDigitalOcean(httpClient, firestoreRepository, agentRepository)
     configureRouting()
 }
 
@@ -162,7 +167,7 @@ fun Application.configureWebSockets(httpClient: HttpClient, authService: Firebas
     log.info("WebSocket proxy initialized and ready")
 }
 
-fun Application.configureDigitalOcean(httpClient: HttpClient, firestoreRepository: FirestoreRepository) {
+fun Application.configureDigitalOcean(httpClient: HttpClient, firestoreRepository: FirestoreRepository, agentRepository: SupabaseAgentRepository) {
     val digitalOceanService = DigitalOceanService(httpClient, this)
     val dnsService = DnsService(httpClient, this)
     val sshCommandExecutor = SshCommandExecutorImpl(this)
@@ -178,18 +183,33 @@ fun Application.configureDigitalOcean(httpClient: HttpClient, firestoreRepositor
         digitalOceanService = digitalOceanService,
         dnsService = dnsService,
         firestoreRepository = firestoreRepository,
+        agentRepository = agentRepository,
         openClawConnector = provisioningConnector,
         sshCommandExecutor = sshCommandExecutor,
         application = this
     )
     val configuringService: DropletConfigurationService = DropletConfigurationServiceImpl(
         firestoreRepository = firestoreRepository,
+        agentRepository = agentRepository,
         sshCommandExecutor = sshCommandExecutor,
         application = this
     )
     configureDropletRoutes(provisioningService, firestoreRepository)
-    configureAgentRoutes(configuringService, firestoreRepository)
+    configureAgentRoutes(configuringService, firestoreRepository, agentRepository)
     log.info("DigitalOcean service initialized with SSH provisioning and DNS management")
+}
+
+fun Application.configureSupabase(): SupabaseClient {
+    val supabaseService = SupabaseService(this)
+
+    monitor.subscribe(ApplicationStopped) {
+        log.info("Application stopping - closing Supabase client")
+        runBlocking { supabaseService.close() }
+    }
+
+    log.info("Supabase client initialized and ready")
+
+    return supabaseService.client
 }
 
 fun Application.configureFirebase(): Pair<FirebaseAuthService, FirestoreRepository> {

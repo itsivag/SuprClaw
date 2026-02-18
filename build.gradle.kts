@@ -1,5 +1,6 @@
 val kotlin_version: String by project
 val logback_version: String by project
+val supabase_version: String by project
 
 plugins {
     kotlin("jvm") version "2.3.0"
@@ -43,6 +44,9 @@ dependencies {
     implementation("ch.qos.logback:logback-classic:$logback_version")
     implementation("io.ktor:ktor-server-config-yaml")
     implementation("com.google.firebase:firebase-admin:9.7.1")
+    implementation(platform("io.github.jan-tennert.supabase:bom:$supabase_version"))
+    implementation("io.github.jan-tennert.supabase:supabase-kt")
+    implementation("io.github.jan-tennert.supabase:postgrest-kt")
     testImplementation("io.ktor:ktor-server-test-host")
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit:$kotlin_version")
 }

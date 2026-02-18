@@ -6,6 +6,7 @@ import com.suprbeta.digitalocean.models.AgentMutationResponse
 import com.suprbeta.firebase.FirestoreRepository
 import com.suprbeta.firebase.authenticated
 import com.suprbeta.firebase.firebaseUserKey
+import com.suprbeta.supabase.SupabaseAgentRepository
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.request.*
@@ -14,7 +15,8 @@ import io.ktor.server.routing.*
 
 fun Application.configureAgentRoutes(
     configuringService: DropletConfigurationService,
-    firestoreRepository: FirestoreRepository
+    firestoreRepository: FirestoreRepository,
+    agentRepository: SupabaseAgentRepository
 ) {
     routing {
         authenticated {
@@ -27,7 +29,7 @@ fun Application.configureAgentRoutes(
                     val user = call.attributes[firebaseUserKey]
 
                     try {
-                        val agents = firestoreRepository.getUserAgents(user.uid)
+                        val agents = agentRepository.getAgents()
                         call.respond(
                             HttpStatusCode.OK,
                             AgentListResponse(
@@ -57,15 +59,14 @@ fun Application.configureAgentRoutes(
                         val dropletId = call.requireOwnedDropletId(user.uid, firestoreRepository) ?: return@post
 
                         val request = call.receive<CreateAgentRequest>()
-                        val output = configuringService.createAgent(user.uid, request.name, request.model)
+                        val output = configuringService.createAgent(user.uid, request.name, request.role, request.model)
 
                         call.respond(
                             HttpStatusCode.Created,
                             AgentMutationResponse(
                                 dropletId = dropletId,
                                 name = request.name,
-                                model = request.model?.ifBlank { "google/gemini-2.5-flash" }
-                                    ?: "google/gemini-2.5-flash",
+                                role = request.role,
                                 message = "Agent created",
                                 output = output.take(500)
                             )
