@@ -137,7 +137,7 @@ class DropletProvisioningServiceImpl(
 
             // Phase 5 — Configuration (model + gateway token)
             updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Configuring AI model and gateway...", ipAddress)
-            sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw models set google/gemini-2.5-flash")
+            sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw models set amazon-bedrock/minimax.minimax-m2.1")
 
             // Generate and set gateway token
             val gatewayToken = generateGatewayToken()

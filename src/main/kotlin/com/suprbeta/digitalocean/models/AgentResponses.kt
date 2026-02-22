@@ -14,6 +14,7 @@ data class AgentMutationResponse(
     val dropletId: Long,
     val name: String,
     val role: String? = null,
+    val sessionKey: String? = null,
     val message: String,
     val output: String
 )

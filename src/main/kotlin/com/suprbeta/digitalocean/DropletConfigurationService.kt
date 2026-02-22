@@ -20,7 +20,7 @@ class DropletConfigurationServiceImpl(
     application: Application
 ) : DropletConfigurationService {
     companion object {
-        private const val DEFAULT_AGENT_MODEL = "google/gemini-2.5-flash"
+        private const val DEFAULT_AGENT_MODEL = "amazon-bedrock/minimax.minimax-m2.1"
     }
 
     private val logger = application.log
