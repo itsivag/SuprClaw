@@ -32,20 +32,20 @@ jobs:
 
       - name: Create .env from secrets
         run: |
-          cat > .env << EOF
-          DIGITALOCEAN_API_KEY=${{ secrets.DIGITALOCEAN_API_KEY }}
-          DIGITALOCEAN_SSH_KEYS=${{ secrets.DIGITALOCEAN_SSH_KEYS }}
-          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
-          OPENCLAW_SNAPSHOT_ID=${{ secrets.OPENCLAW_SNAPSHOT_ID }}
-          DOMAIN=${{ secrets.DOMAIN }}
-          FIREBASE_CREDENTIALS_PATH=${{ secrets.FIREBASE_CREDENTIALS_PATH }}
-          FIREBASE_PROJECT_ID=${{ secrets.FIREBASE_PROJECT_ID }}
-          SUPRCLAW_DEVICE_PRIVATE_KEY_B64=${{ secrets.SUPRCLAW_DEVICE_PRIVATE_KEY_B64 }}
-          SUPRCLAW_DEVICE_PUBLIC_KEY_B64=${{ secrets.SUPRCLAW_DEVICE_PUBLIC_KEY_B64 }}
-          SUPRCLAW_STATIC_DEVICE_ID=${{ secrets.SUPRCLAW_STATIC_DEVICE_ID }}
-          SUPABASE_URL=${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}
-          EOF
+          {
+            echo "DIGITALOCEAN_API_KEY=${{ secrets.DIGITALOCEAN_API_KEY }}"
+            echo "DIGITALOCEAN_SSH_KEYS=${{ secrets.DIGITALOCEAN_SSH_KEYS }}"
+            echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}"
+            echo "OPENCLAW_SNAPSHOT_ID=${{ secrets.OPENCLAW_SNAPSHOT_ID }}"
+            echo "DOMAIN=${{ secrets.DOMAIN }}"
+            echo "FIREBASE_CREDENTIALS_PATH=${{ secrets.FIREBASE_CREDENTIALS_PATH }}"
+            echo "FIREBASE_PROJECT_ID=${{ secrets.FIREBASE_PROJECT_ID }}"
+            echo "SUPRCLAW_DEVICE_PRIVATE_KEY_B64=${{ secrets.SUPRCLAW_DEVICE_PRIVATE_KEY_B64 }}"
+            echo "SUPRCLAW_DEVICE_PUBLIC_KEY_B64=${{ secrets.SUPRCLAW_DEVICE_PUBLIC_KEY_B64 }}"
+            echo "SUPRCLAW_STATIC_DEVICE_ID=${{ secrets.SUPRCLAW_STATIC_DEVICE_ID }}"
+            echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}"
+            echo "SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}"
+          } > .env
 
       - name: Create deployment package
         run: |
@@ -88,7 +88,6 @@ jobs:
 
             # Backup config files BEFORE moving directory
             if [ -d "SuprClaw" ]; then
-              cp SuprClaw/.env ~/.env.backup 2>/dev/null || echo "No .env to backup"
               cp SuprClaw/firebase-credentials.json ~/.firebase-credentials.backup 2>/dev/null || echo "No firebase-credentials.json to backup"
               mv SuprClaw SuprClaw.backup.$(date +%Y%m%d_%H%M%S)
             fi
@@ -104,13 +103,15 @@ jobs:
             # Move JAR to correct location
             mv *.jar build/libs/ 2>/dev/null || true
 
-            # Restore config files from backup
-            if [ -f ~/.env.backup ]; then
-              mv ~/.env.backup .env
-              echo "✅ Restored .env from backup"
+            # .env is deployed fresh from GitHub Secrets (via tarball) - no restore needed
+            if [ -f .env ]; then
+              echo "✅ .env from deployment package is present"
             else
-              echo "⚠️  Warning: No .env backup found - service may fail to start"
+              echo "❌ .env missing from deployment package - aborting"
+              exit 1
             fi
+            # Clean up any stale .env backup
+            rm -f ~/.env.backup
 
             if [ -f ~/.firebase-credentials.backup ]; then
               mv ~/.firebase-credentials.backup firebase-credentials.json
