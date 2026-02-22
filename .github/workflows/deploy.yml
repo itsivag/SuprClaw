@@ -30,11 +30,28 @@ jobs:
       - name: Build with Gradle
         run: ./gradlew clean build --no-daemon
 
+      - name: Create .env from secrets
+        run: |
+          cat > .env << EOF
+          DIGITALOCEAN_API_KEY=${{ secrets.DIGITALOCEAN_API_KEY }}
+          DIGITALOCEAN_SSH_KEYS=${{ secrets.DIGITALOCEAN_SSH_KEYS }}
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          OPENCLAW_SNAPSHOT_ID=${{ secrets.OPENCLAW_SNAPSHOT_ID }}
+          DOMAIN=${{ secrets.DOMAIN }}
+          FIREBASE_CREDENTIALS_PATH=${{ secrets.FIREBASE_CREDENTIALS_PATH }}
+          FIREBASE_PROJECT_ID=${{ secrets.FIREBASE_PROJECT_ID }}
+          SUPRCLAW_DEVICE_PRIVATE_KEY_B64=${{ secrets.SUPRCLAW_DEVICE_PRIVATE_KEY_B64 }}
+          SUPRCLAW_DEVICE_PUBLIC_KEY_B64=${{ secrets.SUPRCLAW_DEVICE_PUBLIC_KEY_B64 }}
+          SUPRCLAW_STATIC_DEVICE_ID=${{ secrets.SUPRCLAW_STATIC_DEVICE_ID }}
+          SUPABASE_URL=${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}
+          EOF
+
       - name: Create deployment package
         run: |
           mkdir -p deploy
           cp build/libs/*.jar deploy/
-          cp .env deploy/ || echo "Warning: .env not found in repo"
+          cp .env deploy/
           cp setup-wildcard-ssl.sh deploy/ || echo "Warning: setup-wildcard-ssl.sh not found"
           tar -czf suprclaw-deploy.tar.gz -C deploy .
 
