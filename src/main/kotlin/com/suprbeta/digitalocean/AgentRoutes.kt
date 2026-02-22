@@ -27,7 +27,6 @@ fun Application.configureAgentRoutes(
                  */
                 get {
                     val user = call.attributes[firebaseUserKey]
-
                     try {
                         val agents = agentRepository.getAgents()
                         call.respond(
