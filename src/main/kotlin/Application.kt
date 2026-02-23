@@ -16,6 +16,8 @@ import com.suprbeta.firebase.FirebaseService
 import com.suprbeta.firebase.FirestoreRepository
 import com.suprbeta.supabase.SupabaseAgentRepository
 import com.suprbeta.supabase.SupabaseService
+import com.suprbeta.supabase.SupabaseTaskRepository
+import com.suprbeta.supabase.configureTaskRoutes
 import io.github.jan.supabase.SupabaseClient
 import com.suprbeta.websocket.OpenClawConnector
 import com.suprbeta.websocket.ProxySessionManager
@@ -52,12 +54,14 @@ fun Application.module() {
     val (firebaseAuthService, firestoreRepository) = configureFirebase()
     val supabaseClient = configureSupabase()
     val agentRepository = SupabaseAgentRepository(supabaseClient, this)
+    val taskRepository = SupabaseTaskRepository(supabaseClient, this)
 
     // Create shared HttpClient for API calls
     val httpClient = createHttpClient()
 
     configureWebSockets(httpClient, firebaseAuthService, firestoreRepository)
     configureDigitalOcean(httpClient, firestoreRepository, agentRepository)
+    configureTaskRoutes(taskRepository)
     configureRouting()
 }
 
