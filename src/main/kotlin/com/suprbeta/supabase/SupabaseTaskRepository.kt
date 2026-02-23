@@ -1,6 +1,7 @@
 package com.suprbeta.supabase
 
 import com.suprbeta.supabase.models.AgentAction
+import com.suprbeta.supabase.models.AgentSummary
 import com.suprbeta.supabase.models.Task
 import com.suprbeta.supabase.models.TaskAssignee
 import com.suprbeta.supabase.models.TaskDetailResponse
@@ -63,14 +64,39 @@ class SupabaseTaskRepository(
                 }
 
                 val task = taskDeferred.await() ?: return@coroutineScope null
+                val messages = messagesDeferred.await()
+                val documents = documentsDeferred.await()
+                val statusHistory = statusHistoryDeferred.await()
+                val assignees = assigneesDeferred.await()
+                val actions = actionsDeferred.await()
+
+                val agentIds = buildSet {
+                    task.createdBy?.let { add(it) }
+                    task.lockedBy?.let { add(it) }
+                    messages.forEach { add(it.fromAgent) }
+                    documents.forEach { it.createdBy?.let { id -> add(id) } }
+                    statusHistory.forEach { it.changedBy?.let { id -> add(id) } }
+                    assignees.forEach {
+                        add(it.agentId)
+                        it.assignedBy?.let { id -> add(id) }
+                    }
+                    actions.forEach { add(it.agentId) }
+                }.filter { it.isNotBlank() }
+
+                val agents = if (agentIds.isEmpty()) emptyList() else {
+                    client.from("agents").select {
+                        filter { isIn("id", agentIds) }
+                    }.decodeList<AgentSummary>()
+                }
 
                 TaskDetailResponse(
                     task = task,
-                    messages = messagesDeferred.await(),
-                    documents = documentsDeferred.await(),
-                    statusHistory = statusHistoryDeferred.await(),
-                    assignees = assigneesDeferred.await(),
-                    actions = actionsDeferred.await()
+                    messages = messages,
+                    documents = documents,
+                    statusHistory = statusHistory,
+                    assignees = assignees,
+                    actions = actions,
+                    agents = agents
                 )
             }
         } catch (e: Exception) {
