@@ -72,13 +72,21 @@ data class AgentAction(
 )
 
 @Serializable
+data class AgentSummary(
+    val id: String = "",
+    val name: String = "",
+    val role: String = ""
+)
+
+@Serializable
 data class TaskDetailResponse(
     val task: Task,
     val messages: List<TaskMessage>,
     val documents: List<TaskDocument>,
     @SerialName("status_history") val statusHistory: List<TaskStatusHistoryEntry>,
     val assignees: List<TaskAssignee>,
-    val actions: List<AgentAction>
+    val actions: List<AgentAction>,
+    val agents: List<AgentSummary>
 )
 
 @Serializable
