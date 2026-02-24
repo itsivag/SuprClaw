@@ -33,9 +33,9 @@ class SupabaseSchemaRepository(
         supabase.postgrest.rpc("drop_user_schema", buildJsonObject {
             put("p_schema_name", schemaName)
         })
-        supabase.from("user_droplets").delete {
-            filter { eq("schema_name", schemaName) }
-        }
+        supabase.postgrest.rpc("delete_user_droplet", buildJsonObject {
+            put("p_schema_name", schemaName)
+        })
         logger.info("🗑️ Dropped Supabase schema + removed user_droplets row: $schemaName for userId=$userId")
     }
 
