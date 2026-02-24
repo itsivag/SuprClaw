@@ -9,58 +9,73 @@ import com.suprbeta.supabase.models.TaskDocument
 import com.suprbeta.supabase.models.TaskMessage
 import com.suprbeta.supabase.models.TaskStatusHistoryEntry
 import io.github.jan.supabase.SupabaseClient
-import io.github.jan.supabase.postgrest.from
+import io.github.jan.supabase.postgrest.postgrest
 import io.ktor.server.application.*
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 class SupabaseTaskRepository(
     private val client: SupabaseClient,
     private val application: Application
 ) {
-    suspend fun getTasks(): List<Task> {
+    suspend fun getTasks(schemaName: String): List<Task> {
         return try {
-            application.log.debug("Fetching all tasks")
-            client.from("tasks").select().decodeList<Task>()
+            application.log.debug("Fetching tasks for schema: $schemaName")
+            client.postgrest.rpc("get_user_tasks", buildJsonObject {
+                put("p_schema_name", schemaName)
+            }).decodeList<Task>()
         } catch (e: Exception) {
-            application.log.error("Failed to fetch tasks", e)
+            application.log.error("Failed to fetch tasks for schema $schemaName", e)
             emptyList()
         }
     }
 
-    suspend fun getTaskDetail(id: String): TaskDetailResponse? {
+    suspend fun getTaskDetail(id: String, schemaName: String): TaskDetailResponse? {
         return try {
-            application.log.debug("Fetching task detail for id=$id")
+            application.log.debug("Fetching task detail id=$id schema=$schemaName")
             coroutineScope {
                 val taskDeferred = async {
-                    client.from("tasks").select {
-                        filter { eq("id", id) }
-                    }.decodeSingleOrNull<Task>()
+                    client.postgrest.rpc("get_user_task", buildJsonObject {
+                        put("p_schema_name", schemaName)
+                        put("p_task_id", id)
+                    }).decodeSingleOrNull<Task>()
                 }
                 val messagesDeferred = async {
-                    client.from("messages").select {
-                        filter { eq("task_id", id) }
-                    }.decodeList<TaskMessage>()
+                    client.postgrest.rpc("get_user_task_messages", buildJsonObject {
+                        put("p_schema_name", schemaName)
+                        put("p_task_id", id)
+                    }).decodeList<TaskMessage>()
                 }
                 val documentsDeferred = async {
-                    client.from("documents").select {
-                        filter { eq("task_id", id) }
-                    }.decodeList<TaskDocument>()
+                    client.postgrest.rpc("get_user_task_documents", buildJsonObject {
+                        put("p_schema_name", schemaName)
+                        put("p_task_id", id)
+                    }).decodeList<TaskDocument>()
                 }
                 val statusHistoryDeferred = async {
-                    client.from("task_status_history").select {
-                        filter { eq("task_id", id) }
-                    }.decodeList<TaskStatusHistoryEntry>()
+                    client.postgrest.rpc("get_user_task_status_history", buildJsonObject {
+                        put("p_schema_name", schemaName)
+                        put("p_task_id", id)
+                    }).decodeList<TaskStatusHistoryEntry>()
                 }
                 val assigneesDeferred = async {
-                    client.from("task_assignees").select {
-                        filter { eq("task_id", id) }
-                    }.decodeList<TaskAssignee>()
+                    client.postgrest.rpc("get_user_task_assignees", buildJsonObject {
+                        put("p_schema_name", schemaName)
+                        put("p_task_id", id)
+                    }).decodeList<TaskAssignee>()
                 }
                 val actionsDeferred = async {
-                    client.from("agent_actions").select {
-                        filter { eq("task_id", id) }
-                    }.decodeList<AgentAction>()
+                    client.postgrest.rpc("get_user_task_agent_actions", buildJsonObject {
+                        put("p_schema_name", schemaName)
+                        put("p_task_id", id)
+                    }).decodeList<AgentAction>()
+                }
+                val allAgentsDeferred = async {
+                    client.postgrest.rpc("get_user_agents", buildJsonObject {
+                        put("p_schema_name", schemaName)
+                    }).decodeList<AgentSummary>()
                 }
 
                 val task = taskDeferred.await() ?: return@coroutineScope null
@@ -69,6 +84,7 @@ class SupabaseTaskRepository(
                 val statusHistory = statusHistoryDeferred.await()
                 val assignees = assigneesDeferred.await()
                 val actions = actionsDeferred.await()
+                val allAgents = allAgentsDeferred.await()
 
                 val agentIds = buildSet {
                     task.createdBy?.let { add(it) }
@@ -83,11 +99,7 @@ class SupabaseTaskRepository(
                     actions.forEach { add(it.agentId) }
                 }.filter { it.isNotBlank() }
 
-                val agents = if (agentIds.isEmpty()) emptyList() else {
-                    client.from("agents").select {
-                        filter { isIn("id", agentIds) }
-                    }.decodeList<AgentSummary>()
-                }
+                val agents = allAgents.filter { it.id in agentIds }
 
                 TaskDetailResponse(
                     task = task,
@@ -100,7 +112,7 @@ class SupabaseTaskRepository(
                 )
             }
         } catch (e: Exception) {
-            application.log.error("Failed to fetch task detail for id=$id", e)
+            application.log.error("Failed to fetch task detail id=$id schema=$schemaName", e)
             null
         }
     }
