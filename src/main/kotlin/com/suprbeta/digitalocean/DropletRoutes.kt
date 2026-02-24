@@ -50,13 +50,10 @@ fun Application.configureDropletRoutes(
                             userId = user.uid,
                             dropletId = result.dropletId,
                             dropletName = request.name,
-                            gatewayUrl = "", // Empty until provisioning completes
-                            gatewayToken = "", // Empty until provisioning completes
-                            ipAddress = "",
-                            subdomain = null,
+                            gatewayUrl = "",
+                            gatewayToken = "",
                             createdAt = java.time.Instant.now().toString(),
-                            status = "provisioning", // Provisioning in progress
-                            sslEnabled = true
+                            status = "provisioning"
                         )
 
                         call.respond(HttpStatusCode.Accepted, userDroplet)

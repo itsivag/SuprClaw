@@ -123,15 +123,15 @@ class DropletProvisioningServiceImpl(
             val ipAddress = waitForDropletReady(dropletId)
 
             // Phase 3 — Wait for SSH port
-            updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_SSH, "Waiting for SSH port at $ipAddress...")
+            updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_SSH, "Waiting for SSH port...")
             sshCommandExecutor.waitForSshReady(ipAddress)
 
             // Phase 3b — Wait for cloud-init to apply password (deterministic probe)
-            updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_SSH, "Waiting for cloud-init to finish (probing SSH auth)...", ipAddress)
+            updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_SSH, "Waiting for cloud-init to finish (probing SSH auth)...")
             sshCommandExecutor.waitForSshAuth(ipAddress, password)
 
             // Phase 4 — Configuration (gateway token)
-            updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Configuring gateway token...", ipAddress)
+            updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Configuring gateway token...")
             val gatewayToken = generateGatewayToken()
             sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw config set gateway.auth.token $gatewayToken")
             sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw config set gateway.remote.token $gatewayToken")
@@ -140,14 +140,8 @@ class DropletProvisioningServiceImpl(
 
             logger.info("Gateway token set for droplet $dropletId: $gatewayToken")
 
-            // Update status with the token
-            val current = statuses[dropletId]
-            if (current != null) {
-                statuses[dropletId] = current.copy(gateway_token = gatewayToken)
-            }
-
             // Phase 6 — DNS configuration (MANDATORY - fail if this fails)
-            updateStatus(dropletId, ProvisioningStatus.PHASE_DNS, "Creating DNS record...", ipAddress)
+            updateStatus(dropletId, ProvisioningStatus.PHASE_DNS, "Creating DNS record...")
             // Use droplet name as subdomain (sanitize it first)
             val statusNow = statuses[dropletId]
             val dropletName = statusNow?.droplet_name ?: "droplet-$dropletId"
@@ -157,38 +151,20 @@ class DropletProvisioningServiceImpl(
             val subdomain = dnsService.createDnsRecord(sanitizedName, ipAddress)
             logger.info("✅ Subdomain configured: $subdomain")
 
-            // Update status with subdomain
-            val statusAfterDns = statuses[dropletId]
-            if (statusAfterDns != null) {
-                statuses[dropletId] = statusAfterDns.copy(
-                    subdomain = subdomain,
-                    gateway_token = gatewayToken
-                )
-            }
-
             // Phase 7 — Gateway verification
-            updateStatus(dropletId, ProvisioningStatus.PHASE_VERIFYING, "Verifying gateway status...", ipAddress)
+            updateStatus(dropletId, ProvisioningStatus.PHASE_VERIFYING, "Verifying gateway status...")
             verifyGateway(ipAddress, password)
 
             // Phase 7 — Nginx reverse proxy + SSL (only for VPS/production)
             if (AppConfig.sslEnabled) {
-                updateStatus(dropletId, ProvisioningStatus.PHASE_NGINX, "Installing nginx and obtaining SSL certificate...", ipAddress)
+                updateStatus(dropletId, ProvisioningStatus.PHASE_NGINX, "Installing nginx and obtaining SSL certificate...")
                 setupNginxReverseProxy(ipAddress, password, subdomain)
             } else {
                 logger.info("ℹ️ Skipping Nginx/SSL setup (running in local mode)")
             }
 
-            // Phase 8 — Complete
             val vpsGatewayUrl = if (AppConfig.sslEnabled) "https://$subdomain" else "http://$ipAddress:$GATEWAY_PORT"
             val proxyGatewayUrl = "wss://api.suprclaw.com"
-            
-            updateStatus(
-                dropletId, ProvisioningStatus.PHASE_COMPLETE,
-                "Provisioning complete. Connect via proxy at $proxyGatewayUrl",
-                ipAddress,
-                completedAt = Instant.now().toString()
-            )
-            logger.info("✅ Droplet $dropletId provisioning complete. VPS: $vpsGatewayUrl, Proxy: $proxyGatewayUrl")
 
             // Final phase: real first connect, and if pairing is required, approve requestId once.
             // Per requirement: do not reconnect after approval.
@@ -210,41 +186,46 @@ class DropletProvisioningServiceImpl(
                 sslEnabled = AppConfig.sslEnabled
             )
 
-            try {
-                coroutineScope {
-                    // saveDroplet and saveSchema are independent — run in parallel
-                    val saveDroplet = async {
-                        firestoreRepository.saveUserDroplet(userDropletInternal)
-                    }
-                    val saveSchema = async {
-                        schemaRepository.createUserSchema(
-                            userId,
-                            userDropletInternal.vpsGatewayUrl,
-                            userDropletInternal.gatewayToken
-                        )
-                    }
-
-                    saveDroplet.await()
-                    // Schema must exist before inserting the agent
-                    saveSchema.await()
-
-                    val schemaName = "user_" + userId.replace(Regex("[^a-zA-Z0-9]"), "_")
-                    agentRepository.saveAgent(
-                        schemaName,
-                        AgentInsert(
-                            name = "Lead",
-                            role = "Lead Coordinator",
-                            sessionKey = "agent:main:main",
-                            isLead = true,
-                            status = "active"
-                        )
+            // Save to Firestore + Supabase — must all succeed before marking complete
+            coroutineScope {
+                // saveDroplet and saveSchema are independent — run in parallel
+                val saveDroplet = async {
+                    firestoreRepository.saveUserDroplet(userDropletInternal)
+                }
+                val saveSchema = async {
+                    schemaRepository.createUserSchema(
+                        userId,
+                        userDropletInternal.vpsGatewayUrl,
+                        userDropletInternal.gatewayToken
                     )
                 }
 
-                logger.info("💾 User droplet saved to Firestore, default main agent and schema saved to Supabase: userId=$userId, dropletId=$dropletId")
-            } catch (e: Exception) {
-                logger.error("Failed to save user droplet/agent to Firestore (droplet still provisioned successfully)", e)
+                saveDroplet.await()
+                // Schema must exist before inserting the agent
+                saveSchema.await()
+
+                val schemaName = "user_" + userId.replace(Regex("[^a-zA-Z0-9]"), "_")
+                agentRepository.saveAgent(
+                    schemaName,
+                    AgentInsert(
+                        name = "Lead",
+                        role = "Lead Coordinator",
+                        sessionKey = "agent:main:main",
+                        isLead = true,
+                        status = "active"
+                    )
+                )
             }
+
+            logger.info("💾 User droplet saved to Firestore, default main agent and schema saved to Supabase: userId=$userId, dropletId=$dropletId")
+
+            // Phase 8 — Complete (only reached if all saves succeeded)
+            updateStatus(
+                dropletId, ProvisioningStatus.PHASE_COMPLETE,
+                "Provisioning complete. Connect via proxy at $proxyGatewayUrl",
+                completedAt = Instant.now().toString()
+            )
+            logger.info("✅ Droplet $dropletId provisioning complete. VPS: $vpsGatewayUrl, Proxy: $proxyGatewayUrl")
 
             // Return client-safe version (without VPS URL)
             return userDropletInternal.toUserDroplet()
@@ -341,8 +322,8 @@ class DropletProvisioningServiceImpl(
                         ?.ip_address
 
                     if (ip != null) {
-                        logger.info("Droplet $dropletId is active at $ip")
-                        updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_ACTIVE, "Droplet active at $ip", ip)
+                        logger.info("Droplet $dropletId is active")
+                        updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_ACTIVE, "Droplet active, configuring...")
                         return ip
                     }
                 }
@@ -585,7 +566,6 @@ server {
         dropletId: Long,
         phase: String,
         message: String,
-        ipAddress: String? = null,
         completedAt: String? = null
     ) {
         val current = statuses[dropletId] ?: return
@@ -594,7 +574,6 @@ server {
             phase = phase,
             progress = progress,
             message = message,
-            ip_address = ipAddress ?: current.ip_address,
             completed_at = completedAt
         )
     }

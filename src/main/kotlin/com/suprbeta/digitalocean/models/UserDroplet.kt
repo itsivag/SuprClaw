@@ -3,22 +3,19 @@ package com.suprbeta.digitalocean.models
 import kotlinx.serialization.Serializable
 
 /**
- * Represents a user's provisioned droplet in Firestore
- * One user can have only one droplet
+ * Client-safe representation of a user's provisioned droplet.
+ * Does NOT contain sensitive infrastructure details (IP, VPS URL, SSH key, subdomain).
  */
 @Serializable
 data class UserDroplet(
     val userId: String = "",              // Firebase user ID (document ID)
-    val dropletId: Long = 0,              // DigitalOcean droplet ID
-    val dropletName: String = "",         // Droplet name (usually same as userId)
-    val gatewayUrl: String = "",          // Proxy WebSocket URL (wss://api.suprclaw.com/ws)
+    val dropletId: Long = 0,              // DigitalOcean droplet ID (needed for status polling)
+    val dropletName: String = "",         // Droplet name
+    val gatewayUrl: String = "",          // Proxy WebSocket URL (wss://api.suprclaw.com)
     val gatewayToken: String = "",        // Authentication token for gateway
-    val ipAddress: String = "",           // Droplet IP address
-    val subdomain: String? = null,        // Subdomain (if SSL enabled)
     val createdAt: String = "",           // ISO 8601 timestamp
-    val status: String = "active",        // Status: active, provisioning, error, deleted
-    val sslEnabled: Boolean = true        // Whether SSL/HTTPS is enabled
+    val status: String = "active"         // Status: active, provisioning, error, deleted
 ) {
     // No-arg constructor for Firestore deserialization
-    constructor() : this("", 0, "", "", "", "", null, "", "active", true)
+    constructor() : this("", 0, "", "", "", "", "active")
 }
