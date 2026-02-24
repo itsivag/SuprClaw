@@ -90,10 +90,10 @@ nano .env
 
 Add your environment variables:
 ```env
-DIGITALOCEAN_API_KEY=dop_v1_b5983c023fa5c274c7ad4275c28f6c37627678aa99884edffe6277b9a2514733
-GEMINI_API_KEY=AIzaSyDurd8BCDK3SExQmk-n_jRIYnVQ53aj8wo
-OPENCLAW_SNAPSHOT_ID=216715636
-DOMAIN=suprclaw.com
+DIGITALOCEAN_API_KEY=your_digitalocean_api_token
+GEMINI_API_KEY=your_gemini_api_key
+OPENCLAW_SNAPSHOT_ID=your_snapshot_id
+DOMAIN=your_domain.com
 ```
 
 ### Build the application:

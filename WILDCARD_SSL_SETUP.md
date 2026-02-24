@@ -20,7 +20,7 @@ sudo nano /etc/letsencrypt/digitalocean.ini
 
 Add this content:
 ```ini
-dns_digitalocean_token = dop_v1_b5983c023fa5c274c7ad4275c28f6c37627678aa99884edffe6277b9a2514733
+dns_digitalocean_token = your_digitalocean_api_token
 ```
 
 ```bash
