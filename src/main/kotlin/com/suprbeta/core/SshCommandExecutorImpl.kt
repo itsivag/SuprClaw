@@ -21,7 +21,7 @@ class SshCommandExecutorImpl(
         private const val SSH_AUTH_TIMEOUT_MS = 180_000L
         private const val SSH_CONNECT_TIMEOUT_MS = 10_000
         private const val SSH_MAX_RETRIES = 3
-        private const val SSH_COMMAND_TIMEOUT_SECONDS = 300L
+        private const val SSH_COMMAND_TIMEOUT_SECONDS = 120L
     }
 
     override suspend fun waitForSshReady(ipAddress: String) {
@@ -109,7 +109,11 @@ class SshCommandExecutorImpl(
                     logger.info("SSH stderr: ${stderr.take(200)}")
                 }
 
-                if (exitStatus != null && exitStatus != 0) {
+                if (exitStatus == null) {
+                    throw RuntimeException("SSH command timed out after ${SSH_COMMAND_TIMEOUT_SECONDS}s: ${command.take(100)}")
+                }
+
+                if (exitStatus != 0) {
                     throw RuntimeException("SSH command failed (exit=$exitStatus): ${stderr.take(500)}")
                 }
 
