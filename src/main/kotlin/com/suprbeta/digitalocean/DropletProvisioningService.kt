@@ -126,16 +126,12 @@ class DropletProvisioningServiceImpl(
             updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_SSH, "Waiting for cloud-init to finish (probing SSH auth)...", ipAddress)
             sshCommandExecutor.waitForSshAuth(ipAddress, password)
 
-            // Phase 4 — Configuration (model + gateway token)
-//            updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Configuring AI model and gateway...", ipAddress)
-//            sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw models set amazon-bedrock/minimax.minimax-m2.1")
-
-            // Generate and set gateway token
+            // Phase 4 — Configuration (gateway token)
+            updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Configuring gateway token...", ipAddress)
             val gatewayToken = generateGatewayToken()
             sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw config set gateway.auth.token $gatewayToken")
             sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw config set gateway.remote.token $gatewayToken")
             sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw config set gateway.mode local")
-            sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw doctor --fix")
             sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw gateway restart")
 
             logger.info("Gateway token set for droplet $dropletId: $gatewayToken")
