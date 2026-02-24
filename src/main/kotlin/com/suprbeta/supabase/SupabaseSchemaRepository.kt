@@ -1,7 +1,6 @@
 package com.suprbeta.supabase
 
 import io.github.jan.supabase.SupabaseClient
-import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
 import io.ktor.server.application.*
 import kotlinx.serialization.json.buildJsonObject
@@ -18,13 +17,11 @@ class SupabaseSchemaRepository(
         supabase.postgrest.rpc("create_user_schema", buildJsonObject {
             put("p_schema_name", schemaName)
         })
-        supabase.from("user_droplets").insert(
-            mapOf(
-                "schema_name"     to schemaName,
-                "vps_gateway_url" to vpsGatewayUrl,
-                "gateway_token"   to gatewayToken
-            )
-        )
+        supabase.postgrest.rpc("insert_user_droplet", buildJsonObject {
+            put("p_schema_name", schemaName)
+            put("p_vps_gateway_url", vpsGatewayUrl)
+            put("p_gateway_token", gatewayToken)
+        })
         logger.info("✅ Created Supabase schema + registered droplet: $schemaName for userId=$userId")
     }
 
