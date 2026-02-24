@@ -96,6 +96,36 @@ fun Application.configureDropletRoutes(
                 }
 
                 /**
+                 * DELETE /api/droplets/my-droplet
+                 * Deletes the authenticated user's droplet, Supabase schema, and all related data.
+                 */
+                delete("my-droplet") {
+                    val user = call.attributes[firebaseUserKey]
+                    log.info("Teardown requested for user ${user.uid}")
+
+                    try {
+                        provisioningService.teardown(user.uid)
+                        call.respond(HttpStatusCode.OK, mapOf("message" to "Droplet and all associated data deleted"))
+                    } catch (e: IllegalStateException) {
+                        if (e.message?.startsWith("No droplet found") == true) {
+                            call.respond(HttpStatusCode.NotFound, mapOf("error" to "No droplet found for user"))
+                        } else {
+                            log.error("Teardown failed for user ${user.uid}", e)
+                            call.respond(
+                                HttpStatusCode.InternalServerError,
+                                mapOf("error" to (e.message ?: "Teardown failed"))
+                            )
+                        }
+                    } catch (e: Exception) {
+                        log.error("Teardown failed for user ${user.uid}", e)
+                        call.respond(
+                            HttpStatusCode.InternalServerError,
+                            mapOf("error" to (e.message ?: "Unknown error occurred"))
+                        )
+                    }
+                }
+
+                /**
                  * GET /api/droplets/{id}/status
                  * Returns the current provisioning status for a droplet.
                  */
