@@ -34,8 +34,7 @@ interface DropletProvisioningService {
     data class CreateResult(
         val dropletId: Long,
         val status: ProvisioningStatus,
-        val password: String,
-        val geminiApiKey: String
+        val password: String
     )
 
     suspend fun createAndProvision(name: String): CreateResult
@@ -43,7 +42,6 @@ interface DropletProvisioningService {
     suspend fun provisionDroplet(
         dropletId: Long,
         password: String,
-        geminiApiKey: String,
         userId: String
     ): UserDroplet
 
@@ -69,7 +67,6 @@ class DropletProvisioningServiceImpl(
         private const val GATEWAY_PORT = 18789
         private const val POLL_INTERVAL_MS = 5_000L
         private const val MAX_POLL_WAIT_MS = 300_000L       // 5 minutes for droplet to become active
-        private const val ONBOARDING_MAX_RETRIES = 3
         private const val GATEWAY_VERIFY_TIMEOUT_S = 30
 
         // Progress values for each phase (0.0 to 1.0)
@@ -77,7 +74,6 @@ class DropletProvisioningServiceImpl(
             ProvisioningStatus.PHASE_CREATING to 0.0,
             ProvisioningStatus.PHASE_WAITING_ACTIVE to 0.125,
             ProvisioningStatus.PHASE_WAITING_SSH to 0.25,
-            ProvisioningStatus.PHASE_ONBOARDING to 0.4,
             ProvisioningStatus.PHASE_CONFIGURING to 0.55,
             ProvisioningStatus.PHASE_DNS to 0.65,
             ProvisioningStatus.PHASE_VERIFYING to 0.75,
@@ -95,7 +91,6 @@ class DropletProvisioningServiceImpl(
      */
     override suspend fun createAndProvision(name: String): DropletProvisioningService.CreateResult {
         val password = UserDataGenerator.generatePassword()
-        val geminiApiKey = digitalOceanService.geminiApiKey
 
         val doResponse = digitalOceanService.createDroplet(name, password)
         val dropletId = doResponse.droplet?.id
@@ -111,14 +106,14 @@ class DropletProvisioningServiceImpl(
         )
         statuses[dropletId] = status
 
-        return DropletProvisioningService.CreateResult(dropletId, status, password, geminiApiKey)
+        return DropletProvisioningService.CreateResult(dropletId, status, password)
     }
 
     /**
      * Internal entry point that drives the provisioning coroutine.
      * Called as fire-and-forget from the route handler.
      */
-    override suspend fun provisionDroplet(dropletId: Long, password: String, geminiApiKey: String, userId: String): UserDroplet {
+    override suspend fun provisionDroplet(dropletId: Long, password: String, userId: String): UserDroplet {
         try {
             // Phase 2 — Wait for active + IP
             val ipAddress = waitForDropletReady(dropletId)
@@ -131,13 +126,9 @@ class DropletProvisioningServiceImpl(
             updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_SSH, "Waiting for cloud-init to finish (probing SSH auth)...", ipAddress)
             sshCommandExecutor.waitForSshAuth(ipAddress, password)
 
-            // Phase 4 — Onboarding (with retries)
-            updateStatus(dropletId, ProvisioningStatus.PHASE_ONBOARDING, "Running OpenClaw onboarding via SSH...", ipAddress)
-            runOnboardingWithRetries(ipAddress, password, geminiApiKey)
-
-            // Phase 5 — Configuration (model + gateway token)
-            updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Configuring AI model and gateway...", ipAddress)
-            sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw models set amazon-bedrock/minimax.minimax-m2.1")
+            // Phase 4 — Configuration (model + gateway token)
+//            updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Configuring AI model and gateway...", ipAddress)
+//            sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw models set amazon-bedrock/minimax.minimax-m2.1")
 
             // Generate and set gateway token
             val gatewayToken = generateGatewayToken()
@@ -315,50 +306,7 @@ class DropletProvisioningServiceImpl(
         throw IllegalStateException("Droplet $dropletId did not become active within ${MAX_POLL_WAIT_MS / 1000}s")
     }
 
-    // ── Phase 4 — Onboarding via SSH ────────────────────────────────────
-
-    private suspend fun runOnboardingWithRetries(ipAddress: String, password: String, geminiApiKey: String) {
-        val command = """
-            openclaw onboard \
-              --install-daemon \
-              --non-interactive \
-              --auth-choice gemini-api-key \
-              --gemini-api-key "$geminiApiKey" \
-              --gateway-port $GATEWAY_PORT \
-              --accept-risk
-        """.trimIndent()
-
-        var lastError: Exception? = null
-
-        repeat(ONBOARDING_MAX_RETRIES) { attempt ->
-            try {
-                logger.info("Onboarding attempt ${attempt + 1}/$ONBOARDING_MAX_RETRIES on $ipAddress")
-                val output = sshCommandExecutor.runSshCommand(ipAddress, password, command)
-
-                if (output.contains("Installed systemd service") || output.contains("Enabled systemd lingering") || output.contains("onboarding complete", ignoreCase = true)) {
-                    logger.info("Onboarding succeeded on attempt ${attempt + 1}")
-                    return
-                }
-
-                // Even if we don't see expected markers, if command didn't throw, consider it success
-                logger.info("Onboarding completed (attempt ${attempt + 1}), output: ${output.take(500)}")
-                return
-
-            } catch (e: Exception) {
-                lastError = e
-                logger.warn("Onboarding attempt ${attempt + 1} failed: ${e.message}")
-                if (attempt < ONBOARDING_MAX_RETRIES - 1) {
-                    delay(5000)
-                }
-            }
-        }
-
-        throw IllegalStateException(
-            "Onboarding failed after $ONBOARDING_MAX_RETRIES attempts: ${lastError?.message}", lastError
-        )
-    }
-
-    // ── Phase 6 — Gateway verification ──────────────────────────────────
+    // ── Phase 5 — Gateway verification ──────────────────────────────────
 
     private suspend fun verifyGateway(ipAddress: String, password: String) {
         val deadline = System.currentTimeMillis() + (GATEWAY_VERIFY_TIMEOUT_S * 1000L)

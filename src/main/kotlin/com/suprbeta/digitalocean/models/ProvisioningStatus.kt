@@ -22,7 +22,6 @@ data class ProvisioningStatus(
         const val PHASE_CREATING = "creating"
         const val PHASE_WAITING_ACTIVE = "waiting_active"
         const val PHASE_WAITING_SSH = "waiting_ssh"
-        const val PHASE_ONBOARDING = "onboarding"
         const val PHASE_CONFIGURING = "configuring"
         const val PHASE_DNS = "configuring_dns"
         const val PHASE_VERIFYING = "verifying"
