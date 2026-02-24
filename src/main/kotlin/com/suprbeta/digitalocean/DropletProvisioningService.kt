@@ -47,6 +47,8 @@ interface DropletProvisioningService {
     ): UserDroplet
 
     fun getStatus(dropletId: Long): ProvisioningStatus?
+
+    suspend fun teardown(userId: String)
 }
 
 class DropletProvisioningServiceImpl(
@@ -281,6 +283,48 @@ class DropletProvisioningServiceImpl(
     }
 
     override fun getStatus(dropletId: Long): ProvisioningStatus? = statuses[dropletId]
+
+    override suspend fun teardown(userId: String) {
+        val droplet = firestoreRepository.getUserDropletInternal(userId)
+            ?: throw IllegalStateException("No droplet found for user $userId")
+
+        val errors = mutableListOf<String>()
+
+        // 1 — Delete DigitalOcean droplet
+        try {
+            digitalOceanService.deleteDroplet(droplet.dropletId)
+            logger.info("🗑️ DigitalOcean droplet ${droplet.dropletId} deleted for userId=$userId")
+        } catch (e: Exception) {
+            logger.error("Failed to delete DO droplet ${droplet.dropletId}", e)
+            errors += "DO droplet: ${e.message}"
+        }
+
+        // 2 — Drop Supabase schema + user_droplets row
+        try {
+            schemaRepository.deleteUserSchema(userId)
+        } catch (e: Exception) {
+            logger.error("Failed to delete Supabase schema for userId=$userId", e)
+            errors += "Supabase schema: ${e.message}"
+        }
+
+        // 3 — Delete Firestore droplet document
+        try {
+            firestoreRepository.deleteUserDroplet(userId)
+            logger.info("🗑️ Firestore droplet record deleted for userId=$userId")
+        } catch (e: Exception) {
+            logger.error("Failed to delete Firestore droplet for userId=$userId", e)
+            errors += "Firestore: ${e.message}"
+        }
+
+        // 4 — Clear in-memory status
+        statuses.remove(droplet.dropletId)
+
+        if (errors.isNotEmpty()) {
+            throw IllegalStateException("Teardown partially failed: ${errors.joinToString("; ")}")
+        }
+
+        logger.info("✅ Full teardown complete for userId=$userId")
+    }
 
     // ── Phase 2 — Poll until active ─────────────────────────────────────
 
