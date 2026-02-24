@@ -20,7 +20,7 @@ sudo nano /etc/letsencrypt/digitalocean.ini
 
 Add this content:
 ```ini
-dns_digitalocean_token = ***REMOVED***
+dns_digitalocean_token = your_digitalocean_api_token
 ```
 
 ```bash

@@ -19,6 +19,7 @@ import com.suprbeta.supabase.SupabaseSchemaRepository
 import com.suprbeta.supabase.SupabaseService
 import com.suprbeta.supabase.SupabaseTaskRepository
 import com.suprbeta.supabase.configureTaskRoutes
+import com.suprbeta.marketplace.configureMarketplaceRoutes
 import com.suprbeta.supabase.configureWebhookRoutes
 import io.github.jan.supabase.SupabaseClient
 import com.suprbeta.websocket.OpenClawConnector
@@ -63,9 +64,10 @@ fun Application.module() {
     val httpClient = createHttpClient()
 
     configureWebSockets(httpClient, firebaseAuthService, firestoreRepository)
-    configureDigitalOcean(httpClient, firestoreRepository, agentRepository, schemaRepository)
+    val configuringService = configureDigitalOcean(httpClient, firestoreRepository, agentRepository, schemaRepository)
     configureTaskRoutes(taskRepository)
     configureWebhookRoutes()
+    configureMarketplaceRoutes(configuringService)
     configureRouting()
 }
 
@@ -175,7 +177,7 @@ fun Application.configureWebSockets(httpClient: HttpClient, authService: Firebas
     log.info("WebSocket proxy initialized and ready")
 }
 
-fun Application.configureDigitalOcean(httpClient: HttpClient, firestoreRepository: FirestoreRepository, agentRepository: SupabaseAgentRepository, schemaRepository: SupabaseSchemaRepository) {
+fun Application.configureDigitalOcean(httpClient: HttpClient, firestoreRepository: FirestoreRepository, agentRepository: SupabaseAgentRepository, schemaRepository: SupabaseSchemaRepository): DropletConfigurationService {
     val digitalOceanService = DigitalOceanService(httpClient, this)
     val dnsService = DnsService(httpClient, this)
     val sshCommandExecutor = SshCommandExecutorImpl(this)
@@ -206,6 +208,7 @@ fun Application.configureDigitalOcean(httpClient: HttpClient, firestoreRepositor
     configureDropletRoutes(provisioningService, firestoreRepository)
     configureAgentRoutes(configuringService, firestoreRepository, agentRepository)
     log.info("DigitalOcean service initialized with SSH provisioning and DNS management")
+    return configuringService
 }
 
 fun Application.configureSupabase(): SupabaseClient {
