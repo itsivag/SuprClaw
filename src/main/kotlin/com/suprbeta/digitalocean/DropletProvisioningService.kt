@@ -137,6 +137,10 @@ class DropletProvisioningServiceImpl(
             sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw config set gateway.remote.token $gatewayToken")
             sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw config set gateway.mode local")
             sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw gateway restart")
+            // Sync token into the systemd service env var to avoid mismatch
+            sshCommandExecutor.runSshCommand(ipAddress, password, "sed -i 's/Environment=OPENCLAW_GATEWAY_TOKEN=.*/Environment=OPENCLAW_GATEWAY_TOKEN=$gatewayToken/' ~/.config/systemd/user/openclaw-gateway.service")
+            sshCommandExecutor.runSshCommand(ipAddress, password, "systemctl --user daemon-reload")
+            sshCommandExecutor.runSshCommand(ipAddress, password, "systemctl --user restart openclaw-gateway")
 
             logger.info("Gateway token set for droplet $dropletId: $gatewayToken")
 
