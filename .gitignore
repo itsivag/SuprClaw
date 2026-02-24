@@ -55,5 +55,5 @@ github_actions_deploy.pub
 ### Deployment ###
 suprclaw-deploy.tar.gz
 SuprClaw.backup.*
-/.kotlin/sessions/kotlin-compiler-18381470000873998936.salive
-/.kotlin/sessions/kotlin-compiler-10148153213551300515.salive
+/.kotlin/
+.DS_Store
