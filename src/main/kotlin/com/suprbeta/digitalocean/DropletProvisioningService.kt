@@ -212,24 +212,10 @@ class DropletProvisioningServiceImpl(
 
             try {
                 coroutineScope {
+                    // saveDroplet and saveSchema are independent — run in parallel
                     val saveDroplet = async {
                         firestoreRepository.saveUserDroplet(userDropletInternal)
                     }
-
-                    val saveMainAgent = async {
-                        val schemaName = "user_" + userId.replace(Regex("[^a-zA-Z0-9]"), "_")
-                        agentRepository.saveAgent(
-                            schemaName,
-                            AgentInsert(
-                                name = "Lead",
-                                role = "Lead Coordinator",
-                                sessionKey = "agent:main:main",
-                                isLead = true,
-                                status = "active"
-                            )
-                        )
-                    }
-
                     val saveSchema = async {
                         schemaRepository.createUserSchema(
                             userId,
@@ -239,8 +225,20 @@ class DropletProvisioningServiceImpl(
                     }
 
                     saveDroplet.await()
-                    saveMainAgent.await()
+                    // Schema must exist before inserting the agent
                     saveSchema.await()
+
+                    val schemaName = "user_" + userId.replace(Regex("[^a-zA-Z0-9]"), "_")
+                    agentRepository.saveAgent(
+                        schemaName,
+                        AgentInsert(
+                            name = "Lead",
+                            role = "Lead Coordinator",
+                            sessionKey = "agent:main:main",
+                            isLead = true,
+                            status = "active"
+                        )
+                    )
                 }
 
                 logger.info("💾 User droplet saved to Firestore, default main agent and schema saved to Supabase: userId=$userId, dropletId=$dropletId")
