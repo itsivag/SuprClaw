@@ -37,10 +37,7 @@ data class UserDropletInternal(
         dropletName = dropletName,
         gatewayUrl = gatewayUrl,
         gatewayToken = gatewayToken,
-        ipAddress = ipAddress,
-        subdomain = subdomain,
         createdAt = createdAt,
-        status = status,
-        sslEnabled = sslEnabled
+        status = status
     )
 }
