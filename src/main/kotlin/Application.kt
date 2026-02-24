@@ -18,6 +18,7 @@ import com.suprbeta.supabase.SupabaseAgentRepository
 import com.suprbeta.supabase.SupabaseService
 import com.suprbeta.supabase.SupabaseTaskRepository
 import com.suprbeta.supabase.configureTaskRoutes
+import com.suprbeta.supabase.configureWebhookRoutes
 import io.github.jan.supabase.SupabaseClient
 import com.suprbeta.websocket.OpenClawConnector
 import com.suprbeta.websocket.ProxySessionManager
@@ -62,6 +63,7 @@ fun Application.module() {
     configureWebSockets(httpClient, firebaseAuthService, firestoreRepository)
     configureDigitalOcean(httpClient, firestoreRepository, agentRepository)
     configureTaskRoutes(taskRepository)
+    configureWebhookRoutes()
     configureRouting()
 }
 

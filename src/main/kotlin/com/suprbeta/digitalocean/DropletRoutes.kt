@@ -39,7 +39,6 @@ fun Application.configureDropletRoutes(
                             provisioningService.provisionDroplet(
                                 dropletId = result.dropletId,
                                 password = result.password,
-                                geminiApiKey = result.geminiApiKey,
                                 userId = user.uid
                             )
                         }
