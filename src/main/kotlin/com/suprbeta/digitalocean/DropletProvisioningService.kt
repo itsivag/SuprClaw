@@ -215,12 +215,15 @@ class DropletProvisioningServiceImpl(
                     }
 
                     val saveMainAgent = async {
+                        val schemaName = "user_" + userId.replace(Regex("[^a-zA-Z0-9]"), "_")
                         agentRepository.saveAgent(
+                            schemaName,
                             AgentInsert(
-                                name = "main",
-                                role = "main",
+                                name = "Lead",
+                                role = "Lead Coordinator",
                                 sessionKey = "agent:main:main",
-                                isLead = true
+                                isLead = true,
+                                status = "active"
                             )
                         )
                     }

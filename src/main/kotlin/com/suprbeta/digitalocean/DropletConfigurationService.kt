@@ -34,7 +34,9 @@ class DropletConfigurationServiceImpl(
         logger.info("Creating OpenClaw agent '$name' on droplet ${userDroplet.dropletId}")
         val output = sshCommandExecutor.runSshCommand(userDroplet.ipAddress, userDroplet.sshKey, command)
 
+        val schemaName = "user_" + userId.replace(Regex("[^a-zA-Z0-9]"), "_")
         agentRepository.saveAgent(
+            schemaName,
             AgentInsert(
                 name = name,
                 role = role,
@@ -56,7 +58,8 @@ class DropletConfigurationServiceImpl(
         sshCommandExecutor.runSshCommand(userDroplet.ipAddress, userDroplet.sshKey, "rm -rf $workspacePath")
         logger.info("Deleted workspace '$workspacePath' on droplet ${userDroplet.dropletId}")
 
-        agentRepository.deleteAgent(name)
+        val schemaName = "user_" + userId.replace(Regex("[^a-zA-Z0-9]"), "_")
+        agentRepository.deleteAgent(schemaName, name)
         return output
     }
 

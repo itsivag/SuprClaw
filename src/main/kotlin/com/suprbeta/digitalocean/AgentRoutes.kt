@@ -28,7 +28,8 @@ fun Application.configureAgentRoutes(
                 get {
                     val user = call.attributes[firebaseUserKey]
                     try {
-                        val agents = agentRepository.getAgents()
+                        val schemaName = "user_" + user.uid.replace(Regex("[^a-zA-Z0-9]"), "_")
+                        val agents = agentRepository.getAgents(schemaName)
                         call.respond(
                             HttpStatusCode.OK,
                             AgentListResponse(

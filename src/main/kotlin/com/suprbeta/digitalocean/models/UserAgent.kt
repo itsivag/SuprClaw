@@ -10,6 +10,7 @@ data class UserAgent(
     val role: String = "",
     @SerialName("session_key") val sessionKey: String = "",
     @SerialName("is_lead") val isLead: Boolean = false,
+    val status: String = "active",
     @SerialName("current_task") val currentTask: String? = null,
     @SerialName("last_seen_at") val lastSeenAt: String? = null,
     @SerialName("created_at") val createdAt: String? = null
@@ -21,6 +22,7 @@ data class AgentInsert(
     val role: String,
     @SerialName("session_key") val sessionKey: String,
     @SerialName("is_lead") val isLead: Boolean = false,
+    val status: String = "active",
     @SerialName("current_task") val currentTask: String? = null,
     @SerialName("last_seen_at") val lastSeenAt: String? = null
 )
