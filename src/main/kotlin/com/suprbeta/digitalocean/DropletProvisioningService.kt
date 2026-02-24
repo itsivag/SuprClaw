@@ -8,6 +8,7 @@ import com.suprbeta.digitalocean.models.UserDroplet
 import com.suprbeta.digitalocean.models.UserDropletInternal
 import com.suprbeta.firebase.FirestoreRepository
 import com.suprbeta.supabase.SupabaseAgentRepository
+import com.suprbeta.supabase.SupabaseSchemaRepository
 import com.suprbeta.websocket.OpenClawConnector
 import com.suprbeta.websocket.models.WebSocketFrame
 import io.ktor.server.application.*
@@ -53,6 +54,7 @@ class DropletProvisioningServiceImpl(
     private val dnsService: DnsService,
     private val firestoreRepository: FirestoreRepository,
     private val agentRepository: SupabaseAgentRepository,
+    private val schemaRepository: SupabaseSchemaRepository,
     private val openClawConnector: OpenClawConnector,
     private val sshCommandExecutor: SshCommandExecutor,
     application: Application
@@ -223,11 +225,20 @@ class DropletProvisioningServiceImpl(
                         )
                     }
 
+                    val saveSchema = async {
+                        schemaRepository.createUserSchema(
+                            userId,
+                            userDropletInternal.vpsGatewayUrl,
+                            userDropletInternal.gatewayToken
+                        )
+                    }
+
                     saveDroplet.await()
                     saveMainAgent.await()
+                    saveSchema.await()
                 }
 
-                logger.info("💾 User droplet saved to Firestore and default main agent saved to Supabase: userId=$userId, dropletId=$dropletId")
+                logger.info("💾 User droplet saved to Firestore, default main agent and schema saved to Supabase: userId=$userId, dropletId=$dropletId")
             } catch (e: Exception) {
                 logger.error("Failed to save user droplet/agent to Firestore (droplet still provisioned successfully)", e)
             }

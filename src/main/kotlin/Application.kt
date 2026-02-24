@@ -15,6 +15,7 @@ import com.suprbeta.firebase.FirebaseAuthService
 import com.suprbeta.firebase.FirebaseService
 import com.suprbeta.firebase.FirestoreRepository
 import com.suprbeta.supabase.SupabaseAgentRepository
+import com.suprbeta.supabase.SupabaseSchemaRepository
 import com.suprbeta.supabase.SupabaseService
 import com.suprbeta.supabase.SupabaseTaskRepository
 import com.suprbeta.supabase.configureTaskRoutes
@@ -56,12 +57,13 @@ fun Application.module() {
     val supabaseClient = configureSupabase()
     val agentRepository = SupabaseAgentRepository(supabaseClient, this)
     val taskRepository = SupabaseTaskRepository(supabaseClient, this)
+    val schemaRepository = SupabaseSchemaRepository(supabaseClient, this)
 
     // Create shared HttpClient for API calls
     val httpClient = createHttpClient()
 
     configureWebSockets(httpClient, firebaseAuthService, firestoreRepository)
-    configureDigitalOcean(httpClient, firestoreRepository, agentRepository)
+    configureDigitalOcean(httpClient, firestoreRepository, agentRepository, schemaRepository)
     configureTaskRoutes(taskRepository)
     configureWebhookRoutes()
     configureRouting()
@@ -173,7 +175,7 @@ fun Application.configureWebSockets(httpClient: HttpClient, authService: Firebas
     log.info("WebSocket proxy initialized and ready")
 }
 
-fun Application.configureDigitalOcean(httpClient: HttpClient, firestoreRepository: FirestoreRepository, agentRepository: SupabaseAgentRepository) {
+fun Application.configureDigitalOcean(httpClient: HttpClient, firestoreRepository: FirestoreRepository, agentRepository: SupabaseAgentRepository, schemaRepository: SupabaseSchemaRepository) {
     val digitalOceanService = DigitalOceanService(httpClient, this)
     val dnsService = DnsService(httpClient, this)
     val sshCommandExecutor = SshCommandExecutorImpl(this)
@@ -190,6 +192,7 @@ fun Application.configureDigitalOcean(httpClient: HttpClient, firestoreRepositor
         dnsService = dnsService,
         firestoreRepository = firestoreRepository,
         agentRepository = agentRepository,
+        schemaRepository = schemaRepository,
         openClawConnector = provisioningConnector,
         sshCommandExecutor = sshCommandExecutor,
         application = this
