@@ -4,13 +4,15 @@ import com.suprbeta.core.SshCommandExecutor
 import com.suprbeta.digitalocean.models.AgentInsert
 import com.suprbeta.digitalocean.models.UserDropletInternal
 import com.suprbeta.firebase.FirestoreRepository
+import com.suprbeta.marketplace.MarketplaceAgent
 import com.suprbeta.supabase.SupabaseAgentRepository
 import io.ktor.server.application.*
-
 interface DropletConfigurationService {
     suspend fun createAgent(userId: String, name: String, role: String, model: String? = null): String
 
     suspend fun deleteAgent(userId: String, name: String): String
+
+    suspend fun installMarketplaceAgent(userId: String, agent: MarketplaceAgent, repo: String): String
 }
 
 class DropletConfigurationServiceImpl(
@@ -42,6 +44,44 @@ class DropletConfigurationServiceImpl(
                 role = role,
                 sessionKey = "agent:$name:main",
                 isLead = false
+            )
+        )
+
+        return output
+    }
+
+    override suspend fun installMarketplaceAgent(userId: String, agent: MarketplaceAgent, repo: String): String {
+        val userDroplet = validateAndGetDroplet(userId, agent.id)
+        val workspacePath = "/home/openclaw/${agent.installPath}"
+        val tmpDir = "/tmp/marketplace-${agent.id}"
+
+        // Create agent workspace via openclaw CLI
+        logger.info("Installing marketplace agent '${agent.id}' on droplet ${userDroplet.dropletId}")
+        val output = sshCommandExecutor.runSshCommand(
+            userDroplet.ipAddress, userDroplet.sshKey,
+            "openclaw agents add ${agent.id} --workspace $workspacePath --model $DEFAULT_AGENT_MODEL"
+        )
+
+        // Sparse-checkout only the agent's source directory, then overwrite workspace files
+        sshCommandExecutor.runSshCommand(
+            userDroplet.ipAddress, userDroplet.sshKey,
+            "rm -rf $tmpDir" +
+            " && git clone --depth=1 --filter=blob:none --sparse $repo $tmpDir" +
+            " && git -C $tmpDir sparse-checkout set ${agent.sourcePath}" +
+            " && cp -rf $tmpDir/${agent.sourcePath}/. $workspacePath/" +
+            " && rm -rf $tmpDir"
+        )
+        logger.info("Marketplace config applied to $workspacePath for agent '${agent.id}'")
+
+        // Save to Supabase
+        val schemaName = "user_" + userId.replace(Regex("[^a-zA-Z0-9]"), "_")
+        agentRepository.saveAgent(
+            schemaName,
+            AgentInsert(
+                name = agent.name,
+                role = agent.description,
+                sessionKey = agent.sessionKey,
+                isLead = agent.isLead
             )
         )
 
