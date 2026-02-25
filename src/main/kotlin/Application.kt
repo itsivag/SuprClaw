@@ -15,9 +15,11 @@ import com.suprbeta.firebase.FirebaseAuthService
 import com.suprbeta.firebase.FirebaseService
 import com.suprbeta.firebase.FirestoreRepository
 import com.suprbeta.supabase.SupabaseAgentRepository
+import com.suprbeta.supabase.SupabaseManagementService
 import com.suprbeta.supabase.SupabaseSchemaRepository
 import com.suprbeta.supabase.SupabaseService
 import com.suprbeta.supabase.SupabaseTaskRepository
+import com.suprbeta.supabase.UserSupabaseClientProvider
 import com.suprbeta.supabase.configureTaskRoutes
 import com.suprbeta.marketplace.configureMarketplaceRoutes
 import com.suprbeta.supabase.configureWebhookRoutes
@@ -56,16 +58,21 @@ fun Application.module() {
     configureHTTP()
     val (firebaseAuthService, firestoreRepository) = configureFirebase()
     val supabaseClient = configureSupabase()
-    val agentRepository = SupabaseAgentRepository(supabaseClient, this)
-    val taskRepository = SupabaseTaskRepository(supabaseClient, this)
+    val agentRepository = SupabaseAgentRepository(this)
+    val taskRepository = SupabaseTaskRepository(this)
     val schemaRepository = SupabaseSchemaRepository(supabaseClient, this)
+    val userClientProvider = UserSupabaseClientProvider()
 
     // Create shared HttpClient for API calls
     val httpClient = createHttpClient()
 
+    val managementService = SupabaseManagementService(httpClient, this)
+
     configureWebSockets(httpClient, firebaseAuthService, firestoreRepository)
-    val configuringService = configureDigitalOcean(httpClient, firestoreRepository, agentRepository, schemaRepository)
-    configureTaskRoutes(taskRepository)
+    val configuringService = configureDigitalOcean(
+        httpClient, firestoreRepository, agentRepository, schemaRepository, managementService, userClientProvider
+    )
+    configureTaskRoutes(taskRepository, firestoreRepository, userClientProvider)
     configureWebhookRoutes()
     configureMarketplaceRoutes(configuringService)
     configureRouting()
@@ -177,7 +184,14 @@ fun Application.configureWebSockets(httpClient: HttpClient, authService: Firebas
     log.info("WebSocket proxy initialized and ready")
 }
 
-fun Application.configureDigitalOcean(httpClient: HttpClient, firestoreRepository: FirestoreRepository, agentRepository: SupabaseAgentRepository, schemaRepository: SupabaseSchemaRepository): DropletConfigurationService {
+fun Application.configureDigitalOcean(
+    httpClient: HttpClient,
+    firestoreRepository: FirestoreRepository,
+    agentRepository: SupabaseAgentRepository,
+    schemaRepository: SupabaseSchemaRepository,
+    managementService: SupabaseManagementService,
+    userClientProvider: UserSupabaseClientProvider
+): DropletConfigurationService {
     val digitalOceanService = DigitalOceanService(httpClient, this)
     val dnsService = DnsService(httpClient, this)
     val sshCommandExecutor = SshCommandExecutorImpl(this)
@@ -195,6 +209,8 @@ fun Application.configureDigitalOcean(httpClient: HttpClient, firestoreRepositor
         firestoreRepository = firestoreRepository,
         agentRepository = agentRepository,
         schemaRepository = schemaRepository,
+        managementService = managementService,
+        userClientProvider = userClientProvider,
         openClawConnector = provisioningConnector,
         sshCommandExecutor = sshCommandExecutor,
         application = this
@@ -202,11 +218,12 @@ fun Application.configureDigitalOcean(httpClient: HttpClient, firestoreRepositor
     val configuringService: DropletConfigurationService = DropletConfigurationServiceImpl(
         firestoreRepository = firestoreRepository,
         agentRepository = agentRepository,
+        userClientProvider = userClientProvider,
         sshCommandExecutor = sshCommandExecutor,
         application = this
     )
     configureDropletRoutes(provisioningService, firestoreRepository)
-    configureAgentRoutes(configuringService, firestoreRepository, agentRepository)
+    configureAgentRoutes(configuringService, firestoreRepository, agentRepository, userClientProvider)
     log.info("DigitalOcean service initialized with SSH provisioning and DNS management")
     return configuringService
 }
