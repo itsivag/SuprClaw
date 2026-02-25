@@ -163,27 +163,54 @@ class SupabaseManagementService(
 
     /**
      * Creates a database webhook trigger on the task_assignees table of the given project.
+     * Uses pg_net directly (always available) rather than supabase_functions.http_request
+     * (only present on dashboard-created projects).
      * The webhook fires on INSERT and POSTs to the backend at /webhooks/tasks/{projectRef}.
      */
     suspend fun createDatabaseWebhook(projectRef: String) {
-        val url = "$webhookBaseUrl/webhooks/tasks/$projectRef".replace("'", "''")
-        val secret = webhookSecret.replace("'", "''")
-        val headers = """{"Content-Type":"application/json","Authorization":"Bearer $secret"}"""
-
-        val sql = """
-            CREATE OR REPLACE TRIGGER "task-assignment-hook"
-            AFTER INSERT ON public.task_assignees
-            FOR EACH ROW EXECUTE FUNCTION supabase_functions.http_request(
-              '$url',
-              'POST',
-              '$headers',
-              '{}',
-              '5000'
-            );
-        """.trimIndent()
+        val url = "$webhookBaseUrl/webhooks/tasks/$projectRef"
+        // Escape single quotes for use inside single-quoted SQL strings
+        val safeUrl = url.replace("'", "''")
+        val safeSecret = webhookSecret.replace("'", "''")
+        val headersJson = """{"Content-Type":"application/json","Authorization":"Bearer $safeSecret"}"""
 
         logger.info("Creating database webhook for project $projectRef → $url")
-        runSql(projectRef, sql)
+
+        // 1. Ensure pg_net is enabled
+        runSql(projectRef, "CREATE EXTENSION IF NOT EXISTS pg_net;")
+
+        // 2. Create the trigger function.
+        //    Function body uses single-quoted string ('' = escaped single quote inside).
+        runSql(projectRef, """
+            CREATE OR REPLACE FUNCTION public._suprclaw_task_assignment_notify()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS '
+            BEGIN
+              PERFORM net.http_post(
+                url := ''$safeUrl'',
+                body := jsonb_build_object(
+                  ''type'', ''INSERT'',
+                  ''table'', TG_TABLE_NAME,
+                  ''record'', to_jsonb(NEW),
+                  ''schema'', TG_TABLE_SCHEMA,
+                  ''old_record'', NULL::jsonb
+                ),
+                headers := ''$headersJson''::jsonb,
+                timeout_milliseconds := 5000
+              );
+              RETURN NEW;
+            END;
+            ';
+        """.trimIndent())
+
+        // 3. Attach the trigger (CREATE OR REPLACE TRIGGER requires PG 14+; Supabase uses PG 15)
+        runSql(projectRef, """
+            CREATE OR REPLACE TRIGGER "task-assignment-hook"
+            AFTER INSERT ON public.task_assignees
+            FOR EACH ROW EXECUTE FUNCTION public._suprclaw_task_assignment_notify();
+        """.trimIndent())
+
         logger.info("✅ Database webhook created for project $projectRef")
     }
 
