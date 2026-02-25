@@ -13,3 +13,4 @@ data class CreateDropletRequest(
     val user_data: String? = null,
     val ssh_keys: List<String>? = null // SSH key IDs or fingerprints
 )
+
