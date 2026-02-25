@@ -8,7 +8,9 @@ import com.suprbeta.digitalocean.models.UserDroplet
 import com.suprbeta.digitalocean.models.UserDropletInternal
 import com.suprbeta.firebase.FirestoreRepository
 import com.suprbeta.supabase.SupabaseAgentRepository
+import com.suprbeta.supabase.SupabaseManagementService
 import com.suprbeta.supabase.SupabaseSchemaRepository
+import com.suprbeta.supabase.UserSupabaseClientProvider
 import com.suprbeta.websocket.OpenClawConnector
 import com.suprbeta.websocket.models.WebSocketFrame
 import io.ktor.server.application.*
@@ -22,6 +24,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.time.Instant
+import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -57,6 +60,8 @@ class DropletProvisioningServiceImpl(
     private val firestoreRepository: FirestoreRepository,
     private val agentRepository: SupabaseAgentRepository,
     private val schemaRepository: SupabaseSchemaRepository,
+    private val managementService: SupabaseManagementService,
+    private val userClientProvider: UserSupabaseClientProvider,
     private val openClawConnector: OpenClawConnector,
     private val sshCommandExecutor: SshCommandExecutor,
     application: Application
@@ -119,8 +124,34 @@ class DropletProvisioningServiceImpl(
      */
     override suspend fun provisionDroplet(dropletId: Long, password: String, userId: String): UserDroplet {
         try {
-            // Phase 2 — Wait for active + IP
-            val ipAddress = waitForDropletReady(dropletId)
+            val statusNow = statuses[dropletId]
+            val dropletName = statusNow?.droplet_name ?: "droplet-$dropletId"
+
+            // Phase 2 — Wait for active + IP and create Supabase project in parallel
+            updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_ACTIVE, "Polling DigitalOcean API and creating Supabase project...")
+
+            val ipAddress: String
+            val projectRef: String
+            val serviceKey: String
+
+            coroutineScope {
+                val waitForActiveDeferred = async { waitForDropletReady(dropletId) }
+                val createProjectDeferred = async {
+                    val sanitizedName = dropletName.lowercase().replace(Regex("[^a-z0-9-]"), "-")
+                    val projectName = "suprclaw-$sanitizedName"
+                    val result = managementService.createProject(projectName)
+                    managementService.waitForProjectActive(result.projectRef)
+                    val sk = managementService.getServiceKey(result.projectRef)
+                    Pair(result.projectRef, sk)
+                }
+
+                ipAddress = waitForActiveDeferred.await()
+                val (pRef, sk) = createProjectDeferred.await()
+                projectRef = pRef
+                serviceKey = sk
+            }
+
+            logger.info("Droplet $dropletId active at $ipAddress, Supabase project $projectRef ready")
 
             // Phase 3 — Wait for SSH port
             updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_SSH, "Waiting for SSH port...")
@@ -144,11 +175,22 @@ class DropletProvisioningServiceImpl(
 
             logger.info("Gateway token set for droplet $dropletId: $gatewayToken")
 
+            // Phase 4b — Inject MCP credentials into VPS and restart mcporter
+            updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Injecting MCP credentials...")
+            val mcpEnv = "SUPABASE_PROJECT_REF=$projectRef\nSUPABASE_ACCESS_TOKEN=${managementService.managementToken}"
+            val mcpEnvEncoded = Base64.getEncoder().encodeToString(mcpEnv.toByteArray())
+            sshCommandExecutor.runSshCommand(
+                ipAddress, password,
+                "sudo mkdir -p /etc/suprclaw && echo $mcpEnvEncoded | base64 -d | sudo tee /etc/suprclaw/mcp.env > /dev/null"
+            )
+            sshCommandExecutor.runSshCommand(
+                ipAddress, password,
+                "bash -c 'set -a && source /etc/suprclaw/mcp.env && set +a && mcporter daemon restart'"
+            )
+            logger.info("MCP credentials injected and mcporter daemon restarted for droplet $dropletId")
+
             // Phase 6 — DNS configuration (MANDATORY - fail if this fails)
             updateStatus(dropletId, ProvisioningStatus.PHASE_DNS, "Creating DNS record...")
-            // Use droplet name as subdomain (sanitize it first)
-            val statusNow = statuses[dropletId]
-            val dropletName = statusNow?.droplet_name ?: "droplet-$dropletId"
             val sanitizedName = dropletName.lowercase().replace(Regex("[^a-z0-9-]"), "-")
 
             // Create DNS record - this will throw if it fails, triggering cleanup
@@ -174,7 +216,17 @@ class DropletProvisioningServiceImpl(
             // Per requirement: do not reconnect after approval.
             approvePairingIfRequired(vpsGatewayUrl, gatewayToken, ipAddress, password, dropletId)
 
-            // Create internal droplet with both URLs
+            // Phase 5 — Initialize user project tables via Management API SQL
+            updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Initializing user project tables...")
+            schemaRepository.initializeUserProject(
+                managementService = managementService,
+                projectRef = projectRef,
+                userId = userId,
+                vpsGatewayUrl = vpsGatewayUrl,
+                gatewayToken = gatewayToken
+            )
+
+            // Create internal droplet with both URLs and Supabase project info
             val userDropletInternal = UserDropletInternal(
                 userId = userId,
                 dropletId = dropletId,
@@ -187,30 +239,24 @@ class DropletProvisioningServiceImpl(
                 subdomain = subdomain.takeIf { AppConfig.sslEnabled },
                 createdAt = Instant.now().toString(),
                 status = "active",
-                sslEnabled = AppConfig.sslEnabled
+                sslEnabled = AppConfig.sslEnabled,
+                supabaseProjectRef = projectRef,
+                supabaseServiceKey = serviceKey
             )
 
-            // Save to Firestore + Supabase — must all succeed before marking complete
+            // Save to Firestore + save agent — must all succeed before marking complete
             coroutineScope {
-                // saveDroplet and saveSchema are independent — run in parallel
                 val saveDroplet = async {
                     firestoreRepository.saveUserDroplet(userDropletInternal)
                 }
-                val saveSchema = async {
-                    schemaRepository.createUserSchema(
-                        userId,
-                        userDropletInternal.vpsGatewayUrl,
-                        userDropletInternal.gatewayToken
-                    )
-                }
 
                 saveDroplet.await()
-                // Schema must exist before inserting the agent
-                saveSchema.await()
 
-                val schemaName = "user_" + userId.replace(Regex("[^a-zA-Z0-9]"), "_")
+                // Save lead agent to user's own Supabase project
+                val supabaseUrl = "https://$projectRef.supabase.co"
+                val userClient = userClientProvider.getClient(supabaseUrl, serviceKey)
                 agentRepository.saveAgent(
-                    schemaName,
+                    userClient,
                     AgentInsert(
                         name = "Lead",
                         role = "Lead Coordinator",
@@ -221,7 +267,7 @@ class DropletProvisioningServiceImpl(
                 )
             }
 
-            logger.info("💾 User droplet saved to Firestore, default main agent and schema saved to Supabase: userId=$userId, dropletId=$dropletId")
+            logger.info("💾 User droplet saved to Firestore, default main agent saved to user's Supabase project: userId=$userId, dropletId=$dropletId, projectRef=$projectRef")
 
             // Phase 8 — Complete (only reached if all saves succeeded)
             updateStatus(
@@ -229,7 +275,7 @@ class DropletProvisioningServiceImpl(
                 "Provisioning complete. Connect via proxy at $proxyGatewayUrl",
                 completedAt = Instant.now().toString()
             )
-            logger.info("✅ Droplet $dropletId provisioning complete. VPS: $vpsGatewayUrl, Proxy: $proxyGatewayUrl")
+            logger.info("✅ Droplet $dropletId provisioning complete. VPS: $vpsGatewayUrl, Proxy: $proxyGatewayUrl, Supabase: $projectRef")
 
             // Return client-safe version (without VPS URL)
             return userDropletInternal.toUserDroplet()
@@ -282,12 +328,16 @@ class DropletProvisioningServiceImpl(
             errors += "DO droplet: ${e.message}"
         }
 
-        // 2 — Drop Supabase schema + user_droplets row
+        // 2 — Delete per-user Supabase project + remove user_droplets row from central project
         try {
-            schemaRepository.deleteUserSchema(userId)
+            if (droplet.supabaseProjectRef.isNotBlank()) {
+                schemaRepository.cleanupUserProject(managementService, droplet.supabaseProjectRef, userId)
+            } else {
+                logger.warn("No supabaseProjectRef found for userId=$userId — skipping Supabase project deletion")
+            }
         } catch (e: Exception) {
-            logger.error("Failed to delete Supabase schema for userId=$userId", e)
-            errors += "Supabase schema: ${e.message}"
+            logger.error("Failed to cleanup Supabase project for userId=$userId", e)
+            errors += "Supabase project: ${e.message}"
         }
 
         // 3 — Delete Firestore droplet document
@@ -312,8 +362,6 @@ class DropletProvisioningServiceImpl(
     // ── Phase 2 — Poll until active ─────────────────────────────────────
 
     private suspend fun waitForDropletReady(dropletId: Long): String {
-        updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_ACTIVE, "Polling DigitalOcean API for droplet status...")
-
         val deadline = System.currentTimeMillis() + MAX_POLL_WAIT_MS
         while (System.currentTimeMillis() < deadline) {
             try {
@@ -327,7 +375,6 @@ class DropletProvisioningServiceImpl(
 
                     if (ip != null) {
                         logger.info("Droplet $dropletId is active")
-                        updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_ACTIVE, "Droplet active, configuring...")
                         return ip
                     }
                 }

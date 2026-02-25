@@ -7,6 +7,7 @@ import com.suprbeta.firebase.FirestoreRepository
 import com.suprbeta.firebase.authenticated
 import com.suprbeta.firebase.firebaseUserKey
 import com.suprbeta.supabase.SupabaseAgentRepository
+import com.suprbeta.supabase.UserSupabaseClientProvider
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.request.*
@@ -16,20 +17,27 @@ import io.ktor.server.routing.*
 fun Application.configureAgentRoutes(
     configuringService: DropletConfigurationService,
     firestoreRepository: FirestoreRepository,
-    agentRepository: SupabaseAgentRepository
+    agentRepository: SupabaseAgentRepository,
+    userClientProvider: UserSupabaseClientProvider
 ) {
     routing {
         authenticated {
             route("/api/agents") {
                 /**
                  * GET /api/agents
-                 * Returns all agents for the authenticated user.
+                 * Returns all agents for the authenticated user's Supabase project.
                  */
                 get {
                     val user = call.attributes[firebaseUserKey]
                     try {
-                        val schemaName = "user_" + user.uid.replace(Regex("[^a-zA-Z0-9]"), "_")
-                        val agents = agentRepository.getAgents(schemaName)
+                        val droplet = firestoreRepository.getUserDropletInternal(user.uid)
+                        if (droplet == null) {
+                            call.respond(HttpStatusCode.NotFound, mapOf("error" to "No droplet found for user"))
+                            return@get
+                        }
+                        val supabaseUrl = "https://${droplet.supabaseProjectRef}.supabase.co"
+                        val client = userClientProvider.getClient(supabaseUrl, droplet.supabaseServiceKey)
+                        val agents = agentRepository.getAgents(client)
                         call.respond(
                             HttpStatusCode.OK,
                             AgentListResponse(

@@ -1,0 +1,29 @@
+{
+  "repo": "https://github.com/itsivag/SuprClaw.git",
+  "agents": [
+    {
+      "id": "seo",
+      "name": "SEO Specialist",
+      "description": "Increase organic visibility, traffic quality, and search-driven conversions through structured research, optimization, and measurable strategy.",
+      "session_key": "agent:seo:main",
+      "is_lead": false,
+      "capabilities": [
+        "Browse SEO keywords",
+        "Benchmark sites",
+        "Score site",
+        "Create SEO content",
+        "Optimize meta tags",
+        "Generate schema markup",
+        "Run technical SEO checks"
+      ],
+      "best_with": [
+        "content-writer",
+        "social-media-manager",
+        "web-developer",
+        "data-analyst"
+      ],
+      "source_path": "marketplace/seo",
+      "install_path": ".openclaw/workspace-seo"
+    }
+  ]
+}
