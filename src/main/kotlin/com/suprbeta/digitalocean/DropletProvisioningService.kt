@@ -172,11 +172,11 @@ class DropletProvisioningServiceImpl(
             sshCommandExecutor.runSshCommand(resolvedIp, password, "openclaw config set gateway.auth.token $gatewayToken")
             sshCommandExecutor.runSshCommand(resolvedIp, password, "openclaw config set gateway.remote.token $gatewayToken")
             sshCommandExecutor.runSshCommand(resolvedIp, password, "openclaw config set gateway.mode local")
-            sshCommandExecutor.runSshCommand(resolvedIp, password, "openclaw gateway restart")
             // Sync token into the systemd service env var to avoid mismatch
             sshCommandExecutor.runSshCommand(resolvedIp, password, "sed -i 's/Environment=OPENCLAW_GATEWAY_TOKEN=.*/Environment=OPENCLAW_GATEWAY_TOKEN=$gatewayToken/' ~/.config/systemd/user/openclaw-gateway.service")
             sshCommandExecutor.runSshCommand(resolvedIp, password, "systemctl --user daemon-reload")
-            sshCommandExecutor.runSshCommand(resolvedIp, password, "systemctl --user restart openclaw-gateway")
+            // Restart is fire-and-forget — run in background so SSH returns immediately
+            sshCommandExecutor.runSshCommand(resolvedIp, password, "nohup systemctl --user restart openclaw-gateway > /dev/null 2>&1 & sleep 1")
 
             logger.info("Gateway token set for droplet $dropletId: $gatewayToken")
 
@@ -190,7 +190,7 @@ class DropletProvisioningServiceImpl(
             )
             sshCommandExecutor.runSshCommand(
                 resolvedIp, password,
-                "bash -c 'set -a && source /etc/suprclaw/mcp.env && set +a && mcporter daemon restart'"
+                "nohup bash -c 'set -a && source /etc/suprclaw/mcp.env && set +a && mcporter daemon restart' > /dev/null 2>&1 & sleep 1"
             )
             logger.info("MCP credentials injected and mcporter daemon restarted for droplet $dropletId")
 
