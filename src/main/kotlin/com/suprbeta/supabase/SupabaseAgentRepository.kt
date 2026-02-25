@@ -30,6 +30,18 @@ class SupabaseAgentRepository(
         }
     }
 
+    suspend fun getAgentById(client: SupabaseClient, agentId: String): UserAgent? {
+        return try {
+            application.log.debug("Fetching agent by id=$agentId")
+            client.from("agents").select {
+                filter { eq("id", agentId) }
+            }.decodeSingleOrNull<UserAgent>()
+        } catch (e: Exception) {
+            application.log.error("Failed to fetch agent id=$agentId", e)
+            null
+        }
+    }
+
     suspend fun deleteAgent(client: SupabaseClient, name: String) {
         try {
             application.log.info("Deleting agent: name=$name")

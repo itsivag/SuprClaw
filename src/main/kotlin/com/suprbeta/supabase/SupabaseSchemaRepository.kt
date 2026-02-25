@@ -102,6 +102,9 @@ class SupabaseSchemaRepository(
         managementService.runSql(projectRef, USER_PROJECT_SQL)
         logger.info("✅ Tables created in Supabase project $projectRef for userId=$userId")
 
+        managementService.createDatabaseWebhook(projectRef)
+        logger.info("✅ Database webhook created in Supabase project $projectRef")
+
         val schemaName = schemaName(userId)
         supabase.postgrest.rpc("insert_user_droplet", buildJsonObject {
             put("p_schema_name", schemaName)

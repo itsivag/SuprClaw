@@ -123,6 +123,8 @@ class DropletProvisioningServiceImpl(
      * Called as fire-and-forget from the route handler.
      */
     override suspend fun provisionDroplet(dropletId: Long, password: String, userId: String): UserDroplet {
+        var projectRef: String? = null
+
         try {
             val statusNow = statuses[dropletId]
             val dropletName = statusNow?.droplet_name ?: "droplet-$dropletId"
@@ -130,9 +132,8 @@ class DropletProvisioningServiceImpl(
             // Phase 2 — Wait for active + IP and create Supabase project in parallel
             updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_ACTIVE, "Polling DigitalOcean API and creating Supabase project...")
 
-            val ipAddress: String
-            val projectRef: String
-            val serviceKey: String
+            var ipAddress: String? = null
+            var serviceKey: String? = null
 
             coroutineScope {
                 val waitForActiveDeferred = async { waitForDropletReady(dropletId) }
@@ -151,40 +152,44 @@ class DropletProvisioningServiceImpl(
                 serviceKey = sk
             }
 
-            logger.info("Droplet $dropletId active at $ipAddress, Supabase project $projectRef ready")
+            val resolvedIp = ipAddress!!
+            val resolvedProjectRef = projectRef!!
+            val resolvedServiceKey = serviceKey!!
+
+            logger.info("Droplet $dropletId active at $resolvedIp, Supabase project $resolvedProjectRef ready")
 
             // Phase 3 — Wait for SSH port
             updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_SSH, "Waiting for SSH port...")
-            sshCommandExecutor.waitForSshReady(ipAddress)
+            sshCommandExecutor.waitForSshReady(resolvedIp)
 
             // Phase 3b — Wait for cloud-init to apply password (deterministic probe)
             updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_SSH, "Waiting for cloud-init to finish (probing SSH auth)...")
-            sshCommandExecutor.waitForSshAuth(ipAddress, password)
+            sshCommandExecutor.waitForSshAuth(resolvedIp, password)
 
             // Phase 4 — Configuration (gateway token)
             updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Configuring gateway token...")
             val gatewayToken = generateGatewayToken()
-            sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw config set gateway.auth.token $gatewayToken")
-            sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw config set gateway.remote.token $gatewayToken")
-            sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw config set gateway.mode local")
-            sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw gateway restart")
+            sshCommandExecutor.runSshCommand(resolvedIp, password, "openclaw config set gateway.auth.token $gatewayToken")
+            sshCommandExecutor.runSshCommand(resolvedIp, password, "openclaw config set gateway.remote.token $gatewayToken")
+            sshCommandExecutor.runSshCommand(resolvedIp, password, "openclaw config set gateway.mode local")
+            sshCommandExecutor.runSshCommand(resolvedIp, password, "openclaw gateway restart")
             // Sync token into the systemd service env var to avoid mismatch
-            sshCommandExecutor.runSshCommand(ipAddress, password, "sed -i 's/Environment=OPENCLAW_GATEWAY_TOKEN=.*/Environment=OPENCLAW_GATEWAY_TOKEN=$gatewayToken/' ~/.config/systemd/user/openclaw-gateway.service")
-            sshCommandExecutor.runSshCommand(ipAddress, password, "systemctl --user daemon-reload")
-            sshCommandExecutor.runSshCommand(ipAddress, password, "systemctl --user restart openclaw-gateway")
+            sshCommandExecutor.runSshCommand(resolvedIp, password, "sed -i 's/Environment=OPENCLAW_GATEWAY_TOKEN=.*/Environment=OPENCLAW_GATEWAY_TOKEN=$gatewayToken/' ~/.config/systemd/user/openclaw-gateway.service")
+            sshCommandExecutor.runSshCommand(resolvedIp, password, "systemctl --user daemon-reload")
+            sshCommandExecutor.runSshCommand(resolvedIp, password, "systemctl --user restart openclaw-gateway")
 
             logger.info("Gateway token set for droplet $dropletId: $gatewayToken")
 
             // Phase 4b — Inject MCP credentials into VPS and restart mcporter
             updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Injecting MCP credentials...")
-            val mcpEnv = "SUPABASE_PROJECT_REF=$projectRef\nSUPABASE_ACCESS_TOKEN=${managementService.managementToken}"
+            val mcpEnv = "SUPABASE_PROJECT_REF=$resolvedProjectRef\nSUPABASE_ACCESS_TOKEN=${managementService.managementToken}"
             val mcpEnvEncoded = Base64.getEncoder().encodeToString(mcpEnv.toByteArray())
             sshCommandExecutor.runSshCommand(
-                ipAddress, password,
+                resolvedIp, password,
                 "sudo mkdir -p /etc/suprclaw && echo $mcpEnvEncoded | base64 -d | sudo tee /etc/suprclaw/mcp.env > /dev/null"
             )
             sshCommandExecutor.runSshCommand(
-                ipAddress, password,
+                resolvedIp, password,
                 "bash -c 'set -a && source /etc/suprclaw/mcp.env && set +a && mcporter daemon restart'"
             )
             logger.info("MCP credentials injected and mcporter daemon restarted for droplet $dropletId")
@@ -194,33 +199,33 @@ class DropletProvisioningServiceImpl(
             val sanitizedName = dropletName.lowercase().replace(Regex("[^a-z0-9-]"), "-")
 
             // Create DNS record - this will throw if it fails, triggering cleanup
-            val subdomain = dnsService.createDnsRecord(sanitizedName, ipAddress)
+            val subdomain = dnsService.createDnsRecord(sanitizedName, resolvedIp)
             logger.info("✅ Subdomain configured: $subdomain")
 
             // Phase 7 — Gateway verification
             updateStatus(dropletId, ProvisioningStatus.PHASE_VERIFYING, "Verifying gateway status...")
-            verifyGateway(ipAddress, password)
+            verifyGateway(resolvedIp, password)
 
             // Phase 7 — Nginx reverse proxy + SSL (only for VPS/production)
             if (AppConfig.sslEnabled) {
                 updateStatus(dropletId, ProvisioningStatus.PHASE_NGINX, "Installing nginx and obtaining SSL certificate...")
-                setupNginxReverseProxy(ipAddress, password, subdomain)
+                setupNginxReverseProxy(resolvedIp, password, subdomain)
             } else {
                 logger.info("ℹ️ Skipping Nginx/SSL setup (running in local mode)")
             }
 
-            val vpsGatewayUrl = if (AppConfig.sslEnabled) "https://$subdomain" else "http://$ipAddress:$GATEWAY_PORT"
+            val vpsGatewayUrl = if (AppConfig.sslEnabled) "https://$subdomain" else "http://$resolvedIp:$GATEWAY_PORT"
             val proxyGatewayUrl = "wss://api.suprclaw.com"
 
             // Final phase: real first connect, and if pairing is required, approve requestId once.
             // Per requirement: do not reconnect after approval.
-            approvePairingIfRequired(vpsGatewayUrl, gatewayToken, ipAddress, password, dropletId)
+            approvePairingIfRequired(vpsGatewayUrl, gatewayToken, resolvedIp, password, dropletId)
 
             // Phase 5 — Initialize user project tables via Management API SQL
             updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Initializing user project tables...")
             schemaRepository.initializeUserProject(
                 managementService = managementService,
-                projectRef = projectRef,
+                projectRef = resolvedProjectRef,
                 userId = userId,
                 vpsGatewayUrl = vpsGatewayUrl,
                 gatewayToken = gatewayToken
@@ -235,13 +240,13 @@ class DropletProvisioningServiceImpl(
                 vpsGatewayUrl = vpsGatewayUrl,          // Actual VPS URL for backend routing
                 gatewayToken = gatewayToken,
                 sshKey = password,
-                ipAddress = ipAddress,
+                ipAddress = resolvedIp,
                 subdomain = subdomain.takeIf { AppConfig.sslEnabled },
                 createdAt = Instant.now().toString(),
                 status = "active",
                 sslEnabled = AppConfig.sslEnabled,
-                supabaseProjectRef = projectRef,
-                supabaseServiceKey = serviceKey
+                supabaseProjectRef = resolvedProjectRef,
+                supabaseServiceKey = resolvedServiceKey
             )
 
             // Save to Firestore + save agent — must all succeed before marking complete
@@ -253,8 +258,8 @@ class DropletProvisioningServiceImpl(
                 saveDroplet.await()
 
                 // Save lead agent to user's own Supabase project
-                val supabaseUrl = "https://$projectRef.supabase.co"
-                val userClient = userClientProvider.getClient(supabaseUrl, serviceKey)
+                val supabaseUrl = "https://$resolvedProjectRef.supabase.co"
+                val userClient = userClientProvider.getClient(supabaseUrl, resolvedServiceKey)
                 agentRepository.saveAgent(
                     userClient,
                     AgentInsert(
@@ -267,7 +272,7 @@ class DropletProvisioningServiceImpl(
                 )
             }
 
-            logger.info("💾 User droplet saved to Firestore, default main agent saved to user's Supabase project: userId=$userId, dropletId=$dropletId, projectRef=$projectRef")
+            logger.info("💾 User droplet saved to Firestore, default main agent saved to user's Supabase project: userId=$userId, dropletId=$dropletId, projectRef=$resolvedProjectRef")
 
             // Phase 8 — Complete (only reached if all saves succeeded)
             updateStatus(
@@ -281,7 +286,7 @@ class DropletProvisioningServiceImpl(
             return userDropletInternal.toUserDroplet()
 
         } catch (e: Exception) {
-            logger.error("❌ Droplet $dropletId provisioning failed, deleting droplet...", e)
+            logger.error("❌ Droplet $dropletId provisioning failed, cleaning up...", e)
 
             // Clean up: destroy the failed droplet
             try {
@@ -289,6 +294,16 @@ class DropletProvisioningServiceImpl(
                 logger.info("🗑️ Droplet $dropletId deleted after provisioning failure")
             } catch (deleteError: Exception) {
                 logger.error("Failed to delete droplet $dropletId: ${deleteError.message}")
+            }
+
+            // Clean up: delete the Supabase project if it was created
+            if (projectRef != null) {
+                try {
+                    managementService.deleteProject(projectRef!!)
+                    logger.info("🗑️ Supabase project $projectRef deleted after provisioning failure")
+                } catch (deleteError: Exception) {
+                    logger.error("Failed to delete Supabase project $projectRef: ${deleteError.message}")
+                }
             }
 
             val current = statuses[dropletId]
@@ -340,13 +355,17 @@ class DropletProvisioningServiceImpl(
             errors += "Supabase project: ${e.message}"
         }
 
-        // 3 — Delete Firestore droplet document
+        // 3 — Delete Firestore droplet document + project ref mapping
         try {
             firestoreRepository.deleteUserDroplet(userId)
             logger.info("🗑️ Firestore droplet record deleted for userId=$userId")
         } catch (e: Exception) {
             logger.error("Failed to delete Firestore droplet for userId=$userId", e)
             errors += "Firestore: ${e.message}"
+        }
+
+        if (droplet.supabaseProjectRef.isNotBlank()) {
+            firestoreRepository.deleteProjectRefMapping(droplet.supabaseProjectRef)
         }
 
         // 4 — Clear in-memory status

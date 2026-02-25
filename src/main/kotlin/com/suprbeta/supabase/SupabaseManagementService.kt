@@ -55,6 +55,11 @@ class SupabaseManagementService(
 
     private val region: String = dotenv["SUPABASE_REGION"] ?: "us-east-1"
 
+    val webhookBaseUrl: String = dotenv["WEBHOOK_BASE_URL"] ?: "https://api.suprclaw.com"
+
+    val webhookSecret: String = dotenv["WEBHOOK_SECRET"]
+        ?: throw IllegalStateException("WEBHOOK_SECRET not found in environment")
+
     /** Creates a new Supabase project under the organization. */
     suspend fun createProject(name: String): ProjectResult {
         logger.info("Creating Supabase project: $name")
@@ -154,6 +159,32 @@ class SupabaseManagementService(
         }
 
         logger.info("✅ SQL executed successfully on project $projectRef")
+    }
+
+    /**
+     * Creates a database webhook trigger on the task_assignees table of the given project.
+     * The webhook fires on INSERT and POSTs to the backend at /webhooks/tasks/{projectRef}.
+     */
+    suspend fun createDatabaseWebhook(projectRef: String) {
+        val url = "$webhookBaseUrl/webhooks/tasks/$projectRef".replace("'", "''")
+        val secret = webhookSecret.replace("'", "''")
+        val headers = """{"Content-Type":"application/json","Authorization":"Bearer $secret"}"""
+
+        val sql = """
+            CREATE OR REPLACE TRIGGER "task-assignment-hook"
+            AFTER INSERT ON public.task_assignees
+            FOR EACH ROW EXECUTE FUNCTION supabase_functions.http_request(
+              '$url',
+              'POST',
+              '$headers',
+              '{}',
+              '5000'
+            );
+        """.trimIndent()
+
+        logger.info("Creating database webhook for project $projectRef → $url")
+        runSql(projectRef, sql)
+        logger.info("✅ Database webhook created for project $projectRef")
     }
 
     /** Deletes a Supabase project. */

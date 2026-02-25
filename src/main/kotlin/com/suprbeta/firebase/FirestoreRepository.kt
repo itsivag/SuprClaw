@@ -32,6 +32,7 @@ class FirestoreRepository(
         private const val USER_DROPLETS_SUBCOLLECTION = "droplets"
         private const val USER_USAGE_SUBCOLLECTION = "usage"
         private const val USER_MESSAGE_QUEUE_SUBCOLLECTION = "message_queue"
+        private const val PROJECT_REFS_COLLECTION = "supabase_project_refs"
     }
 
     data class QueuedMessage(val docId: String, val payload: String)
@@ -202,6 +203,10 @@ class FirestoreRepository(
 
             docRef.set(droplet).await()
 
+            if (droplet.supabaseProjectRef.isNotBlank()) {
+                saveProjectRefMapping(droplet.supabaseProjectRef, droplet.userId)
+            }
+
             application.log.info("✅ User droplet saved successfully: userId=${droplet.userId}, dropletId=${droplet.dropletId}")
         } catch (e: Exception) {
             application.log.error("Failed to save user droplet for user ${droplet.userId}", e)
@@ -343,6 +348,50 @@ class FirestoreRepository(
         } catch (e: Exception) {
             application.log.error("Failed to delete queued messages for user $userId", e)
             throw e
+        }
+    }
+
+    // ==================== Supabase Project Ref Mapping ====================
+
+    /** Stores a projectRef → userId mapping for webhook routing. */
+    suspend fun saveProjectRefMapping(projectRef: String, userId: String) {
+        try {
+            firestore.collection(PROJECT_REFS_COLLECTION)
+                .document(projectRef)
+                .set(mapOf("userId" to userId))
+                .await()
+            application.log.debug("Saved project ref mapping: $projectRef → $userId")
+        } catch (e: Exception) {
+            application.log.error("Failed to save project ref mapping for $projectRef", e)
+            throw e
+        }
+    }
+
+    /** Resolves a Supabase projectRef to a UserDropletInternal for webhook routing. */
+    suspend fun getUserDropletInternalByProjectRef(projectRef: String): UserDropletInternal? {
+        return try {
+            val doc = firestore.collection(PROJECT_REFS_COLLECTION)
+                .document(projectRef)
+                .get()
+                .await()
+            val userId = doc.getString("userId") ?: return null
+            getUserDropletInternal(userId)
+        } catch (e: Exception) {
+            application.log.error("Failed to look up droplet for projectRef $projectRef", e)
+            null
+        }
+    }
+
+    /** Removes the projectRef → userId mapping during teardown. */
+    suspend fun deleteProjectRefMapping(projectRef: String) {
+        try {
+            firestore.collection(PROJECT_REFS_COLLECTION)
+                .document(projectRef)
+                .delete()
+                .await()
+            application.log.debug("Deleted project ref mapping: $projectRef")
+        } catch (e: Exception) {
+            application.log.error("Failed to delete project ref mapping for $projectRef", e)
         }
     }
 

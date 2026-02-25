@@ -73,7 +73,7 @@ fun Application.module() {
         httpClient, firestoreRepository, agentRepository, schemaRepository, managementService, userClientProvider
     )
     configureTaskRoutes(taskRepository, firestoreRepository, userClientProvider)
-    configureWebhookRoutes()
+    configureWebhookRoutes(firestoreRepository, userClientProvider, agentRepository, httpClient, managementService.webhookSecret)
     configureMarketplaceRoutes(configuringService)
     configureRouting()
 }
