@@ -18,7 +18,7 @@ class DigitalOceanService(
         private const val API_BASE_URL = "https://api.digitalocean.com/v2/droplets"
         private const val DEFAULT_SIZE = "s-1vcpu-2gb"
         private const val DEFAULT_REGION = "sfo2"
-        private const val DEFAULT_IMAGE = "218557874" //v0.6
+        private const val DEFAULT_IMAGE = "218559200" //v0.7
         private const val DEFAULT_VPC_UUID = "e6d1d295-29b8-469f-ac55-660f20ba61cf"
         private const val DEFAULT_MONITORING = true
     }

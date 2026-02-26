@@ -173,18 +173,15 @@ class DropletProvisioningServiceImpl(
             sshCommandExecutor.runSshCommand(resolvedIp, password, "openclaw config set gateway.remote.token $gatewayToken")
             sshCommandExecutor.runSshCommand(resolvedIp, password, "openclaw config set gateway.mode local")
 
-            // Sync token into user service file to prevent device token mismatch (openclaw checks both)
-            sshCommandExecutor.runSshCommand(resolvedIp, password, "sudo loginctl enable-linger openclaw")
-            sshCommandExecutor.runSshCommand(resolvedIp, password, "sed -i 's/Environment=OPENCLAW_GATEWAY_TOKEN=.*/Environment=OPENCLAW_GATEWAY_TOKEN=$gatewayToken/' /home/openclaw/.config/systemd/user/openclaw-gateway.service 2>/dev/null || true")
-            delay(2000)
-            sshCommandExecutor.runSshCommand(resolvedIp, password, "XDG_RUNTIME_DIR=/run/user/\$(id -u) systemctl --user daemon-reload 2>/dev/null || true")
-
             logger.info("Gateway token set for droplet $dropletId: $gatewayToken")
 
             // Phase 4b — Write MCP credentials to /etc/suprclaw/mcp.env and start system services
             updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Configuring MCP credentials and starting services...")
             val managementToken = managementService.managementToken
-            val mcpEnv = "SUPABASE_PROJECT_REF=$resolvedProjectRef\nSUPABASE_ACCESS_TOKEN=$managementToken"
+            val awsAccessKeyId = System.getenv("AWS_ACCESS_KEY_ID") ?: ""
+            val awsSecretAccessKey = System.getenv("AWS_SECRET_ACCESS_KEY") ?: ""
+            val awsRegion = System.getenv("AWS_REGION") ?: "us-east-1"
+            val mcpEnv = "SUPABASE_PROJECT_REF=$resolvedProjectRef\nSUPABASE_ACCESS_TOKEN=$managementToken\nAWS_ACCESS_KEY_ID=$awsAccessKeyId\nAWS_SECRET_ACCESS_KEY=$awsSecretAccessKey\nAWS_REGION=$awsRegion\nOPENCLAW_GATEWAY_TOKEN=$gatewayToken"
             val mcpEnvEncoded = Base64.getEncoder().encodeToString(mcpEnv.toByteArray())
             sshCommandExecutor.runSshCommand(resolvedIp, password, "echo $mcpEnvEncoded | base64 -d | sudo tee /etc/suprclaw/mcp.env > /dev/null")
             sshCommandExecutor.runSshCommand(resolvedIp, password, "sudo chmod 600 /etc/suprclaw/mcp.env")
