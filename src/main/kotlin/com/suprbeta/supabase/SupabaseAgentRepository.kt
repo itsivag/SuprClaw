@@ -45,6 +45,19 @@ class SupabaseAgentRepository(
     suspend fun deleteAgent(client: SupabaseClient, name: String) {
         try {
             application.log.info("Deleting agent: name=$name")
+
+            // Resolve agent id to unblock the FK constraint on tasks.locked_by
+            val agent = client.from("agents").select {
+                filter { eq("name", name) }
+            }.decodeSingleOrNull<com.suprbeta.digitalocean.models.UserAgent>()
+
+            if (agent?.id != null) {
+                client.from("tasks").update({ set("locked_by", null as String?) }) {
+                    filter { eq("locked_by", agent.id) }
+                }
+                application.log.info("Unlinked tasks locked by agent id=${agent.id}")
+            }
+
             client.from("agents").delete {
                 filter { eq("name", name) }
             }

@@ -6,6 +6,12 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.util.*
 
+private object AuthRouteSelector : RouteSelector() {
+    override suspend fun evaluate(context: RoutingResolveContext, segmentIndex: Int) =
+        RouteSelectorEvaluation.Transparent
+    override fun toString() = "(authenticated)"
+}
+
 /**
  * Ktor plugin for Firebase Authentication
  *
@@ -53,8 +59,11 @@ val firebaseUserKey = AttributeKey<FirebaseUser>("FirebaseUser")
  * ```
  */
 fun Route.authenticated(build: Route.() -> Unit): Route {
-    // Create authenticated route interceptor
-    intercept(ApplicationCallPipeline.Call) {
+    // Create a transparent child route so the interceptor is scoped only to
+    // routes registered inside this block — not all routes globally.
+    val authRoute = createChild(AuthRouteSelector)
+
+    authRoute.intercept(ApplicationCallPipeline.Call) {
         val authHeader = call.request.headers["Authorization"]
 
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
@@ -85,8 +94,7 @@ fun Route.authenticated(build: Route.() -> Unit): Route {
         call.attributes.put(firebaseUserKey, user)
     }
 
-    // Apply the build block to set up child routes
-    build()
+    authRoute.build()
 
-    return this
+    return authRoute
 }

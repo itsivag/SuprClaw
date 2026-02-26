@@ -3,10 +3,17 @@ package com.suprbeta.digitalocean
 import com.suprbeta.core.SshCommandExecutor
 import com.suprbeta.digitalocean.models.UserDropletInternal
 import com.suprbeta.supabase.SupabaseManagementService
+import io.github.cdimascio.dotenv.dotenv
 import io.ktor.server.application.*
 import java.util.Base64
 
 interface DropletMcpService {
+    /**
+     * Throws if any tool in [toolNames] is missing its required backend env var.
+     * Call this before attempting installation so the error is caught early.
+     */
+    fun validateMcpTools(toolNames: List<String>)
+
     /**
      * Writes mcp.env, mcp-routes.json, and mcporter.json to the VPS for the given
      * tool names, then restarts mcporter.
@@ -25,6 +32,33 @@ class DropletMcpServiceImpl(
 ) : DropletMcpService {
 
     private val logger = application.log
+    private val dotenv = dotenv { ignoreIfMissing = true; directory = "." }
+
+    private fun env(key: String): String = dotenv[key] ?: System.getenv(key) ?: ""
+
+    companion object {
+        val ALWAYS_PRESENT_ENV_VARS = setOf(
+            "SUPABASE_PROJECT_REF", "SUPABASE_ACCESS_TOKEN",
+            "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION",
+            "OPENCLAW_GATEWAY_TOKEN"
+        )
+    }
+
+    override fun validateMcpTools(toolNames: List<String>) {
+        val missing = toolNames.mapNotNull { name ->
+            val tool = McpToolRegistry.get(name) ?: return@mapNotNull null
+            if (tool.authEnvVar !in ALWAYS_PRESENT_ENV_VARS && isMissingEnvVar(tool.authEnvVar))
+                "${tool.name} requires ${tool.authEnvVar}"
+            else null
+        }
+        if (missing.isNotEmpty()) {
+            throw IllegalStateException(
+                "Cannot configure MCP tools — missing env vars: ${missing.joinToString()}"
+            )
+        }
+    }
+
+    private fun isMissingEnvVar(key: String): Boolean = env(key).isBlank()
 
     override suspend fun configureMcpTools(droplet: UserDropletInternal, toolNames: List<String>) {
         val ip = droplet.ipAddress
@@ -50,22 +84,17 @@ class DropletMcpServiceImpl(
     // ── File writers ─────────────────────────────────────────────────────
 
     private fun writeMcpEnv(ip: String, sshKey: String, droplet: UserDropletInternal, toolDefs: List<McpToolDefinition>) {
-        val alwaysPresent = setOf(
-            "SUPABASE_PROJECT_REF", "SUPABASE_ACCESS_TOKEN",
-            "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION",
-            "OPENCLAW_GATEWAY_TOKEN"
-        )
         val lines = mutableListOf(
             "SUPABASE_PROJECT_REF=${droplet.supabaseProjectRef}",
             "SUPABASE_ACCESS_TOKEN=${managementService.managementToken}",
-            "AWS_ACCESS_KEY_ID=${System.getenv("AWS_ACCESS_KEY_ID") ?: ""}",
-            "AWS_SECRET_ACCESS_KEY=${System.getenv("AWS_SECRET_ACCESS_KEY") ?: ""}",
-            "AWS_REGION=${System.getenv("AWS_REGION") ?: "us-east-1"}",
+            "AWS_ACCESS_KEY_ID=${env("AWS_ACCESS_KEY_ID")}",
+            "AWS_SECRET_ACCESS_KEY=${env("AWS_SECRET_ACCESS_KEY")}",
+            "AWS_REGION=${env("AWS_REGION").ifBlank { "us-east-1" }}",
             "OPENCLAW_GATEWAY_TOKEN=${droplet.gatewayToken}"
         )
         for (tool in toolDefs) {
-            if (tool.authEnvVar !in alwaysPresent) {
-                lines += "${tool.authEnvVar}=${System.getenv(tool.authEnvVar) ?: ""}"
+            if (tool.authEnvVar !in ALWAYS_PRESENT_ENV_VARS) {
+                lines += "${tool.authEnvVar}=${env(tool.authEnvVar)}"
             }
         }
         val encoded = Base64.getEncoder().encodeToString(lines.joinToString("\n").toByteArray())

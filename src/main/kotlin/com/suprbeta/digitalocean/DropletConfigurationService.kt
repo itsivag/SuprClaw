@@ -62,11 +62,15 @@ class DropletConfigurationServiceImpl(
         var agentCreated = false
 
         try {
-            // Step 0: Ensure any MCP tools required by this agent are configured on the VPS
-            val newTools = agent.requiredMcpTools.filter { it !in userDroplet.configuredMcpTools }
-            if (newTools.isNotEmpty()) {
-                val allTools = (userDroplet.configuredMcpTools + agent.requiredMcpTools).distinct()
-                logger.info("Configuring new MCP tools ${newTools.joinToString()} for agent '${agent.id}' on droplet ${userDroplet.dropletId}")
+            // Step 0: Validate required MCP tool env vars are present — always, even if already configured
+            if (agent.mcpTools.isNotEmpty()) {
+                dropletMcpService.validateMcpTools(agent.mcpTools)
+            }
+
+            // Step 0b: Configure MCP tools — always reconfigure if agent requires any, to ensure keys are fresh
+            if (agent.mcpTools.isNotEmpty()) {
+                val allTools = (userDroplet.configuredMcpTools + agent.mcpTools).distinct()
+                logger.info("Configuring MCP tools ${allTools.joinToString()} for agent '${agent.id}' on droplet ${userDroplet.dropletId}")
                 dropletMcpService.configureMcpTools(userDroplet, allTools)
                 firestoreRepository.updateConfiguredMcpTools(userId, userDroplet.dropletId, allTools)
             }
@@ -126,7 +130,14 @@ class DropletConfigurationServiceImpl(
         val userDroplet = validateAndGetDroplet(userId, name)
         val command = "openclaw agents delete $name --force"
         logger.info("Deleting OpenClaw agent '$name' on droplet ${userDroplet.dropletId}")
-        val output = sshCommandExecutor.runSshCommand(userDroplet.ipAddress, userDroplet.sshKey, command)
+        val output = try {
+            sshCommandExecutor.runSshCommandOnce(userDroplet.ipAddress, userDroplet.sshKey, command)
+        } catch (e: Exception) {
+            if (e.message.orEmpty().contains("not found", ignoreCase = true)) {
+                logger.warn("Agent '$name' not found in openclaw registry, proceeding with cleanup")
+                ""
+            } else throw e
+        }
 
         val workspacePath = "/home/openclaw/.openclaw/workspace-$name"
         sshCommandExecutor.runSshCommand(userDroplet.ipAddress, userDroplet.sshKey, "rm -rf $workspacePath")

@@ -23,7 +23,8 @@
         "data-analyst"
       ],
       "source_path": "marketplace/seo",
-      "install_path": ".openclaw/workspace-seo"
+      "install_path": ".openclaw/workspace-seo",
+      "mcp_tools": ["firecrawl"]
     }
   ]
 }
