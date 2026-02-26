@@ -173,6 +173,12 @@ class DropletProvisioningServiceImpl(
             sshCommandExecutor.runSshCommand(resolvedIp, password, "openclaw config set gateway.remote.token $gatewayToken")
             sshCommandExecutor.runSshCommand(resolvedIp, password, "openclaw config set gateway.mode local")
 
+            // Sync token into user service file to prevent device token mismatch (openclaw checks both)
+            sshCommandExecutor.runSshCommand(resolvedIp, password, "sudo loginctl enable-linger openclaw")
+            sshCommandExecutor.runSshCommand(resolvedIp, password, "sed -i 's/Environment=OPENCLAW_GATEWAY_TOKEN=.*/Environment=OPENCLAW_GATEWAY_TOKEN=$gatewayToken/' /home/openclaw/.config/systemd/user/openclaw-gateway.service 2>/dev/null || true")
+            delay(2000)
+            sshCommandExecutor.runSshCommand(resolvedIp, password, "XDG_RUNTIME_DIR=/run/user/\$(id -u) systemctl --user daemon-reload 2>/dev/null || true")
+
             logger.info("Gateway token set for droplet $dropletId: $gatewayToken")
 
             // Phase 4b — Write MCP credentials to /etc/suprclaw/mcp.env and start system services
