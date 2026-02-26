@@ -172,27 +172,24 @@ class DropletProvisioningServiceImpl(
             sshCommandExecutor.runSshCommand(resolvedIp, password, "openclaw config set gateway.auth.token $gatewayToken")
             sshCommandExecutor.runSshCommand(resolvedIp, password, "openclaw config set gateway.remote.token $gatewayToken")
             sshCommandExecutor.runSshCommand(resolvedIp, password, "openclaw config set gateway.mode local")
-            // Sync token into the systemd service env var to avoid mismatch
-            sshCommandExecutor.runSshCommand(resolvedIp, password, "sed -i 's/Environment=OPENCLAW_GATEWAY_TOKEN=.*/Environment=OPENCLAW_GATEWAY_TOKEN=$gatewayToken/' ~/.config/systemd/user/openclaw-gateway.service")
-            sshCommandExecutor.runSshCommand(resolvedIp, password, "systemctl --user daemon-reload")
-            // Restart is fire-and-forget — run in background so SSH returns immediately
-            sshCommandExecutor.runSshCommand(resolvedIp, password, "nohup systemctl --user restart openclaw-gateway > /dev/null 2>&1 & sleep 1")
 
             logger.info("Gateway token set for droplet $dropletId: $gatewayToken")
 
-            // Phase 4b — Inject MCP credentials into VPS and restart mcporter
-            updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Injecting MCP credentials...")
-            val mcpEnv = "SUPABASE_PROJECT_REF=$resolvedProjectRef\nSUPABASE_ACCESS_TOKEN=${managementService.managementToken}"
+            // Phase 4b — Write MCP credentials to /etc/suprclaw/mcp.env and start system services
+            updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Configuring MCP credentials and starting services...")
+            val managementToken = managementService.managementToken
+            val mcpEnv = "SUPABASE_PROJECT_REF=$resolvedProjectRef\nSUPABASE_ACCESS_TOKEN=$managementToken"
             val mcpEnvEncoded = Base64.getEncoder().encodeToString(mcpEnv.toByteArray())
-            sshCommandExecutor.runSshCommand(
-                resolvedIp, password,
-                "sudo mkdir -p /etc/suprclaw && echo $mcpEnvEncoded | base64 -d | sudo tee /etc/suprclaw/mcp.env > /dev/null"
-            )
-            sshCommandExecutor.runSshCommand(
-                resolvedIp, password,
-                "nohup bash -c 'set -a && source /etc/suprclaw/mcp.env && set +a && mcporter daemon restart' > /dev/null 2>&1 & sleep 1"
-            )
-            logger.info("MCP credentials injected and mcporter daemon restarted for droplet $dropletId")
+            sshCommandExecutor.runSshCommand(resolvedIp, password, "echo $mcpEnvEncoded | base64 -d | sudo tee /etc/suprclaw/mcp.env > /dev/null")
+            sshCommandExecutor.runSshCommand(resolvedIp, password, "sudo chmod 600 /etc/suprclaw/mcp.env")
+            sshCommandExecutor.runSshCommand(resolvedIp, password, "sudo chown root:root /etc/suprclaw/mcp.env")
+
+            val mcporterConfig = """{"mcpServers":{"supabase":{"url":"http://127.0.0.1:18790/mcp?project_ref=$resolvedProjectRef","lifecycle":"keep-alive"}}}"""
+            val mcporterConfigEncoded = Base64.getEncoder().encodeToString(mcporterConfig.toByteArray())
+            sshCommandExecutor.runSshCommand(resolvedIp, password, "echo $mcporterConfigEncoded | base64 -d > /home/openclaw/config/mcporter.json")
+
+            sshCommandExecutor.runSshCommand(resolvedIp, password, "sudo systemctl start mcp-auth-proxy mcporter openclaw-gateway")
+            logger.info("MCP credentials written and services started for droplet $dropletId")
 
             // Phase 6 — DNS configuration (MANDATORY - fail if this fails)
             updateStatus(dropletId, ProvisioningStatus.PHASE_DNS, "Creating DNS record...")
