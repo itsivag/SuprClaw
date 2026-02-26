@@ -169,9 +169,16 @@ class DropletProvisioningServiceImpl(
             // Phase 4 — Configuration (gateway token)
             updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Configuring gateway token...")
             val gatewayToken = generateGatewayToken()
-            sshCommandExecutor.runSshCommand(resolvedIp, password, "openclaw config set gateway.auth.token $gatewayToken")
-            sshCommandExecutor.runSshCommand(resolvedIp, password, "openclaw config set gateway.remote.token $gatewayToken")
-            sshCommandExecutor.runSshCommand(resolvedIp, password, "openclaw config set gateway.mode local")
+
+            // Write token directly to openclaw.json to guarantee exact value (openclaw config set transforms the input)
+            val updateConfigScript = """node -e "const fs=require('fs'),p='/home/openclaw/.openclaw/openclaw.json',c=JSON.parse(fs.readFileSync(p,'utf8'));c.gateway=c.gateway||{};c.gateway.auth=c.gateway.auth||{};c.gateway.auth.token='$gatewayToken';c.gateway.remote=c.gateway.remote||{};c.gateway.remote.token='$gatewayToken';c.gateway.mode='local';fs.writeFileSync(p,JSON.stringify(c,null,2));" """
+            sshCommandExecutor.runSshCommand(resolvedIp, password, updateConfigScript)
+
+            // Sync token into user service file (openclaw validates against this even when using system service)
+            sshCommandExecutor.runSshCommand(resolvedIp, password, "sudo loginctl enable-linger openclaw")
+            sshCommandExecutor.runSshCommand(resolvedIp, password, "sed -i 's/Environment=OPENCLAW_GATEWAY_TOKEN=.*/Environment=OPENCLAW_GATEWAY_TOKEN=$gatewayToken/' /home/openclaw/.config/systemd/user/openclaw-gateway.service 2>/dev/null || true")
+            delay(2000)
+            sshCommandExecutor.runSshCommand(resolvedIp, password, "XDG_RUNTIME_DIR=/run/user/\$(id -u) systemctl --user daemon-reload 2>/dev/null || true")
 
             logger.info("Gateway token set for droplet $dropletId: $gatewayToken")
 
@@ -192,6 +199,7 @@ class DropletProvisioningServiceImpl(
             sshCommandExecutor.runSshCommand(resolvedIp, password, "echo $mcporterConfigEncoded | base64 -d > /home/openclaw/.mcporter/mcporter.json")
 
             sshCommandExecutor.runSshCommand(resolvedIp, password, "sudo systemctl start mcp-auth-proxy mcporter openclaw-gateway")
+            sshCommandExecutor.runSshCommand(resolvedIp, password, "openclaw doctor --fix 2>/dev/null || true")
             logger.info("MCP credentials written and services started for droplet $dropletId")
 
             // Phase 6 — DNS configuration (MANDATORY - fail if this fails)
