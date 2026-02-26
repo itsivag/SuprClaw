@@ -99,17 +99,18 @@ fun Application.configureWebhookRoutes(
 
             log.info("Webhook resolved agent=${agent.name} sessionKey=${agent.sessionKey} vpsUrl=${droplet.vpsGatewayUrl}")
 
-            // Forward task assignment notification to VPS gateway
-            val notifyUrl = "${droplet.vpsGatewayUrl}/api/task-assigned"
+            // Forward task assignment to openclaw hooks endpoint
+            val notifyUrl = "${droplet.vpsGatewayUrl}/hooks/agent"
+            val hookSessionKey = "hook:task:$taskId"
             try {
                 val response: HttpResponse = httpClient.post(notifyUrl) {
-                    header(HttpHeaders.Authorization, "Bearer ${droplet.gatewayToken}")
+                    header(HttpHeaders.Authorization, "Bearer ${droplet.hookToken}")
                     contentType(ContentType.Application.Json)
-                    setBody("""{"task_id":"$taskId","agent_id":"$agentId","session_key":"${agent.sessionKey}"}""")
+                    setBody("""{"message":"Task $taskId has been assigned to you","agentId":"${agent.name}","sessionKey":"$hookSessionKey"}""")
                 }
-                log.info("Webhook forwarded task=$taskId agent=$agentId to VPS status=${response.status}")
+                log.info("Webhook forwarded task=$taskId agent=${agent.name} sessionKey=$hookSessionKey to VPS status=${response.status}")
             } catch (e: Exception) {
-                log.error("Webhook: failed to notify VPS gateway for task=$taskId agent=$agentId url=$notifyUrl", e)
+                log.error("Webhook: failed to notify VPS hooks endpoint for task=$taskId agent=${agent.name} url=$notifyUrl", e)
             }
 
             call.respond(HttpStatusCode.OK)

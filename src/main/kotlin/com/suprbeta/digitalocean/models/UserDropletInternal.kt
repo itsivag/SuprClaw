@@ -16,7 +16,8 @@ data class UserDropletInternal(
     val dropletName: String = "",         // Droplet name (usually same as userId)
     val gatewayUrl: String = "",          // Proxy WebSocket URL for clients (wss://api.suprclaw.com/ws)
     val vpsGatewayUrl: String = "",       // Actual VPS gateway URL (backend only, e.g., https://subdomain.suprclaw.com)
-    val gatewayToken: String = "",        // Authentication token for gateway
+    val gatewayToken: String = "",        // Authentication token for gateway WebSocket
+    val hookToken: String = "",           // Authentication token for openclaw hooks endpoint
     val sshKey: String = "",              // SSH credential used for openclaw user on the VPS
     val ipAddress: String = "",           // Droplet IP address
     val subdomain: String? = null,        // Subdomain (if SSL enabled)
@@ -28,7 +29,7 @@ data class UserDropletInternal(
     val configuredMcpTools: List<String> = listOf("supabase") // MCP tools configured on this VPS
 ) {
     // No-arg constructor for Firestore deserialization
-    constructor() : this("", 0, "", "", "", "", "", "", null, "", "active", true, "", "", listOf("supabase"))
+    constructor() : this("", 0, "", "", "", "", "", "", "", null, "", "active", true, "", "", listOf("supabase"))
     
     /**
      * Convert to client-safe UserDroplet (without vpsGatewayUrl)

@@ -167,12 +167,13 @@ class DropletProvisioningServiceImpl(
             updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_SSH, "Waiting for cloud-init to finish (probing SSH auth)...")
             sshCommandExecutor.waitForSshAuth(resolvedIp, password)
 
-            // Phase 4 — Configuration (gateway token)
+            // Phase 4 — Configuration (gateway token + hook token)
             updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Configuring gateway token...")
             val gatewayToken = generateGatewayToken()
+            val hookToken = generateGatewayToken()
 
-            // Write token directly to openclaw.json to guarantee exact value (openclaw config set transforms the input)
-            val updateConfigScript = """node -e "const fs=require('fs'),p='/home/openclaw/.openclaw/openclaw.json',c=JSON.parse(fs.readFileSync(p,'utf8'));c.gateway=c.gateway||{};c.gateway.auth=c.gateway.auth||{};c.gateway.auth.token='$gatewayToken';c.gateway.remote=c.gateway.remote||{};c.gateway.remote.token='$gatewayToken';c.gateway.mode='local';fs.writeFileSync(p,JSON.stringify(c,null,2));" """
+            // Write tokens directly to openclaw.json to guarantee exact values (openclaw config set transforms the input)
+            val updateConfigScript = """node -e "const fs=require('fs'),p='/home/openclaw/.openclaw/openclaw.json',c=JSON.parse(fs.readFileSync(p,'utf8'));c.gateway=c.gateway||{};c.gateway.auth=c.gateway.auth||{};c.gateway.auth.token='$gatewayToken';c.gateway.remote=c.gateway.remote||{};c.gateway.remote.token='$gatewayToken';c.gateway.mode='local';c.hooks=c.hooks||{};c.hooks.token='$hookToken';fs.writeFileSync(p,JSON.stringify(c,null,2));" """
             sshCommandExecutor.runSshCommand(resolvedIp, password, updateConfigScript)
 
             // Sync token into user service file (openclaw validates against this even when using system service)
@@ -244,6 +245,7 @@ class DropletProvisioningServiceImpl(
                 gatewayUrl = proxyGatewayUrl,           // Proxy URL for clients
                 vpsGatewayUrl = vpsGatewayUrl,          // Actual VPS URL for backend routing
                 gatewayToken = gatewayToken,
+                hookToken = hookToken,
                 sshKey = password,
                 ipAddress = resolvedIp,
                 subdomain = subdomain.takeIf { AppConfig.sslEnabled },
