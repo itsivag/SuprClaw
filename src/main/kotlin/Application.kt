@@ -5,6 +5,7 @@ import com.suprbeta.digitalocean.DigitalOceanService
 import com.suprbeta.digitalocean.DnsService
 import com.suprbeta.digitalocean.DropletConfigurationService
 import com.suprbeta.digitalocean.DropletConfigurationServiceImpl
+import com.suprbeta.digitalocean.DropletMcpServiceImpl
 import com.suprbeta.digitalocean.DropletProvisioningService
 import com.suprbeta.digitalocean.DropletProvisioningServiceImpl
 import com.suprbeta.digitalocean.configureAgentRoutes
@@ -195,6 +196,11 @@ fun Application.configureDigitalOcean(
     val digitalOceanService = DigitalOceanService(httpClient, this)
     val dnsService = DnsService(httpClient, this)
     val sshCommandExecutor = SshCommandExecutorImpl(this)
+    val dropletMcpService = DropletMcpServiceImpl(
+        managementService = managementService,
+        sshCommandExecutor = sshCommandExecutor,
+        application = this
+    )
     val provisioningConnector = OpenClawConnector(
         application = this,
         httpClient = httpClient,
@@ -213,6 +219,7 @@ fun Application.configureDigitalOcean(
         userClientProvider = userClientProvider,
         openClawConnector = provisioningConnector,
         sshCommandExecutor = sshCommandExecutor,
+        dropletMcpService = dropletMcpService,
         application = this
     )
     val configuringService: DropletConfigurationService = DropletConfigurationServiceImpl(
@@ -220,6 +227,7 @@ fun Application.configureDigitalOcean(
         agentRepository = agentRepository,
         userClientProvider = userClientProvider,
         sshCommandExecutor = sshCommandExecutor,
+        dropletMcpService = dropletMcpService,
         application = this
     )
     configureDropletRoutes(provisioningService, firestoreRepository)

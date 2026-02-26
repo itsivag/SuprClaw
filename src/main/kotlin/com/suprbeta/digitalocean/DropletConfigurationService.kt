@@ -22,6 +22,7 @@ class DropletConfigurationServiceImpl(
     private val agentRepository: SupabaseAgentRepository,
     private val userClientProvider: UserSupabaseClientProvider,
     private val sshCommandExecutor: SshCommandExecutor,
+    private val dropletMcpService: DropletMcpService,
     application: Application
 ) : DropletConfigurationService {
     companion object {
@@ -61,6 +62,15 @@ class DropletConfigurationServiceImpl(
         var agentCreated = false
 
         try {
+            // Step 0: Ensure any MCP tools required by this agent are configured on the VPS
+            val newTools = agent.requiredMcpTools.filter { it !in userDroplet.configuredMcpTools }
+            if (newTools.isNotEmpty()) {
+                val allTools = (userDroplet.configuredMcpTools + agent.requiredMcpTools).distinct()
+                logger.info("Configuring new MCP tools ${newTools.joinToString()} for agent '${agent.id}' on droplet ${userDroplet.dropletId}")
+                dropletMcpService.configureMcpTools(userDroplet, allTools)
+                firestoreRepository.updateConfiguredMcpTools(userId, userDroplet.dropletId, allTools)
+            }
+
             // Step 1: Create agent workspace via openclaw CLI
             logger.info("Installing marketplace agent '${agent.id}' on droplet ${userDroplet.dropletId}")
             val output = sshCommandExecutor.runSshCommand(
@@ -87,7 +97,7 @@ class DropletConfigurationServiceImpl(
             agentRepository.saveAgent(
                 client,
                 AgentInsert(
-                    name = agent.name,
+                    name = agent.id,
                     role = agent.description,
                     sessionKey = agent.sessionKey,
                     isLead = agent.isLead

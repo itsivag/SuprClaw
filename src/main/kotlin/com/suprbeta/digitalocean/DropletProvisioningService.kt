@@ -64,6 +64,7 @@ class DropletProvisioningServiceImpl(
     private val userClientProvider: UserSupabaseClientProvider,
     private val openClawConnector: OpenClawConnector,
     private val sshCommandExecutor: SshCommandExecutor,
+    private val dropletMcpService: DropletMcpService,
     application: Application
 ) : DropletProvisioningService {
     private val logger = application.log
@@ -182,21 +183,17 @@ class DropletProvisioningServiceImpl(
 
             logger.info("Gateway token set for droplet $dropletId: $gatewayToken")
 
-            // Phase 4b — Write MCP credentials to /etc/suprclaw/mcp.env and start system services
+            // Phase 4b — Write MCP credentials and start system services
             updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Configuring MCP credentials and starting services...")
-            val managementToken = managementService.managementToken
-            val awsAccessKeyId = System.getenv("AWS_ACCESS_KEY_ID") ?: ""
-            val awsSecretAccessKey = System.getenv("AWS_SECRET_ACCESS_KEY") ?: ""
-            val awsRegion = System.getenv("AWS_REGION") ?: "us-east-1"
-            val mcpEnv = "SUPABASE_PROJECT_REF=$resolvedProjectRef\nSUPABASE_ACCESS_TOKEN=$managementToken\nAWS_ACCESS_KEY_ID=$awsAccessKeyId\nAWS_SECRET_ACCESS_KEY=$awsSecretAccessKey\nAWS_REGION=$awsRegion\nOPENCLAW_GATEWAY_TOKEN=$gatewayToken"
-            val mcpEnvEncoded = Base64.getEncoder().encodeToString(mcpEnv.toByteArray())
-            sshCommandExecutor.runSshCommand(resolvedIp, password, "echo $mcpEnvEncoded | base64 -d | sudo tee /etc/suprclaw/mcp.env > /dev/null")
-            sshCommandExecutor.runSshCommand(resolvedIp, password, "sudo chmod 600 /etc/suprclaw/mcp.env")
-            sshCommandExecutor.runSshCommand(resolvedIp, password, "sudo chown root:root /etc/suprclaw/mcp.env")
-
-            val mcporterConfig = """{"mcpServers":{"supabase":{"url":"http://127.0.0.1:18790/mcp?project_ref=$resolvedProjectRef","lifecycle":"keep-alive"}}}"""
-            val mcporterConfigEncoded = Base64.getEncoder().encodeToString(mcporterConfig.toByteArray())
-            sshCommandExecutor.runSshCommand(resolvedIp, password, "echo $mcporterConfigEncoded | base64 -d > /home/openclaw/.mcporter/mcporter.json")
+            val bootstrapDroplet = UserDropletInternal(
+                userId = userId,
+                dropletId = dropletId,
+                ipAddress = resolvedIp,
+                sshKey = password,
+                supabaseProjectRef = resolvedProjectRef,
+                gatewayToken = gatewayToken
+            )
+            dropletMcpService.configureMcpTools(bootstrapDroplet, McpToolRegistry.defaultTools)
 
             sshCommandExecutor.runSshCommand(resolvedIp, password, "sudo systemctl start mcp-auth-proxy mcporter openclaw-gateway")
             sshCommandExecutor.runSshCommand(resolvedIp, password, "nohup openclaw doctor --fix > /tmp/openclaw-doctor.log 2>&1 &")
@@ -254,7 +251,8 @@ class DropletProvisioningServiceImpl(
                 status = "active",
                 sslEnabled = AppConfig.sslEnabled,
                 supabaseProjectRef = resolvedProjectRef,
-                supabaseServiceKey = resolvedServiceKey
+                supabaseServiceKey = resolvedServiceKey,
+                configuredMcpTools = McpToolRegistry.defaultTools
             )
 
             // Save to Firestore + save agent — must all succeed before marking complete

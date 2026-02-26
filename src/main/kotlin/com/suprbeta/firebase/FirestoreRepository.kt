@@ -267,6 +267,24 @@ class FirestoreRepository(
     }
 
     /**
+     * Updates the configuredMcpTools list on a user's droplet document.
+     */
+    suspend fun updateConfiguredMcpTools(userId: String, dropletId: Long, tools: List<String>) {
+        try {
+            firestore.collection(USERS)
+                .document(userId)
+                .collection(USER_DROPLETS_SUBCOLLECTION)
+                .document(dropletId.toString())
+                .update("configuredMcpTools", tools)
+                .await()
+            application.log.info("Updated configuredMcpTools for userId=$userId, dropletId=$dropletId: ${tools.joinToString()}")
+        } catch (e: Exception) {
+            application.log.error("Failed to update configuredMcpTools for userId=$userId, dropletId=$dropletId", e)
+            throw e
+        }
+    }
+
+    /**
      * Deletes a user's droplet information
      */
     suspend fun deleteUserDroplet(userId: String) {

@@ -19,5 +19,6 @@ data class MarketplaceAgent(
     val capabilities: List<String> = emptyList(),
     @SerialName("best_with") val bestWith: List<String> = emptyList(),
     @SerialName("source_path") val sourcePath: String,
-    @SerialName("install_path") val installPath: String
+    @SerialName("install_path") val installPath: String,
+    @SerialName("required_mcp_tools") val requiredMcpTools: List<String> = emptyList()
 )

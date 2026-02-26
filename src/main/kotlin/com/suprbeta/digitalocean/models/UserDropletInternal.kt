@@ -24,10 +24,11 @@ data class UserDropletInternal(
     val status: String = "active",        // Status: active, provisioning, error, deleted
     val sslEnabled: Boolean = true,       // Whether SSL/HTTPS is enabled
     val supabaseProjectRef: String = "",  // User's Supabase project ref (e.g. "abcxyz123")
-    val supabaseServiceKey: String = ""   // User's Supabase service role key
+    val supabaseServiceKey: String = "",  // User's Supabase service role key
+    val configuredMcpTools: List<String> = listOf("supabase") // MCP tools configured on this VPS
 ) {
     // No-arg constructor for Firestore deserialization
-    constructor() : this("", 0, "", "", "", "", "", "", null, "", "active", true, "", "")
+    constructor() : this("", 0, "", "", "", "", "", "", null, "", "active", true, "", "", listOf("supabase"))
     
     /**
      * Convert to client-safe UserDroplet (without vpsGatewayUrl)
