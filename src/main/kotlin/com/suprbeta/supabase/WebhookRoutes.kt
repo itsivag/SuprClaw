@@ -57,7 +57,7 @@ fun Application.configureWebhookRoutes(
             }
 
             val body = call.receiveText()
-            log.debug("Webhook received for projectRef=$projectRef: ${body.take(300)}")
+            log.info("Webhook received for projectRef=$projectRef body=${body.take(300)}")
 
             // Parse Supabase webhook payload
             val parsed = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull()
@@ -72,10 +72,12 @@ fun Application.configureWebhookRoutes(
             val agentId = record?.get("agent_id")?.jsonPrimitive?.content
 
             if (taskId.isNullOrBlank() || agentId.isNullOrBlank()) {
-                log.warn("Webhook ignored: missing task_id or agent_id for projectRef=$projectRef")
+                log.warn("Webhook ignored: missing task_id or agent_id for projectRef=$projectRef record=$record")
                 call.respond(HttpStatusCode.OK)
                 return@post
             }
+
+            log.info("Webhook processing task=$taskId agent=$agentId projectRef=$projectRef")
 
             // Resolve user droplet by projectRef
             val droplet = firestoreRepository.getUserDropletInternalByProjectRef(projectRef)
@@ -95,6 +97,8 @@ fun Application.configureWebhookRoutes(
                 return@post
             }
 
+            log.info("Webhook resolved agent=${agent.name} sessionKey=${agent.sessionKey} vpsUrl=${droplet.vpsGatewayUrl}")
+
             // Forward task assignment notification to VPS gateway
             val notifyUrl = "${droplet.vpsGatewayUrl}/api/task-assigned"
             try {
@@ -103,9 +107,9 @@ fun Application.configureWebhookRoutes(
                     contentType(ContentType.Application.Json)
                     setBody("""{"task_id":"$taskId","agent_id":"$agentId","session_key":"${agent.sessionKey}"}""")
                 }
-                log.info("Webhook forwarded task=$taskId agent=$agentId to VPS (status=${response.status})")
+                log.info("Webhook forwarded task=$taskId agent=$agentId to VPS status=${response.status}")
             } catch (e: Exception) {
-                log.error("Webhook: failed to notify VPS gateway for task=$taskId agent=$agentId", e)
+                log.error("Webhook: failed to notify VPS gateway for task=$taskId agent=$agentId url=$notifyUrl", e)
             }
 
             call.respond(HttpStatusCode.OK)
