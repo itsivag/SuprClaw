@@ -199,7 +199,7 @@ class DropletProvisioningServiceImpl(
             sshCommandExecutor.runSshCommand(resolvedIp, password, "echo $mcporterConfigEncoded | base64 -d > /home/openclaw/.mcporter/mcporter.json")
 
             sshCommandExecutor.runSshCommand(resolvedIp, password, "sudo systemctl start mcp-auth-proxy mcporter openclaw-gateway")
-            sshCommandExecutor.runSshCommand(resolvedIp, password, "openclaw doctor --fix 2>/dev/null || true")
+            sshCommandExecutor.runSshCommand(resolvedIp, password, "nohup openclaw doctor --fix > /tmp/openclaw-doctor.log 2>&1 &")
             logger.info("MCP credentials written and services started for droplet $dropletId")
 
             // Phase 6 — DNS configuration (MANDATORY - fail if this fails)
