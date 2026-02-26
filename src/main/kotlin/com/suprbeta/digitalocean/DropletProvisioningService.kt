@@ -186,7 +186,7 @@ class DropletProvisioningServiceImpl(
 
             val mcporterConfig = """{"mcpServers":{"supabase":{"url":"http://127.0.0.1:18790/mcp?project_ref=$resolvedProjectRef","lifecycle":"keep-alive"}}}"""
             val mcporterConfigEncoded = Base64.getEncoder().encodeToString(mcporterConfig.toByteArray())
-            sshCommandExecutor.runSshCommand(resolvedIp, password, "echo $mcporterConfigEncoded | base64 -d > /home/openclaw/config/mcporter.json")
+            sshCommandExecutor.runSshCommand(resolvedIp, password, "echo $mcporterConfigEncoded | base64 -d > /home/openclaw/.mcporter/mcporter.json")
 
             sshCommandExecutor.runSshCommand(resolvedIp, password, "sudo systemctl start mcp-auth-proxy mcporter openclaw-gateway")
             logger.info("MCP credentials written and services started for droplet $dropletId")
