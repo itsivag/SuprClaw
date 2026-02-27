@@ -1,7 +1,7 @@
 # IDENTITY.md — SEO Specialist
 
 ## UID
-UID in Supabase: `5b900839-40ea-4b7b-8676-b6af8d3553c2`
+UID in Supabase: `sample`
 
 ## Name
 
