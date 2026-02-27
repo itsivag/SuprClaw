@@ -22,6 +22,7 @@ import com.suprbeta.supabase.SupabaseService
 import com.suprbeta.supabase.SupabaseTaskRepository
 import com.suprbeta.supabase.UserSupabaseClientProvider
 import com.suprbeta.supabase.configureTaskRoutes
+import com.suprbeta.marketplace.MarketplaceService
 import com.suprbeta.marketplace.configureMarketplaceRoutes
 import com.suprbeta.supabase.configureWebhookRoutes
 import io.github.jan.supabase.SupabaseClient
@@ -75,7 +76,7 @@ fun Application.module() {
     )
     configureTaskRoutes(taskRepository, firestoreRepository, userClientProvider)
     configureWebhookRoutes(firestoreRepository, userClientProvider, agentRepository, httpClient, managementService.webhookSecret)
-    configureMarketplaceRoutes(configuringService)
+    configureMarketplaceRoutes(configuringService, MarketplaceService(httpClient))
     configureRouting()
 }
 

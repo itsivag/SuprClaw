@@ -7,12 +7,11 @@ import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
-import kotlinx.serialization.json.Json
-import java.io.File
 
-fun Application.configureMarketplaceRoutes(configuringService: DropletConfigurationService) {
-    val json = Json { ignoreUnknownKeys = true }
-
+fun Application.configureMarketplaceRoutes(
+    configuringService: DropletConfigurationService,
+    marketplaceService: MarketplaceService
+) {
     routing {
         authenticated {
             /**
@@ -20,12 +19,13 @@ fun Application.configureMarketplaceRoutes(configuringService: DropletConfigurat
              * Returns all available agents in the marketplace.
              */
             get("/marketplace") {
-                val file = File("marketplace/agents.json")
-                if (!file.exists()) {
-                    call.respond(HttpStatusCode.NotFound, mapOf("error" to "Marketplace agents not found"))
-                    return@get
+                try {
+                    val catalog = marketplaceService.getCatalog()
+                    call.respond(HttpStatusCode.OK, catalog)
+                } catch (e: Exception) {
+                    log.error("Error fetching marketplace catalog", e)
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Failed to fetch marketplace")))
                 }
-                call.respondText(file.readText(), ContentType.Application.Json, HttpStatusCode.OK)
             }
 
             /**
@@ -42,13 +42,7 @@ fun Application.configureMarketplaceRoutes(configuringService: DropletConfigurat
                 }
 
                 try {
-                    val file = File("marketplace/agents.json")
-                    if (!file.exists()) {
-                        call.respond(HttpStatusCode.NotFound, mapOf("error" to "Marketplace agents not found"))
-                        return@post
-                    }
-
-                    val catalog = json.decodeFromString<MarketplaceCatalog>(file.readText())
+                    val catalog = marketplaceService.getCatalog()
                     val agent = catalog.agents.find { it.id == agentId }
                         ?: return@post call.respond(
                             HttpStatusCode.NotFound,
