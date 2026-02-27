@@ -25,6 +25,31 @@
       "source_path": "marketplace/seo",
       "install_path": ".openclaw/workspace-seo",
       "mcp_tools": ["firecrawl"]
+    },
+    {
+      "id": "content-writer",
+      "name": "Content Writer",
+      "description": "Produce high-conversion, search-aligned, authority-building content that matches user intent, reinforces topical depth, and drives measurable business outcomes.",
+      "session_key": "agent:content-writer:main",
+      "is_lead": false,
+      "capabilities": [
+        "Write SEO blog posts",
+        "Write landing page copy",
+        "Analyze content gaps",
+        "Optimize for AI citation",
+        "Write UX and marketing copy",
+        "Build topic clusters",
+        "Refresh existing content"
+      ],
+      "best_with": [
+        "seo",
+        "social-media-manager",
+        "web-developer",
+        "data-analyst"
+      ],
+      "source_path": "marketplace/content",
+      "install_path": ".openclaw/workspace-content",
+      "mcp_tools": ["firecrawl"]
     }
   ]
 }
