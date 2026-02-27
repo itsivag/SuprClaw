@@ -31,25 +31,7 @@ jobs:
         run: ./gradlew clean build --no-daemon
 
       - name: Create .env from secrets
-        run: |
-          {
-            echo "DIGITALOCEAN_API_KEY=${{ secrets.DIGITALOCEAN_API_KEY }}"
-            echo "DIGITALOCEAN_SSH_KEYS=${{ secrets.DIGITALOCEAN_SSH_KEYS }}"
-            echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}"
-            echo "OPENCLAW_SNAPSHOT_ID=${{ secrets.OPENCLAW_SNAPSHOT_ID }}"
-            echo "DOMAIN=${{ secrets.DOMAIN }}"
-            echo "FIREBASE_CREDENTIALS_PATH=${{ secrets.FIREBASE_CREDENTIALS_PATH }}"
-            echo "FIREBASE_PROJECT_ID=${{ secrets.FIREBASE_PROJECT_ID }}"
-            echo "SUPRCLAW_DEVICE_PRIVATE_KEY_B64=${{ secrets.SUPRCLAW_DEVICE_PRIVATE_KEY_B64 }}"
-            echo "SUPRCLAW_DEVICE_PUBLIC_KEY_B64=${{ secrets.SUPRCLAW_DEVICE_PUBLIC_KEY_B64 }}"
-            echo "SUPRCLAW_STATIC_DEVICE_ID=${{ secrets.SUPRCLAW_STATIC_DEVICE_ID }}"
-            echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}"
-            echo "SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}"
-            echo "SUPABASE_MANAGEMENT_TOKEN=${{ secrets.SUPABASE_MANAGEMENT_TOKEN }}"
-            echo "SUPABASE_ORG_ID=${{ secrets.SUPABASE_ORG_ID }}"
-            echo "SUPABASE_REGION=${{ secrets.SUPABASE_REGION }}"
-            echo "WEBHOOK_SECRET=${{ secrets.WEBHOOK_SECRET }}"
-          } > .env
+        run: echo "${{ secrets.ENV_FILE }}" > .env
 
       - name: Create deployment package
         run: |
