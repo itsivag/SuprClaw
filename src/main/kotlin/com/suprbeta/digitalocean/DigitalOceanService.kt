@@ -2,6 +2,7 @@ package com.suprbeta.digitalocean
 
 import com.suprbeta.digitalocean.models.CreateDropletRequest
 import com.suprbeta.digitalocean.models.DropletResponse
+import com.suprbeta.provider.VpsService
 import io.github.cdimascio.dotenv.dotenv
 import io.ktor.client.*
 import io.ktor.client.call.*
@@ -13,7 +14,7 @@ import io.ktor.server.application.*
 class DigitalOceanService(
     private val httpClient: HttpClient,
     private val application: Application
-) {
+) : VpsService {
     companion object {
         private const val API_BASE_URL = "https://api.digitalocean.com/v2/droplets"
         private const val DEFAULT_SIZE = "s-1vcpu-2gb"
@@ -99,4 +100,22 @@ class DigitalOceanService(
             header("Authorization", "Bearer $apiToken")
         }
     }
+
+    // ── VpsService implementation ────────────────────────────────────────────
+
+    override suspend fun createServer(name: String, password: String): VpsService.ServerCreateResult {
+        val response = createDroplet(name, password)
+        val dropletId = response.droplet?.id
+            ?: throw IllegalStateException("DigitalOcean did not return a droplet ID")
+        return VpsService.ServerCreateResult(serverId = dropletId)
+    }
+
+    override suspend fun getServer(serverId: Long): VpsService.ServerInfo {
+        val response = getDroplet(serverId)
+        val droplet = response.droplet
+        val ip = droplet?.networks?.v4?.firstOrNull { it.type == "public" }?.ip_address
+        return VpsService.ServerInfo(status = droplet?.status ?: "unknown", publicIpV4 = ip)
+    }
+
+    override suspend fun deleteServer(serverId: Long) = deleteDroplet(serverId)
 }

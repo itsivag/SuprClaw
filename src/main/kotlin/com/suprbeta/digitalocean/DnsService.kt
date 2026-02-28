@@ -5,6 +5,7 @@ import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
+import com.suprbeta.provider.DnsProvider
 import io.ktor.server.application.*
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -15,7 +16,7 @@ import kotlinx.serialization.json.jsonPrimitive
 class DnsService(
     private val httpClient: HttpClient,
     private val application: Application
-) {
+) : DnsProvider {
     private val dotenv = dotenv {
         ignoreIfMissing = true
         directory = "."

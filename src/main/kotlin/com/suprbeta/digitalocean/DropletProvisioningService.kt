@@ -7,6 +7,8 @@ import com.suprbeta.digitalocean.models.AgentInsert
 import com.suprbeta.digitalocean.models.UserDroplet
 import com.suprbeta.digitalocean.models.UserDropletInternal
 import com.suprbeta.firebase.FirestoreRepository
+import com.suprbeta.provider.DnsProvider
+import com.suprbeta.provider.VpsService
 import com.suprbeta.supabase.SupabaseAgentRepository
 import com.suprbeta.supabase.SupabaseManagementService
 import com.suprbeta.supabase.SupabaseSchemaRepository
@@ -55,8 +57,8 @@ interface DropletProvisioningService {
 }
 
 class DropletProvisioningServiceImpl(
-    private val digitalOceanService: DigitalOceanService,
-    private val dnsService: DnsService,
+    private val vpsService: VpsService,
+    private val dnsProvider: DnsProvider,
     private val firestoreRepository: FirestoreRepository,
     private val agentRepository: SupabaseAgentRepository,
     private val schemaRepository: SupabaseSchemaRepository,
@@ -102,16 +104,15 @@ class DropletProvisioningServiceImpl(
     override suspend fun createAndProvision(name: String): DropletProvisioningService.CreateResult {
         val password = UserDataGenerator.generatePassword()
 
-        val doResponse = digitalOceanService.createDroplet(name, password)
-        val dropletId = doResponse.droplet?.id
-            ?: throw IllegalStateException("DigitalOcean did not return a droplet ID")
+        val createResult = vpsService.createServer(name, password)
+        val dropletId = createResult.serverId
 
         val status = ProvisioningStatus(
             droplet_id = dropletId,
             droplet_name = name,
             phase = ProvisioningStatus.PHASE_CREATING,
             progress = 0.0,
-            message = "Droplet created, waiting for it to become active...",
+            message = "Server created, waiting for it to become active...",
             started_at = Instant.now().toString()
         )
         statuses[dropletId] = status
@@ -131,7 +132,7 @@ class DropletProvisioningServiceImpl(
             val dropletName = statusNow?.droplet_name ?: "droplet-$dropletId"
 
             // Phase 2 — Wait for active + IP and create Supabase project in parallel
-            updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_ACTIVE, "Polling DigitalOcean API and creating Supabase project...")
+            updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_ACTIVE, "Polling VPS provider API and creating Supabase project...")
 
             var ipAddress: String? = null
             var serviceKey: String? = null
@@ -205,7 +206,7 @@ class DropletProvisioningServiceImpl(
             val sanitizedName = dropletName.lowercase().replace(Regex("[^a-z0-9-]"), "-")
 
             // Create DNS record - this will throw if it fails, triggering cleanup
-            val subdomain = dnsService.createDnsRecord(sanitizedName, resolvedIp)
+            val subdomain = dnsProvider.createDnsRecord(sanitizedName, resolvedIp)
             logger.info("✅ Subdomain configured: $subdomain")
 
             // Phase 7 — Gateway verification
@@ -296,12 +297,12 @@ class DropletProvisioningServiceImpl(
         } catch (e: Exception) {
             logger.error("❌ Droplet $dropletId provisioning failed, cleaning up...", e)
 
-            // Clean up: destroy the failed droplet
+            // Clean up: destroy the failed server
             try {
-                digitalOceanService.deleteDroplet(dropletId)
-                logger.info("🗑️ Droplet $dropletId deleted after provisioning failure")
+                vpsService.deleteServer(dropletId)
+                logger.info("🗑️ Server $dropletId deleted after provisioning failure")
             } catch (deleteError: Exception) {
-                logger.error("Failed to delete droplet $dropletId: ${deleteError.message}")
+                logger.error("Failed to delete server $dropletId: ${deleteError.message}")
             }
 
             // Clean up: delete the Supabase project if it was created
@@ -342,13 +343,13 @@ class DropletProvisioningServiceImpl(
 
         val errors = mutableListOf<String>()
 
-        // 1 — Delete DigitalOcean droplet
+        // 1 — Delete VPS server
         try {
-            digitalOceanService.deleteDroplet(droplet.dropletId)
-            logger.info("🗑️ DigitalOcean droplet ${droplet.dropletId} deleted for userId=$userId")
+            vpsService.deleteServer(droplet.dropletId)
+            logger.info("🗑️ VPS server ${droplet.dropletId} deleted for userId=$userId")
         } catch (e: Exception) {
-            logger.error("Failed to delete DO droplet ${droplet.dropletId}", e)
-            errors += "DO droplet: ${e.message}"
+            logger.error("Failed to delete VPS server ${droplet.dropletId}", e)
+            errors += "VPS server: ${e.message}"
         }
 
         // 2 — Delete per-user Supabase project + remove user_droplets row from central project
@@ -392,29 +393,22 @@ class DropletProvisioningServiceImpl(
         val deadline = System.currentTimeMillis() + MAX_POLL_WAIT_MS
         while (System.currentTimeMillis() < deadline) {
             try {
-                val response = digitalOceanService.getDroplet(dropletId)
-                val droplet = response.droplet
+                val serverInfo = vpsService.getServer(dropletId)
 
-                if (droplet?.status == "active") {
-                    val ip = droplet.networks?.v4
-                        ?.firstOrNull { it.type == "public" }
-                        ?.ip_address
-
-                    if (ip != null) {
-                        logger.info("Droplet $dropletId is active")
-                        return ip
-                    }
+                if (serverInfo.status == "active" && serverInfo.publicIpV4 != null) {
+                    logger.info("Server $dropletId is active at ${serverInfo.publicIpV4}")
+                    return serverInfo.publicIpV4
                 }
 
-                logger.info("Droplet $dropletId status: ${droplet?.status ?: "unknown"}, waiting...")
+                logger.info("Server $dropletId status: ${serverInfo.status}, waiting...")
             } catch (e: Exception) {
-                logger.warn("Error polling droplet $dropletId: ${e.message}")
+                logger.warn("Error polling server $dropletId: ${e.message}")
             }
 
             delay(POLL_INTERVAL_MS)
         }
 
-        throw IllegalStateException("Droplet $dropletId did not become active within ${MAX_POLL_WAIT_MS / 1000}s")
+        throw IllegalStateException("Server $dropletId did not become active within ${MAX_POLL_WAIT_MS / 1000}s")
     }
 
     // ── Phase 5 — Gateway verification ──────────────────────────────────

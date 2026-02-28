@@ -15,6 +15,10 @@ import com.suprbeta.firebase.FirebaseAuthPlugin
 import com.suprbeta.firebase.FirebaseAuthService
 import com.suprbeta.firebase.FirebaseService
 import com.suprbeta.firebase.FirestoreRepository
+import com.suprbeta.hetzner.HetznerDnsService
+import com.suprbeta.hetzner.HetznerService
+import com.suprbeta.provider.DnsProvider
+import com.suprbeta.provider.VpsService
 import com.suprbeta.supabase.SupabaseAgentRepository
 import com.suprbeta.supabase.SupabaseManagementService
 import com.suprbeta.supabase.SupabaseSchemaRepository
@@ -194,8 +198,11 @@ fun Application.configureDigitalOcean(
     managementService: SupabaseManagementService,
     userClientProvider: UserSupabaseClientProvider
 ): DropletConfigurationService {
-    val digitalOceanService = DigitalOceanService(httpClient, this)
-    val dnsService = DnsService(httpClient, this)
+    // Select VPS + DNS providers based on VPS_PROVIDER env var (default: digitalocean)
+    val vpsProviderName = System.getenv("VPS_PROVIDER")?.lowercase() ?: "digitalocean"
+    val (vpsService, dnsProvider) = createProviders(httpClient, vpsProviderName)
+    log.info("VPS provider: $vpsProviderName")
+
     val sshCommandExecutor = SshCommandExecutorImpl(this)
     val dropletMcpService = DropletMcpServiceImpl(
         managementService = managementService,
@@ -211,8 +218,8 @@ fun Application.configureDigitalOcean(
         }
     )
     val provisioningService: DropletProvisioningService = DropletProvisioningServiceImpl(
-        digitalOceanService = digitalOceanService,
-        dnsService = dnsService,
+        vpsService = vpsService,
+        dnsProvider = dnsProvider,
         firestoreRepository = firestoreRepository,
         agentRepository = agentRepository,
         schemaRepository = schemaRepository,
@@ -233,8 +240,28 @@ fun Application.configureDigitalOcean(
     )
     configureDropletRoutes(provisioningService, firestoreRepository)
     configureAgentRoutes(configuringService, firestoreRepository, agentRepository, userClientProvider)
-    log.info("DigitalOcean service initialized with SSH provisioning and DNS management")
+    log.info("VPS provisioning initialized with SSH and DNS management ($vpsProviderName)")
     return configuringService
+}
+
+private fun Application.createProviders(
+    httpClient: HttpClient,
+    providerName: String
+): Pair<VpsService, DnsProvider> {
+    return when (providerName) {
+        "hetzner" -> {
+            log.info("Initializing Hetzner Cloud VPS and DNS providers")
+            Pair(HetznerService(httpClient, this), HetznerDnsService(httpClient, this))
+        }
+        else -> {
+            if (providerName != "digitalocean") {
+                log.warn("Unknown VPS_PROVIDER '$providerName', falling back to digitalocean")
+            }
+            log.info("Initializing DigitalOcean VPS and DNS providers")
+            val doService = DigitalOceanService(httpClient, this)
+            Pair(doService, DnsService(httpClient, this))
+        }
+    }
 }
 
 fun Application.configureSupabase(): SupabaseClient {
