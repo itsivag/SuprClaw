@@ -7,6 +7,8 @@ import com.suprbeta.digitalocean.models.AgentInsert
 import com.suprbeta.digitalocean.models.UserDroplet
 import com.suprbeta.digitalocean.models.UserDropletInternal
 import com.suprbeta.firebase.FirestoreRepository
+import com.suprbeta.infra.DnsProvider
+import com.suprbeta.infra.VpsProvider
 import com.suprbeta.supabase.SupabaseAgentRepository
 import com.suprbeta.supabase.SupabaseManagementService
 import com.suprbeta.supabase.SupabaseSchemaRepository
@@ -55,8 +57,8 @@ interface DropletProvisioningService {
 }
 
 class DropletProvisioningServiceImpl(
-    private val digitalOceanService: DigitalOceanService,
-    private val dnsService: DnsService,
+    private val vpsProvider: VpsProvider,
+    private val dnsProvider: DnsProvider,
     private val firestoreRepository: FirestoreRepository,
     private val agentRepository: SupabaseAgentRepository,
     private val schemaRepository: SupabaseSchemaRepository,
@@ -102,9 +104,8 @@ class DropletProvisioningServiceImpl(
     override suspend fun createAndProvision(name: String): DropletProvisioningService.CreateResult {
         val password = UserDataGenerator.generatePassword()
 
-        val doResponse = digitalOceanService.createDroplet(name, password)
-        val dropletId = doResponse.droplet?.id
-            ?: throw IllegalStateException("DigitalOcean did not return a droplet ID")
+        val createResult = vpsProvider.create(name, password)
+        val dropletId = createResult.id
 
         val status = ProvisioningStatus(
             droplet_id = dropletId,
@@ -205,7 +206,7 @@ class DropletProvisioningServiceImpl(
             val sanitizedName = dropletName.lowercase().replace(Regex("[^a-z0-9-]"), "-")
 
             // Create DNS record - this will throw if it fails, triggering cleanup
-            val subdomain = dnsService.createDnsRecord(sanitizedName, resolvedIp)
+            val subdomain = dnsProvider.createRecord(sanitizedName, resolvedIp)
             logger.info("✅ Subdomain configured: $subdomain")
 
             // Phase 7 — Gateway verification
@@ -296,9 +297,9 @@ class DropletProvisioningServiceImpl(
         } catch (e: Exception) {
             logger.error("❌ Droplet $dropletId provisioning failed, cleaning up...", e)
 
-            // Clean up: destroy the failed droplet
+            // Clean up: destroy the failed VPS
             try {
-                digitalOceanService.deleteDroplet(dropletId)
+                vpsProvider.delete(dropletId)
                 logger.info("🗑️ Droplet $dropletId deleted after provisioning failure")
             } catch (deleteError: Exception) {
                 logger.error("Failed to delete droplet $dropletId: ${deleteError.message}")
@@ -342,10 +343,10 @@ class DropletProvisioningServiceImpl(
 
         val errors = mutableListOf<String>()
 
-        // 1 — Delete DigitalOcean droplet
+        // 1 — Delete VPS
         try {
-            digitalOceanService.deleteDroplet(droplet.dropletId)
-            logger.info("🗑️ DigitalOcean droplet ${droplet.dropletId} deleted for userId=$userId")
+            vpsProvider.delete(droplet.dropletId)
+            logger.info("🗑️ VPS ${droplet.dropletId} deleted for userId=$userId")
         } catch (e: Exception) {
             logger.error("Failed to delete DO droplet ${droplet.dropletId}", e)
             errors += "DO droplet: ${e.message}"
@@ -392,29 +393,22 @@ class DropletProvisioningServiceImpl(
         val deadline = System.currentTimeMillis() + MAX_POLL_WAIT_MS
         while (System.currentTimeMillis() < deadline) {
             try {
-                val response = digitalOceanService.getDroplet(dropletId)
-                val droplet = response.droplet
+                val state = vpsProvider.getState(dropletId)
 
-                if (droplet?.status == "active") {
-                    val ip = droplet.networks?.v4
-                        ?.firstOrNull { it.type == "public" }
-                        ?.ip_address
-
-                    if (ip != null) {
-                        logger.info("Droplet $dropletId is active")
-                        return ip
-                    }
+                if (state.status == "active" && state.publicIpv4 != null) {
+                    logger.info("VPS $dropletId is active at ${state.publicIpv4}")
+                    return state.publicIpv4
                 }
 
-                logger.info("Droplet $dropletId status: ${droplet?.status ?: "unknown"}, waiting...")
+                logger.info("VPS $dropletId status: ${state.status}, waiting...")
             } catch (e: Exception) {
-                logger.warn("Error polling droplet $dropletId: ${e.message}")
+                logger.warn("Error polling VPS $dropletId: ${e.message}")
             }
 
             delay(POLL_INTERVAL_MS)
         }
 
-        throw IllegalStateException("Droplet $dropletId did not become active within ${MAX_POLL_WAIT_MS / 1000}s")
+        throw IllegalStateException("VPS $dropletId did not become active within ${MAX_POLL_WAIT_MS / 1000}s")
     }
 
     // ── Phase 5 — Gateway verification ──────────────────────────────────
