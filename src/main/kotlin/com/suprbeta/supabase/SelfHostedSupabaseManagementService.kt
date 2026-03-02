@@ -193,7 +193,7 @@ class SelfHostedSupabaseManagementService(
             else \
                 echo "PGRST_DB_SCHEMAS=${d}{CURRENT},$schemaName" >> .env; \
             fi && \
-            docker compose restart rest
+            docker compose up -d --force-recreate rest
         """.trimIndent()
         logger.info("Adding schema $schemaName to PostgREST and restarting rest")
         runSshCommand(sshHost, sshUser, command)
@@ -212,7 +212,7 @@ class SelfHostedSupabaseManagementService(
             else \
                 echo "PGRST_DB_SCHEMAS=${d}NEW" >> .env; \
             fi && \
-            docker compose restart rest
+            docker compose up -d --force-recreate rest
         """.trimIndent()
         logger.info("Removing schema $schemaName from PostgREST and restarting rest")
         runSshCommand(sshHost, sshUser, command)
