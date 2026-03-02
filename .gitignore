@@ -57,3 +57,4 @@ suprclaw-deploy.tar.gz
 SuprClaw.backup.*
 /.kotlin/
 .DS_Store
+/.env.bak

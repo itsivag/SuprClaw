@@ -62,7 +62,6 @@ class DropletMcpServiceImpl(
 
     override suspend fun configureMcpTools(droplet: UserDropletInternal, toolNames: List<String>) {
         val ip = droplet.ipAddress
-        val sshKey = droplet.sshKey
 
         val toolDefs = toolNames.mapNotNull { name ->
             McpToolRegistry.get(name) ?: run {
@@ -71,19 +70,19 @@ class DropletMcpServiceImpl(
             }
         }
 
-        writeMcpEnv(ip, sshKey, droplet, toolDefs)
-        writeMcpRoutes(ip, sshKey, toolDefs)
-        writeMcporterConfig(ip, sshKey, toolDefs, droplet.supabaseProjectRef)
+        writeMcpEnv(ip, droplet, toolDefs)
+        writeMcpRoutes(ip, toolDefs)
+        writeMcporterConfig(ip, toolDefs, droplet.supabaseProjectRef)
 
         // Restart mcporter if already running; silently skip if not yet started (provisioning).
-        sshCommandExecutor.runSshCommand(ip, sshKey, "sudo systemctl restart mcporter 2>/dev/null || true")
+        sshCommandExecutor.runSshCommand(ip, "sudo systemctl restart mcporter 2>/dev/null || true")
 
         logger.info("MCP tools configured on droplet ${droplet.dropletId}: ${toolNames.joinToString()}")
     }
 
     // ── File writers ─────────────────────────────────────────────────────
 
-    private fun writeMcpEnv(ip: String, sshKey: String, droplet: UserDropletInternal, toolDefs: List<McpToolDefinition>) {
+    private fun writeMcpEnv(ip: String, droplet: UserDropletInternal, toolDefs: List<McpToolDefinition>) {
         val lines = mutableListOf(
             "SUPABASE_PROJECT_REF=${droplet.supabaseProjectRef}",
             "SUPABASE_ACCESS_TOKEN=${managementService.managementToken}",
@@ -98,12 +97,12 @@ class DropletMcpServiceImpl(
             }
         }
         val encoded = Base64.getEncoder().encodeToString(lines.joinToString("\n").toByteArray())
-        sshCommandExecutor.runSshCommand(ip, sshKey, "echo $encoded | base64 -d | sudo tee /etc/suprclaw/mcp.env > /dev/null")
-        sshCommandExecutor.runSshCommand(ip, sshKey, "sudo chmod 600 /etc/suprclaw/mcp.env")
-        sshCommandExecutor.runSshCommand(ip, sshKey, "sudo chown root:root /etc/suprclaw/mcp.env")
+        sshCommandExecutor.runSshCommand(ip, "echo $encoded | base64 -d | sudo tee /etc/suprclaw/mcp.env > /dev/null")
+        sshCommandExecutor.runSshCommand(ip, "sudo chmod 600 /etc/suprclaw/mcp.env")
+        sshCommandExecutor.runSshCommand(ip, "sudo chown root:root /etc/suprclaw/mcp.env")
     }
 
-    private fun writeMcpRoutes(ip: String, sshKey: String, toolDefs: List<McpToolDefinition>) {
+    private fun writeMcpRoutes(ip: String, toolDefs: List<McpToolDefinition>) {
         val routes = toolDefs.joinToString(",") { tool ->
             val auth = when (tool.authType) {
                 "bearer" -> """{"type":"bearer","envVar":"${tool.authEnvVar}"}"""
@@ -114,18 +113,18 @@ class DropletMcpServiceImpl(
         }
         val json = "{$routes}"
         val encoded = Base64.getEncoder().encodeToString(json.toByteArray())
-        sshCommandExecutor.runSshCommand(ip, sshKey, "echo $encoded | base64 -d | sudo tee /etc/suprclaw/mcp-routes.json > /dev/null")
-        sshCommandExecutor.runSshCommand(ip, sshKey, "sudo chmod 600 /etc/suprclaw/mcp-routes.json")
-        sshCommandExecutor.runSshCommand(ip, sshKey, "sudo chown root:root /etc/suprclaw/mcp-routes.json")
+        sshCommandExecutor.runSshCommand(ip, "echo $encoded | base64 -d | sudo tee /etc/suprclaw/mcp-routes.json > /dev/null")
+        sshCommandExecutor.runSshCommand(ip, "sudo chmod 600 /etc/suprclaw/mcp-routes.json")
+        sshCommandExecutor.runSshCommand(ip, "sudo chown root:root /etc/suprclaw/mcp-routes.json")
     }
 
-    private fun writeMcporterConfig(ip: String, sshKey: String, toolDefs: List<McpToolDefinition>, projectRef: String) {
+    private fun writeMcporterConfig(ip: String, toolDefs: List<McpToolDefinition>, projectRef: String) {
         val servers = toolDefs.joinToString(",") { tool ->
             val url = tool.mcporterUrlTemplate.replace("{projectRef}", projectRef)
             """"${tool.name}":{"url":"$url","lifecycle":"keep-alive"}"""
         }
         val json = """{"mcpServers":{$servers}}"""
         val encoded = Base64.getEncoder().encodeToString(json.toByteArray())
-        sshCommandExecutor.runSshCommand(ip, sshKey, "echo $encoded | base64 -d > /home/openclaw/.mcporter/mcporter.json")
+        sshCommandExecutor.runSshCommand(ip, "echo $encoded | base64 -d > /home/openclaw/.mcporter/mcporter.json")
     }
 }

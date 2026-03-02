@@ -10,8 +10,11 @@ import kotlinx.serialization.json.Json
 
 class MarketplaceService(
     private val httpClient: HttpClient,
-    private val catalogUrl: String = System.getenv("MARKETPLACE_CATALOG_URL")
-        ?: "https://raw.githubusercontent.com/itsivag/SuprClaw/main/marketplace/agents.json"
+    private val catalogUrl: String = run {
+        val dotenv = io.github.cdimascio.dotenv.dotenv { ignoreIfMissing = true; directory = "." }
+        dotenv["MARKETPLACE_CATALOG_URL"] ?: System.getenv("MARKETPLACE_CATALOG_URL")
+            ?: "https://raw.githubusercontent.com/itsivag/SuprClaw/main/marketplace/agents.json"
+    }
 ) {
     private val json = Json { ignoreUnknownKeys = true }
     private val fetchMutex = Mutex()

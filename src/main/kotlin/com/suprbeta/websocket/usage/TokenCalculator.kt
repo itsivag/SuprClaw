@@ -19,7 +19,10 @@ class TokenCalculator(
     application: Application,
     private val httpClient: HttpClient,
     private val json: Json,
-    private val geminiApiKey: String? = System.getenv("GEMINI_API_KEY")
+    private val geminiApiKey: String? = run {
+        val dotenv = io.github.cdimascio.dotenv.dotenv { ignoreIfMissing = true; directory = "." }
+        dotenv["GEMINI_API_KEY"] ?: System.getenv("GEMINI_API_KEY")
+    }
 ) {
     companion object {
         private const val GEMINI_COUNT_TOKENS_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"

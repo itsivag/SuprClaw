@@ -167,7 +167,7 @@ class DropletProvisioningServiceImpl(
 
             // Phase 3b — Wait for cloud-init to apply password (deterministic probe)
             updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_SSH, "Waiting for cloud-init to finish (probing SSH auth)...")
-            sshCommandExecutor.waitForSshAuth(resolvedIp, password)
+            sshCommandExecutor.waitForSshAuth(resolvedIp)
 
             // Phase 4 — Configuration (gateway token + hook token)
             updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Configuring gateway token...")
@@ -176,13 +176,13 @@ class DropletProvisioningServiceImpl(
 
             // Write tokens directly to openclaw.json to guarantee exact values (openclaw config set transforms the input)
             val updateConfigScript = """node -e "const fs=require('fs'),p='/home/openclaw/.openclaw/openclaw.json',c=JSON.parse(fs.readFileSync(p,'utf8'));c.gateway=c.gateway||{};c.gateway.auth=c.gateway.auth||{};c.gateway.auth.token='$gatewayToken';c.gateway.remote=c.gateway.remote||{};c.gateway.remote.token='$gatewayToken';c.gateway.mode='local';c.hooks=c.hooks||{};c.hooks.token='$hookToken';fs.writeFileSync(p,JSON.stringify(c,null,2));" """
-            sshCommandExecutor.runSshCommand(resolvedIp, password, updateConfigScript)
+            sshCommandExecutor.runSshCommand(resolvedIp, updateConfigScript)
 
             // Sync token into user service file (openclaw validates against this even when using system service)
-            sshCommandExecutor.runSshCommand(resolvedIp, password, "sudo loginctl enable-linger openclaw")
-            sshCommandExecutor.runSshCommand(resolvedIp, password, "sed -i 's/Environment=OPENCLAW_GATEWAY_TOKEN=.*/Environment=OPENCLAW_GATEWAY_TOKEN=$gatewayToken/' /home/openclaw/.config/systemd/user/openclaw-gateway.service 2>/dev/null || true")
+            sshCommandExecutor.runSshCommand(resolvedIp, "sudo loginctl enable-linger openclaw")
+            sshCommandExecutor.runSshCommand(resolvedIp, "sed -i 's/Environment=OPENCLAW_GATEWAY_TOKEN=.*/Environment=OPENCLAW_GATEWAY_TOKEN=$gatewayToken/' /home/openclaw/.config/systemd/user/openclaw-gateway.service 2>/dev/null || true")
             delay(2000)
-            sshCommandExecutor.runSshCommand(resolvedIp, password, "XDG_RUNTIME_DIR=/run/user/\$(id -u) systemctl --user daemon-reload 2>/dev/null || true")
+            sshCommandExecutor.runSshCommand(resolvedIp, "XDG_RUNTIME_DIR=/run/user/\$(id -u) systemctl --user daemon-reload 2>/dev/null || true")
 
             logger.info("Gateway token set for droplet $dropletId: $gatewayToken")
 
@@ -192,14 +192,13 @@ class DropletProvisioningServiceImpl(
                 userId = userId,
                 dropletId = dropletId,
                 ipAddress = resolvedIp,
-                sshKey = password,
                 supabaseProjectRef = resolvedProjectRef,
                 gatewayToken = gatewayToken
             )
             dropletMcpService.configureMcpTools(bootstrapDroplet, McpToolRegistry.defaultTools)
 
-            sshCommandExecutor.runSshCommand(resolvedIp, password, "sudo systemctl start mcp-auth-proxy mcporter openclaw-gateway")
-            sshCommandExecutor.runSshCommand(resolvedIp, password, "nohup openclaw doctor --fix > /tmp/openclaw-doctor.log 2>&1 &")
+            sshCommandExecutor.runSshCommand(resolvedIp, "sudo systemctl start mcp-auth-proxy mcporter openclaw-gateway")
+            sshCommandExecutor.runSshCommand(resolvedIp, "nohup openclaw doctor --fix > /tmp/openclaw-doctor.log 2>&1 &")
             logger.info("MCP credentials written and services started for droplet $dropletId")
 
             // Phase 6 — DNS configuration (MANDATORY - fail if this fails)
@@ -212,12 +211,12 @@ class DropletProvisioningServiceImpl(
 
             // Phase 7 — Gateway verification
             updateStatus(dropletId, ProvisioningStatus.PHASE_VERIFYING, "Verifying gateway status...")
-            verifyGateway(resolvedIp, password)
+            verifyGateway(resolvedIp)
 
             // Phase 7 — Nginx reverse proxy + SSL (only for VPS/production)
             if (AppConfig.sslEnabled) {
                 updateStatus(dropletId, ProvisioningStatus.PHASE_NGINX, "Installing nginx and obtaining SSL certificate...")
-                setupNginxReverseProxy(resolvedIp, password, subdomain)
+                setupNginxReverseProxy(resolvedIp, subdomain)
             } else {
                 logger.info("ℹ️ Skipping Nginx/SSL setup (running in local mode)")
             }
@@ -227,7 +226,7 @@ class DropletProvisioningServiceImpl(
 
             // Final phase: real first connect, and if pairing is required, approve requestId once.
             // Per requirement: do not reconnect after approval.
-            approvePairingIfRequired(vpsGatewayUrl, gatewayToken, resolvedIp, password, dropletId)
+            approvePairingIfRequired(vpsGatewayUrl, gatewayToken, resolvedIp, dropletId)
 
             // Phase 5 — Initialize user project tables via Management API SQL
             updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Initializing user project tables...")
@@ -248,7 +247,6 @@ class DropletProvisioningServiceImpl(
                 vpsGatewayUrl = vpsGatewayUrl,          // Actual VPS URL for backend routing
                 gatewayToken = gatewayToken,
                 hookToken = hookToken,
-                sshKey = password,
                 ipAddress = resolvedIp,
                 subdomain = subdomain.takeIf { AppConfig.sslEnabled },
                 createdAt = Instant.now().toString(),
@@ -414,12 +412,12 @@ class DropletProvisioningServiceImpl(
 
     // ── Phase 5 — Gateway verification ──────────────────────────────────
 
-    private suspend fun verifyGateway(ipAddress: String, password: String) {
+    private suspend fun verifyGateway(ipAddress: String) {
         val deadline = System.currentTimeMillis() + (GATEWAY_VERIFY_TIMEOUT_S * 1000L)
 
         while (System.currentTimeMillis() < deadline) {
             try {
-                val output = sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw gateway status")
+                val output = sshCommandExecutor.runSshCommand(ipAddress, "openclaw gateway status")
                 logger.info("Gateway status: ${output.take(200)}")
                 return  // exit 0 means success
             } catch (e: Exception) {
@@ -433,7 +431,7 @@ class DropletProvisioningServiceImpl(
 
     // ── Phase 7 — Nginx reverse proxy + SSL ────────────────────────────
 
-    private fun setupNginxReverseProxy(ipAddress: String, password: String, subdomain: String) {
+    private fun setupNginxReverseProxy(ipAddress: String, subdomain: String) {
         logger.info("Configuring nginx on $ipAddress...")
 
         // Build initial HTTP-only nginx config for Let's Encrypt verification
@@ -459,21 +457,21 @@ server {
 """.trimIndent()
 
         val encoded = java.util.Base64.getEncoder().encodeToString(nginxConfigHttp.toByteArray())
-        sshCommandExecutor.runSshCommand(ipAddress, password, "echo $encoded | base64 -d | sudo tee /etc/nginx/sites-available/openclaw > /dev/null")
+        sshCommandExecutor.runSshCommand(ipAddress, "echo $encoded | base64 -d | sudo tee /etc/nginx/sites-available/openclaw > /dev/null")
 
         // Enable site and disable default
-        sshCommandExecutor.runSshCommand(ipAddress, password, "sudo ln -sf /etc/nginx/sites-available/openclaw /etc/nginx/sites-enabled/openclaw")
-        sshCommandExecutor.runSshCommand(ipAddress, password, "sudo rm -f /etc/nginx/sites-enabled/default")
+        sshCommandExecutor.runSshCommand(ipAddress, "sudo ln -sf /etc/nginx/sites-available/openclaw /etc/nginx/sites-enabled/openclaw")
+        sshCommandExecutor.runSshCommand(ipAddress, "sudo rm -f /etc/nginx/sites-enabled/default")
 
         // Test and reload nginx
-        sshCommandExecutor.runSshCommand(ipAddress, password, "sudo nginx -t")
-        sshCommandExecutor.runSshCommand(ipAddress, password, "sudo systemctl reload nginx")
+        sshCommandExecutor.runSshCommand(ipAddress, "sudo nginx -t")
+        sshCommandExecutor.runSshCommand(ipAddress, "sudo systemctl reload nginx")
 
         logger.info("Nginx configured for HTTP: port 80 -> $GATEWAY_PORT")
 
         // Copy wildcard SSL certificate from backend to droplet
         logger.info("Deploying wildcard SSL certificate to $subdomain...")
-        copySslCertificates(ipAddress, password)
+        copySslCertificates(ipAddress)
 
         // Update nginx config to use SSL
         val nginxConfigHttps = """
@@ -511,18 +509,18 @@ server {
 """.trimIndent()
 
         val encodedHttps = java.util.Base64.getEncoder().encodeToString(nginxConfigHttps.toByteArray())
-        sshCommandExecutor.runSshCommand(ipAddress, password, "echo $encodedHttps | base64 -d | sudo tee /etc/nginx/sites-available/openclaw > /dev/null")
+        sshCommandExecutor.runSshCommand(ipAddress, "echo $encodedHttps | base64 -d | sudo tee /etc/nginx/sites-available/openclaw > /dev/null")
 
         // Reload nginx with SSL config
-        sshCommandExecutor.runSshCommand(ipAddress, password, "sudo nginx -t")
-        sshCommandExecutor.runSshCommand(ipAddress, password, "sudo systemctl reload nginx")
+        sshCommandExecutor.runSshCommand(ipAddress, "sudo nginx -t")
+        sshCommandExecutor.runSshCommand(ipAddress, "sudo systemctl reload nginx")
 
         logger.info("✅ SSL configured for $subdomain using wildcard certificate")
 
         // Configure UFW firewall — allow SSH first (critical!), then HTTP, then enable
-        sshCommandExecutor.runSshCommand(ipAddress, password, "sudo ufw allow OpenSSH")
-        sshCommandExecutor.runSshCommand(ipAddress, password, "sudo ufw allow 'Nginx Full'")
-        sshCommandExecutor.runSshCommand(ipAddress, password, "sudo ufw --force enable")
+        sshCommandExecutor.runSshCommand(ipAddress, "sudo ufw allow OpenSSH")
+        sshCommandExecutor.runSshCommand(ipAddress, "sudo ufw allow 'Nginx Full'")
+        sshCommandExecutor.runSshCommand(ipAddress, "sudo ufw --force enable")
 
         logger.info("UFW firewall enabled: SSH + Nginx allowed")
     }
@@ -532,7 +530,7 @@ server {
     /**
      * Copies wildcard SSL certificate from backend server to droplet via SSH
      */
-    private fun copySslCertificates(ipAddress: String, password: String) {
+    private fun copySslCertificates(ipAddress: String) {
         val certPath = "/etc/letsencrypt/live/suprclaw.com"
 
         // Read certificate files from local filesystem
@@ -544,17 +542,17 @@ server {
         val privkeyEncoded = java.util.Base64.getEncoder().encodeToString(privkey.toByteArray())
 
         // Create SSL directory on droplet
-        sshCommandExecutor.runSshCommand(ipAddress, password, "sudo mkdir -p /etc/ssl/certs/suprclaw.com")
+        sshCommandExecutor.runSshCommand(ipAddress, "sudo mkdir -p /etc/ssl/certs/suprclaw.com")
 
         // Copy fullchain.pem
-        sshCommandExecutor.runSshCommand(ipAddress, password, "echo $fullchainEncoded | base64 -d | sudo tee /etc/ssl/certs/suprclaw.com/fullchain.pem > /dev/null")
+        sshCommandExecutor.runSshCommand(ipAddress, "echo $fullchainEncoded | base64 -d | sudo tee /etc/ssl/certs/suprclaw.com/fullchain.pem > /dev/null")
 
         // Copy privkey.pem
-        sshCommandExecutor.runSshCommand(ipAddress, password, "echo $privkeyEncoded | base64 -d | sudo tee /etc/ssl/certs/suprclaw.com/privkey.pem > /dev/null")
+        sshCommandExecutor.runSshCommand(ipAddress, "echo $privkeyEncoded | base64 -d | sudo tee /etc/ssl/certs/suprclaw.com/privkey.pem > /dev/null")
 
         // Set proper permissions
-        sshCommandExecutor.runSshCommand(ipAddress, password, "sudo chmod 644 /etc/ssl/certs/suprclaw.com/fullchain.pem")
-        sshCommandExecutor.runSshCommand(ipAddress, password, "sudo chmod 600 /etc/ssl/certs/suprclaw.com/privkey.pem")
+        sshCommandExecutor.runSshCommand(ipAddress, "sudo chmod 644 /etc/ssl/certs/suprclaw.com/fullchain.pem")
+        sshCommandExecutor.runSshCommand(ipAddress, "sudo chmod 600 /etc/ssl/certs/suprclaw.com/privkey.pem")
 
         logger.info("SSL certificates copied to $ipAddress")
     }
@@ -563,7 +561,6 @@ server {
         vpsGatewayUrl: String,
         gatewayToken: String,
         ipAddress: String,
-        password: String,
         dropletId: Long
     ) {
         val session = openClawConnector.connect(
@@ -616,7 +613,7 @@ server {
                         return
                     }
 
-                    sshCommandExecutor.runSshCommand(ipAddress, password, "openclaw devices approve $requestId")
+                    sshCommandExecutor.runSshCommand(ipAddress, "openclaw devices approve $requestId")
                     logger.info("Final pairing phase: approved requestId=$requestId for droplet $dropletId")
                     return
                 }

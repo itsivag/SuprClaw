@@ -38,7 +38,7 @@ class DropletConfigurationServiceImpl(
         val selectedModel = model?.trim()?.ifBlank { DEFAULT_AGENT_MODEL } ?: DEFAULT_AGENT_MODEL
         val command = "openclaw agents add $name --workspace $workspacePath --model $selectedModel"
         logger.info("Creating OpenClaw agent '$name' on droplet ${userDroplet.dropletId}")
-        val output = sshCommandExecutor.runSshCommand(userDroplet.ipAddress, userDroplet.sshKey, command)
+        val output = sshCommandExecutor.runSshCommand(userDroplet.ipAddress, command)
 
         val supabaseUrl = "https://${userDroplet.supabaseProjectRef}.supabase.co"
         val client = userClientProvider.getClient(supabaseUrl, userDroplet.supabaseServiceKey)
@@ -78,14 +78,14 @@ class DropletConfigurationServiceImpl(
             // Step 1: Create agent workspace via openclaw CLI
             logger.info("Installing marketplace agent '${agent.id}' on droplet ${userDroplet.dropletId}")
             val output = sshCommandExecutor.runSshCommand(
-                userDroplet.ipAddress, userDroplet.sshKey,
+                userDroplet.ipAddress,
                 "openclaw agents add ${agent.id} --workspace $workspacePath --model $DEFAULT_AGENT_MODEL"
             )
             agentCreated = true
 
             // Step 2: Sparse-checkout only the agent's source directory, then overwrite workspace files
             sshCommandExecutor.runSshCommand(
-                userDroplet.ipAddress, userDroplet.sshKey,
+                userDroplet.ipAddress,
                 "rm -rf $tmpDir" +
                 " && git clone --depth=1 --filter=blob:none --sparse $repo $tmpDir" +
                 " && git -C $tmpDir sparse-checkout set ${agent.sourcePath}" +
@@ -114,7 +114,7 @@ class DropletConfigurationServiceImpl(
                 logger.warn("Installation failed for agent '${agent.id}', rolling back...")
                 runCatching {
                     sshCommandExecutor.runSshCommand(
-                        userDroplet.ipAddress, userDroplet.sshKey,
+                        userDroplet.ipAddress,
                         "echo y | openclaw agents delete ${agent.id}"
                     )
                     logger.info("Rollback successful: agent '${agent.id}' deleted")
@@ -131,7 +131,7 @@ class DropletConfigurationServiceImpl(
         val command = "openclaw agents delete $name --force"
         logger.info("Deleting OpenClaw agent '$name' on droplet ${userDroplet.dropletId}")
         val output = try {
-            sshCommandExecutor.runSshCommandOnce(userDroplet.ipAddress, userDroplet.sshKey, command)
+            sshCommandExecutor.runSshCommandOnce(userDroplet.ipAddress, command)
         } catch (e: Exception) {
             if (e.message.orEmpty().contains("not found", ignoreCase = true)) {
                 logger.warn("Agent '$name' not found in openclaw registry, proceeding with cleanup")
@@ -140,7 +140,7 @@ class DropletConfigurationServiceImpl(
         }
 
         val workspacePath = "/home/openclaw/.openclaw/workspace-$name"
-        sshCommandExecutor.runSshCommand(userDroplet.ipAddress, userDroplet.sshKey, "rm -rf $workspacePath")
+        sshCommandExecutor.runSshCommand(userDroplet.ipAddress, "rm -rf $workspacePath")
         logger.info("Deleted workspace '$workspacePath' on droplet ${userDroplet.dropletId}")
 
         val supabaseUrl = "https://${userDroplet.supabaseProjectRef}.supabase.co"
@@ -159,10 +159,6 @@ class DropletConfigurationServiceImpl(
 
         if (!userDroplet.status.equals("active", ignoreCase = true)) {
             throw IllegalStateException("Droplet is not active")
-        }
-
-        if (userDroplet.sshKey.isBlank()) {
-            throw IllegalStateException("SSH key is not available for this droplet")
         }
 
         return userDroplet

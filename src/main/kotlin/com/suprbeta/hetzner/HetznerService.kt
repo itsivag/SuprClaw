@@ -32,8 +32,8 @@ class HetznerService(
 
     companion object {
         private const val SERVERS_URL = "https://api.hetzner.cloud/v1/servers"
-        private const val DEFAULT_SERVER_TYPE = "cx22"
-        private const val DEFAULT_LOCATION = "ash"
+        private const val DEFAULT_SERVER_TYPE = "cpx22"
+        private const val DEFAULT_LOCATION = "nbg1"
         private const val DEFAULT_IMAGE = "ubuntu-22.04"
     }
 
@@ -73,11 +73,15 @@ class HetznerService(
             application.log.info("Creating server with ${sshKeys.size} SSH key(s)")
         }
 
-        val response: CreateServerResponse = httpClient.post(SERVERS_URL) {
+        val httpResponse = httpClient.post(SERVERS_URL) {
             contentType(ContentType.Application.Json)
             header("Authorization", "Bearer $apiToken")
             setBody(request)
-        }.body()
+        }
+        val rawBody = httpResponse.body<String>()
+        application.log.info("Hetzner create server response [${httpResponse.status}]: $rawBody")
+        val response = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+            .decodeFromString(CreateServerResponse.serializer(), rawBody)
 
         val serverId = response.server?.id
             ?: throw IllegalStateException("Hetzner did not return a server ID")

@@ -119,7 +119,8 @@ fun createHttpClient(): HttpClient {
 }
 
 private fun configureJvmNetworking() {
-    val preferIpv4 = (System.getenv("PREFER_IPV4_STACK") ?: "false").equals("true", ignoreCase = true)
+    val dotenv = io.github.cdimascio.dotenv.dotenv { ignoreIfMissing = true; directory = "." }
+    val preferIpv4 = (dotenv["PREFER_IPV4_STACK"] ?: System.getenv("PREFER_IPV4_STACK") ?: "false").equals("true", ignoreCase = true)
     if (preferIpv4) {
         System.setProperty("java.net.preferIPv4Stack", "true")
         System.setProperty("java.net.preferIPv6Addresses", "false")
@@ -199,7 +200,8 @@ fun Application.configureDigitalOcean(
     userClientProvider: UserSupabaseClientProvider
 ): DropletConfigurationService {
     // Select VPS + DNS providers based on VPS_PROVIDER env var (default: digitalocean)
-    val vpsProviderName = System.getenv("VPS_PROVIDER")?.lowercase() ?: "digitalocean"
+    val dotenv = io.github.cdimascio.dotenv.dotenv { ignoreIfMissing = true; directory = "." }
+    val vpsProviderName = (dotenv["VPS_PROVIDER"] ?: System.getenv("VPS_PROVIDER"))?.lowercase() ?: "digitalocean"
     val (vpsService, dnsProvider) = createProviders(httpClient, vpsProviderName)
     log.info("VPS provider: $vpsProviderName")
 

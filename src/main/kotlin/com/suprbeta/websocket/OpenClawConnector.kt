@@ -273,8 +273,9 @@ class OpenClawConnector(
     }
 
     private fun loadDeviceKeyPairFromEnv(): java.security.KeyPair? {
-        val privateKeyB64 = System.getenv("SUPRCLAW_DEVICE_PRIVATE_KEY_B64")?.trim()
-        val publicKeyB64 = System.getenv("SUPRCLAW_DEVICE_PUBLIC_KEY_B64")?.trim()
+        val dotenv = io.github.cdimascio.dotenv.dotenv { ignoreIfMissing = true; directory = "." }
+        val privateKeyB64 = (dotenv["SUPRCLAW_DEVICE_PRIVATE_KEY_B64"] ?: System.getenv("SUPRCLAW_DEVICE_PRIVATE_KEY_B64"))?.trim()
+        val publicKeyB64 = (dotenv["SUPRCLAW_DEVICE_PUBLIC_KEY_B64"] ?: System.getenv("SUPRCLAW_DEVICE_PUBLIC_KEY_B64"))?.trim()
         if (privateKeyB64.isNullOrEmpty() && publicKeyB64.isNullOrEmpty()) {
             return null
         }
@@ -315,7 +316,8 @@ class OpenClawConnector(
     }
 
     private fun resolveDeviceIdentityPath(): Path {
-        val configuredPath = System.getenv("SUPRCLAW_DEVICE_IDENTITY_PATH")?.trim()
+        val dotenv = io.github.cdimascio.dotenv.dotenv { ignoreIfMissing = true; directory = "." }
+        val configuredPath = (dotenv["SUPRCLAW_DEVICE_IDENTITY_PATH"] ?: System.getenv("SUPRCLAW_DEVICE_IDENTITY_PATH"))?.trim()
         if (!configuredPath.isNullOrEmpty()) {
             return Path.of(configuredPath)
         }
