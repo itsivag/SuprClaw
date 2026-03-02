@@ -186,6 +186,7 @@ class SelfHostedSupabaseManagementService(
     // ── JDBC helper ────────────────────────────────────────────────────────
 
     private fun executeJdbc(sql: String) {
+        Class.forName("org.postgresql.Driver")
         DriverManager.getConnection(dbUrl).use { conn ->
             conn.createStatement().use { stmt ->
                 // Execute each statement separated by semicolons individually
