@@ -7,7 +7,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import net.schmizz.sshj.SSHClient
 import net.schmizz.sshj.transport.verification.PromiscuousVerifier
-import java.sql.DriverManager
 import java.util.concurrent.TimeUnit
 
 class SelfHostedSupabaseManagementService(
@@ -186,12 +185,14 @@ class SelfHostedSupabaseManagementService(
     // ── JDBC helper ────────────────────────────────────────────────────────
 
     private fun executeJdbc(sql: String) {
-        Class.forName("org.postgresql.Driver")
-        DriverManager.getConnection(dbUrl).use { conn ->
-            conn.createStatement().use { stmt ->
-                // Execute each statement separated by semicolons individually
-                // (JDBC drivers may not support multi-statement execution in one call)
-                val statements = sql.split(";").map { it.trim() }.filter { it.isNotBlank() }
+        // Bypass DriverManager (classloader issues in fat JARs) — use the driver directly.
+        val driver = org.postgresql.Driver()
+        val conn = driver.connect(dbUrl, java.util.Properties())
+            ?: throw java.sql.SQLException("PostgreSQL driver returned null for URL: $dbUrl")
+        conn.use {
+            it.createStatement().use { stmt ->
+                // Execute statements individually — some JDBC drivers reject multi-statement calls
+                val statements = sql.split(";").map { s -> s.trim() }.filter { s -> s.isNotBlank() }
                 for (statement in statements) {
                     stmt.execute(statement)
                 }
