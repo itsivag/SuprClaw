@@ -16,7 +16,7 @@ import io.ktor.server.application.*
  * Hetzner DNS provider.
  *
  * Required environment variables:
- *   HETZNER_DNS_TOKEN  — Hetzner DNS API token (obtain from dns.hetzner.com)
+ *   HETZNER_API_TOKEN  — Hetzner API token (shared with HetznerService)
  *   DOMAIN             — Root domain managed in Hetzner DNS (e.g. "example.com")
  */
 class HetznerDnsService(
@@ -33,8 +33,8 @@ class HetznerDnsService(
         directory = "."
     }
 
-    private val dnsToken: String = dotenv["HETZNER_DNS_TOKEN"]
-        ?: throw IllegalStateException("HETZNER_DNS_TOKEN not found in environment")
+    private val dnsToken: String = dotenv["HETZNER_API_TOKEN"]
+        ?: throw IllegalStateException("HETZNER_API_TOKEN not found in environment")
 
     private val domain: String = dotenv["DOMAIN"]
         ?: throw IllegalStateException("DOMAIN not found in environment")
