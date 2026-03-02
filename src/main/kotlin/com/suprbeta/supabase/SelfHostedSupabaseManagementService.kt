@@ -7,6 +7,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import net.schmizz.sshj.SSHClient
 import net.schmizz.sshj.transport.verification.PromiscuousVerifier
+import java.io.File
+import java.util.Base64
 import java.util.concurrent.TimeUnit
 
 class SelfHostedSupabaseManagementService(
@@ -38,10 +40,14 @@ class SelfHostedSupabaseManagementService(
 
     private val sshUser: String = env("SUPABASE_SELF_HOSTED_SSH_USER").ifBlank { "root" }
 
-    private val sshPassword: String = env("SUPABASE_SELF_HOSTED_SSH_PASSWORD")
-        .ifBlank { throw IllegalStateException("SUPABASE_SELF_HOSTED_SSH_PASSWORD not found in environment") }
-
     private val dockerDir: String = env("SUPABASE_SELF_HOSTED_DOCKER_DIR").ifBlank { "/opt/supabase/docker" }
+
+    private val privateKeyPem: String by lazy {
+        val b64 = dotenv["PROVISIONING_SSH_PRIVATE_KEY_B64"]
+            ?: System.getenv("PROVISIONING_SSH_PRIVATE_KEY_B64")
+            ?: throw IllegalStateException("PROVISIONING_SSH_PRIVATE_KEY_B64 not found in environment")
+        String(Base64.getDecoder().decode(b64))
+    }
 
     override val webhookBaseUrl: String = env("WEBHOOK_BASE_URL").ifBlank { "https://api.suprclaw.com" }
 
@@ -97,6 +103,20 @@ class SelfHostedSupabaseManagementService(
          *  redirected to the per-user schema.  Exposed as `internal` for unit testing. */
         internal fun adaptSqlForSchema(sql: String, schema: String): String =
             sql.replace("public.", "$schema.")
+
+        /**
+         * Normalises any supported DB URL variant to `jdbc:postgresql://…`.
+         * Exposed as `internal` for unit testing.
+         */
+        internal fun normaliseJdbcUrl(dbUrl: String): String = when {
+            dbUrl.startsWith("jdbc:postgresql://") -> dbUrl
+            dbUrl.startsWith("jdbc:postgres://")   -> "jdbc:postgresql://" + dbUrl.removePrefix("jdbc:postgres://")
+            dbUrl.startsWith("postgresql://")       -> "jdbc:$dbUrl"
+            dbUrl.startsWith("postgres://")         -> "jdbc:postgresql://" + dbUrl.removePrefix("postgres://")
+            else -> throw java.sql.SQLException(
+                "SUPABASE_SELF_HOSTED_DB_URL must use postgresql:// or postgres:// scheme, got: ${dbUrl.take(40)}"
+            )
+        }
     }
 
     /**
@@ -168,10 +188,10 @@ class SelfHostedSupabaseManagementService(
             cd $dockerDir && \
             CURRENT=${d}(grep '^PGRST_DB_SCHEMAS=' .env | cut -d= -f2) && \
             sed -i "s|^PGRST_DB_SCHEMAS=.*|PGRST_DB_SCHEMAS=${d}{CURRENT},$schemaName|" .env && \
-            docker compose restart pgrst
+            docker compose restart rest
         """.trimIndent()
         logger.info("Adding schema $schemaName to PostgREST and restarting pgrst")
-        runSshCommandWithPassword(sshHost, sshUser, sshPassword, command)
+        runSshCommand(sshHost, sshUser, command)
         logger.info("✅ PostgREST restarted with schema $schemaName")
     }
 
@@ -182,21 +202,30 @@ class SelfHostedSupabaseManagementService(
             CURRENT=${d}(grep '^PGRST_DB_SCHEMAS=' .env | cut -d= -f2) && \
             NEW=${d}(echo "${d}CURRENT" | tr ',' '\n' | grep -v '^$schemaName${d}' | tr '\n' ',' | sed 's/,${d}//') && \
             sed -i "s|^PGRST_DB_SCHEMAS=.*|PGRST_DB_SCHEMAS=${d}NEW|" .env && \
-            docker compose restart pgrst
+            docker compose restart rest
         """.trimIndent()
         logger.info("Removing schema $schemaName from PostgREST and restarting pgrst")
-        runSshCommandWithPassword(sshHost, sshUser, sshPassword, command)
+        runSshCommand(sshHost, sshUser, command)
         logger.info("✅ PostgREST restarted after removing schema $schemaName")
     }
 
     // ── JDBC helper ────────────────────────────────────────────────────────
 
     private fun executeJdbc(sql: String) {
-        // JDBC requires the jdbc: prefix. Accept plain postgresql:// or jdbc:postgresql:// in env.
-        val jdbcUrl = if (dbUrl.startsWith("jdbc:")) dbUrl else "jdbc:$dbUrl"
+        // Normalise to jdbc:postgresql:// regardless of how the env var was set.
+        // Supported input formats: postgresql://, postgres://, jdbc:postgresql://, jdbc:postgres://
+        val normalised = normaliseJdbcUrl(dbUrl)
+
+        // Extract credentials and pass them via Properties so that embedded user:password@
+        // in the URL cannot confuse the JDBC driver's URL parser.
+        // This is the root cause of "UnknownHostException: user:pass@host" failures.
+        val (jdbcUrl, props) = splitCredentials(normalised)
+
+        logger.info("JDBC connect → ${jdbcUrl.replace(Regex(":[^/][^/].*@"), ":***@")}") // mask password in logs
+
         // Bypass DriverManager (classloader issues in fat JARs) — use the driver directly.
         val driver = org.postgresql.Driver()
-        val conn = driver.connect(jdbcUrl, java.util.Properties())
+        val conn = driver.connect(jdbcUrl, props)
             ?: throw java.sql.SQLException("PostgreSQL driver returned null for URL: $jdbcUrl")
         conn.use {
             it.createStatement().use { stmt ->
@@ -209,40 +238,78 @@ class SelfHostedSupabaseManagementService(
         }
     }
 
-    // ── SSH password-auth helper ───────────────────────────────────────────
+    /**
+     * Separates embedded user:password from a `jdbc:postgresql://user:pass@host/db` URL.
+     * Returns a credential-free URL and a Properties object with `user` and `password` set.
+     * If there are no embedded credentials the URL is returned unchanged with empty Properties.
+     * Exposed as `internal` for unit testing.
+     */
+    internal fun splitCredentials(url: String): Pair<String, java.util.Properties> {
+        val props = java.util.Properties()
+        val prefix = "jdbc:postgresql://"
+        if (!url.startsWith(prefix)) return url to props
 
-    private fun runSshCommandWithPassword(host: String, user: String, password: String, command: String): String {
-        val ssh = SSHClient()
+        val rest = url.removePrefix(prefix)          // user:pass@host:port/db  (or just host:port/db)
+        val atIdx = rest.indexOf('@')
+        if (atIdx == -1) return url to props         // no credentials in URL
+
+        val userInfo = rest.substring(0, atIdx)      // "user:pass"
+        val hostPart = rest.substring(atIdx + 1)     // "host:port/db"
+
+        val colonIdx = userInfo.indexOf(':')
+        if (colonIdx == -1) {
+            props.setProperty("user", userInfo)
+        } else {
+            props.setProperty("user", userInfo.substring(0, colonIdx))
+            props.setProperty("password", userInfo.substring(colonIdx + 1))
+        }
+
+        return "$prefix$hostPart" to props
+    }
+
+    // ── SSH key-auth helper ────────────────────────────────────────────────
+
+    private fun runSshCommand(host: String, user: String, command: String): String {
+        val tempKey = File.createTempFile("suprclaw_supabase_key_", ".pem")
         return try {
-            ssh.addHostKeyVerifier(PromiscuousVerifier())
-            ssh.connectTimeout = 10_000
-            ssh.connect(host, 22)
-            ssh.authPassword(user, password)
+            tempKey.writeText(privateKeyPem)
+            tempKey.setReadable(false, false)
+            tempKey.setReadable(true, true)
 
-            val session = ssh.startSession()
+            val ssh = SSHClient()
             try {
-                val cmd = session.exec(command)
-                cmd.join(120, TimeUnit.SECONDS)
+                ssh.addHostKeyVerifier(PromiscuousVerifier())
+                ssh.connectTimeout = 10_000
+                ssh.connect(host, 22)
+                ssh.authPublickey(user, ssh.loadKeys(tempKey.absolutePath))
 
-                val stdout = cmd.inputStream.bufferedReader().readText()
-                val stderr = cmd.errorStream.bufferedReader().readText()
-                val exitStatus = cmd.exitStatus
+                val session = ssh.startSession()
+                try {
+                    val cmd = session.exec(command)
+                    cmd.join(120, TimeUnit.SECONDS)
 
-                logger.info("Self-hosted SSH exit=$exitStatus stdout=${stdout.take(200)}")
-                if (stderr.isNotBlank()) {
-                    logger.info("Self-hosted SSH stderr: ${stderr.take(200)}")
+                    val stdout = cmd.inputStream.bufferedReader().readText()
+                    val stderr = cmd.errorStream.bufferedReader().readText()
+                    val exitStatus = cmd.exitStatus
+
+                    logger.info("Self-hosted SSH exit=$exitStatus stdout=${stdout.take(200)}")
+                    if (stderr.isNotBlank()) {
+                        logger.info("Self-hosted SSH stderr: ${stderr.take(200)}")
+                    }
+
+                    if (exitStatus != null && exitStatus != 0) {
+                        throw RuntimeException("Self-hosted SSH command failed (exit=$exitStatus): ${stderr.take(500)}")
+                    }
+
+                    stdout
+                } finally {
+                    runCatching { session.close() }
                 }
-
-                if (exitStatus != null && exitStatus != 0) {
-                    throw RuntimeException("Self-hosted SSH command failed (exit=$exitStatus): ${stderr.take(500)}")
-                }
-
-                stdout
             } finally {
-                runCatching { session.close() }
+                runCatching { ssh.disconnect() }
             }
         } finally {
-            runCatching { ssh.disconnect() }
+            tempKey.delete()
         }
     }
 
