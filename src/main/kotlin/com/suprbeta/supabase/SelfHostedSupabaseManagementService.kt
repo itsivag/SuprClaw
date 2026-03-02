@@ -187,10 +187,15 @@ class SelfHostedSupabaseManagementService(
         val command = """
             cd $dockerDir && \
             CURRENT=${d}(grep '^PGRST_DB_SCHEMAS=' .env | cut -d= -f2) && \
-            sed -i "s|^PGRST_DB_SCHEMAS=.*|PGRST_DB_SCHEMAS=${d}{CURRENT},$schemaName|" .env && \
+            CURRENT=${d}{CURRENT:-public,storage,graphql_public} && \
+            if grep -q '^PGRST_DB_SCHEMAS=' .env; then \
+                sed -i "s|^PGRST_DB_SCHEMAS=.*|PGRST_DB_SCHEMAS=${d}{CURRENT},$schemaName|" .env; \
+            else \
+                echo "PGRST_DB_SCHEMAS=${d}{CURRENT},$schemaName" >> .env; \
+            fi && \
             docker compose restart rest
         """.trimIndent()
-        logger.info("Adding schema $schemaName to PostgREST and restarting pgrst")
+        logger.info("Adding schema $schemaName to PostgREST and restarting rest")
         runSshCommand(sshHost, sshUser, command)
         logger.info("✅ PostgREST restarted with schema $schemaName")
     }
@@ -200,11 +205,16 @@ class SelfHostedSupabaseManagementService(
         val command = """
             cd $dockerDir && \
             CURRENT=${d}(grep '^PGRST_DB_SCHEMAS=' .env | cut -d= -f2) && \
-            NEW=${d}(echo "${d}CURRENT" | tr ',' '\n' | grep -v '^$schemaName${d}' | tr '\n' ',' | sed 's/,${d}//') && \
-            sed -i "s|^PGRST_DB_SCHEMAS=.*|PGRST_DB_SCHEMAS=${d}NEW|" .env && \
+            CURRENT=${d}{CURRENT:-public,storage,graphql_public} && \
+            NEW=${d}(echo "${d}CURRENT" | tr ',' '\n' | grep -v "^$schemaName${d}" | tr '\n' ',' | sed 's/,${d}//') && \
+            if grep -q '^PGRST_DB_SCHEMAS=' .env; then \
+                sed -i "s|^PGRST_DB_SCHEMAS=.*|PGRST_DB_SCHEMAS=${d}NEW|" .env; \
+            else \
+                echo "PGRST_DB_SCHEMAS=${d}NEW" >> .env; \
+            fi && \
             docker compose restart rest
         """.trimIndent()
-        logger.info("Removing schema $schemaName from PostgREST and restarting pgrst")
+        logger.info("Removing schema $schemaName from PostgREST and restarting rest")
         runSshCommand(sshHost, sshUser, command)
         logger.info("✅ PostgREST restarted after removing schema $schemaName")
     }
