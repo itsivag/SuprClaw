@@ -57,4 +57,21 @@ class JdbcDriverFatJarTest {
         val driver = org.postgresql.Driver()
         assertTrue(!driver.acceptsURL("jdbc:mysql://localhost/test"))
     }
+
+    @Test
+    fun `postgresql Driver rejects plain postgresql scheme without jdbc prefix`() {
+        // Regression: SUPABASE_SELF_HOSTED_DB_URL may be set as postgresql:// (no jdbc: prefix).
+        // driver.connect() returns null for unrecognised URLs — must prepend jdbc: before calling.
+        val driver = org.postgresql.Driver()
+        val conn = driver.connect("postgresql://localhost:5432/postgres", java.util.Properties())
+        assertNull(conn, "Driver must return null for postgresql:// (missing jdbc: prefix)")
+    }
+
+    @Test
+    fun `postgresql Driver acceptsURL requires jdbc prefix`() {
+        val driver = org.postgresql.Driver()
+        assertTrue(driver.acceptsURL("jdbc:postgresql://localhost:5432/postgres"))
+        assertTrue(!driver.acceptsURL("postgresql://localhost:5432/postgres"),
+            "Driver must NOT accept plain postgresql:// without jdbc: prefix")
+    }
 }

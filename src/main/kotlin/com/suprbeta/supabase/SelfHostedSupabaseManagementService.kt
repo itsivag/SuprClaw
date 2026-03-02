@@ -85,11 +85,18 @@ class SelfHostedSupabaseManagementService(
      */
     override suspend fun runSql(projectRef: String, sql: String) {
         logger.info("Running SQL on self-hosted schema $projectRef (${sql.length} chars)")
-        val adapted = sql.replace("public.", "$projectRef.")
+        val adapted = SelfHostedSupabaseManagementService.adaptSqlForSchema(sql, projectRef)
         withContext(Dispatchers.IO) {
             executeJdbc(adapted)
         }
         logger.info("✅ SQL executed successfully on schema $projectRef")
+    }
+
+    companion object {
+        /** Replaces every `public.` prefix with `$schema.` so SQL targeting the public schema is
+         *  redirected to the per-user schema.  Exposed as `internal` for unit testing. */
+        internal fun adaptSqlForSchema(sql: String, schema: String): String =
+            sql.replace("public.", "$schema.")
     }
 
     /**
@@ -185,10 +192,12 @@ class SelfHostedSupabaseManagementService(
     // ── JDBC helper ────────────────────────────────────────────────────────
 
     private fun executeJdbc(sql: String) {
+        // JDBC requires the jdbc: prefix. Accept plain postgresql:// or jdbc:postgresql:// in env.
+        val jdbcUrl = if (dbUrl.startsWith("jdbc:")) dbUrl else "jdbc:$dbUrl"
         // Bypass DriverManager (classloader issues in fat JARs) — use the driver directly.
         val driver = org.postgresql.Driver()
-        val conn = driver.connect(dbUrl, java.util.Properties())
-            ?: throw java.sql.SQLException("PostgreSQL driver returned null for URL: $dbUrl")
+        val conn = driver.connect(jdbcUrl, java.util.Properties())
+            ?: throw java.sql.SQLException("PostgreSQL driver returned null for URL: $jdbcUrl")
         conn.use {
             it.createStatement().use { stmt ->
                 // Execute statements individually — some JDBC drivers reject multi-statement calls

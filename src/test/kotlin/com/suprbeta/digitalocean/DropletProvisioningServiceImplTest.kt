@@ -301,6 +301,62 @@ class DropletProvisioningServiceImplTest {
         every { userClientProvider.getClient(any(), any(), any()) } returns mockk(relaxed = true)
     }
 
+    // ── Teardown tests ────────────────────────────────────────────────────────
+
+    @Test
+    fun `teardown throws IllegalStateException when no droplet found for user`() = testApplication {
+        val service = buildService(application)
+        coEvery { firestoreRepository.getUserDropletInternal("ghost") } returns null
+
+        assertFailsWith<IllegalStateException> {
+            service.teardown("ghost")
+        }
+    }
+
+    @Test
+    fun `teardown deletes VPS server cleanupUserProject and Firestore doc`() = testApplication {
+        val service = buildService(application)
+        val droplet = UserDropletInternal(
+            userId = "user-td",
+            dropletId = 77L,
+            supabaseProjectRef = "proj_teardown"
+        )
+        coEvery { firestoreRepository.getUserDropletInternal("user-td") } returns droplet
+        coEvery { vpsService.deleteServer(77L) } just Runs
+        coEvery { schemaRepository.cleanupUserProject(managementService, "proj_teardown", "user-td") } just Runs
+        coEvery { firestoreRepository.deleteUserDroplet("user-td") } just Runs
+        coEvery { firestoreRepository.deleteProjectRefMapping("proj_teardown") } just Runs
+
+        service.teardown("user-td")
+
+        coVerify { vpsService.deleteServer(77L) }
+        coVerify { schemaRepository.cleanupUserProject(managementService, "proj_teardown", "user-td") }
+        coVerify { firestoreRepository.deleteUserDroplet("user-td") }
+        coVerify { firestoreRepository.deleteProjectRefMapping("proj_teardown") }
+    }
+
+    @Test
+    fun `teardown skips cleanupUserProject when supabaseProjectRef is blank`() = testApplication {
+        val service = buildService(application)
+        val droplet = UserDropletInternal(
+            userId = "user-noref",
+            dropletId = 88L,
+            supabaseProjectRef = ""   // blank — no project was created
+        )
+        coEvery { firestoreRepository.getUserDropletInternal("user-noref") } returns droplet
+        coEvery { vpsService.deleteServer(88L) } just Runs
+        coEvery { firestoreRepository.deleteUserDroplet("user-noref") } just Runs
+
+        service.teardown("user-noref")
+
+        coVerify { vpsService.deleteServer(88L) }
+        coVerify(exactly = 0) { schemaRepository.cleanupUserProject(any(), any(), any()) }
+        coVerify { firestoreRepository.deleteUserDroplet("user-noref") }
+        coVerify(exactly = 0) { firestoreRepository.deleteProjectRefMapping(any()) }
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
     private fun captureLastSavedDroplet(): UserDropletInternal {
         val slot = slot<UserDropletInternal>()
         coVerify { firestoreRepository.saveUserDroplet(capture(slot)) }
