@@ -1,5 +1,6 @@
 package com.suprbeta.digitalocean
 
+import com.suprbeta.config.AppConfig
 import com.suprbeta.core.SshCommandExecutor
 import com.suprbeta.digitalocean.models.ProvisioningStatus
 import com.suprbeta.digitalocean.models.UserDropletInternal
@@ -15,8 +16,10 @@ import com.suprbeta.websocket.OpenClawConnector
 import io.ktor.server.application.*
 import io.ktor.server.testing.*
 import io.mockk.*
-import kotlinx.coroutines.test.runTest
+import org.junit.After
+import org.junit.Before
 import kotlin.test.*
+import kotlin.test.Test
 
 /**
  * Unit tests for [DropletProvisioningServiceImpl].
@@ -26,6 +29,19 @@ import kotlin.test.*
  *    phase is skipped and no disk reads of /etc/letsencrypt are attempted.
  */
 class DropletProvisioningServiceImplTest {
+
+    // ── AppConfig mock (SSL disabled so no cert file reads in test environment) ──
+
+    @Before
+    fun mockSslDisabled() {
+        mockkObject(AppConfig)
+        every { AppConfig.sslEnabled } returns false
+    }
+
+    @After
+    fun unmockAppConfig() {
+        unmockkObject(AppConfig)
+    }
 
     // ── Shared mocks ──────────────────────────────────────────────────────────
 
