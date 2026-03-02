@@ -104,7 +104,8 @@ class DropletProvisioningServiceImpl(
     override suspend fun createAndProvision(name: String): DropletProvisioningService.CreateResult {
         val password = UserDataGenerator.generatePassword()
 
-        val createResult = vpsService.createServer(name, password)
+        val sanitizedName = name.lowercase().replace(Regex("[^a-z0-9-]"), "-")
+        val createResult = vpsService.createServer(sanitizedName, password)
         val dropletId = createResult.serverId
 
         val status = ProvisioningStatus(
