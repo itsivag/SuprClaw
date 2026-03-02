@@ -1,8 +1,9 @@
 package com.suprbeta.hetzner
 
-import com.suprbeta.hetzner.models.HetznerCreateDnsRecordRequest
-import com.suprbeta.hetzner.models.HetznerCreateDnsRecordResponse
-import com.suprbeta.hetzner.models.HetznerDnsRecordsResponse
+import com.suprbeta.hetzner.models.HetznerCreateRRsetRequest
+import com.suprbeta.hetzner.models.HetznerCreateRRsetResponse
+import com.suprbeta.hetzner.models.HetznerRRsetRecord
+import com.suprbeta.hetzner.models.HetznerRRsetsResponse
 import com.suprbeta.hetzner.models.HetznerZonesResponse
 import com.suprbeta.provider.DnsProvider
 import io.github.cdimascio.dotenv.dotenv
@@ -13,10 +14,10 @@ import io.ktor.http.*
 import io.ktor.server.application.*
 
 /**
- * Hetzner DNS provider.
+ * Hetzner DNS provider using the Cloud API (api.hetzner.cloud/v1).
  *
  * Required environment variables:
- *   HETZNER_API_TOKEN  — Hetzner API token (shared with HetznerService)
+ *   HETZNER_API_TOKEN  — Hetzner Cloud API token (same token used for compute)
  *   DOMAIN             — Root domain managed in Hetzner DNS (e.g. "example.com")
  */
 class HetznerDnsService(
@@ -25,7 +26,7 @@ class HetznerDnsService(
 ) : DnsProvider {
 
     companion object {
-        private const val DNS_BASE_URL = "https://dns.hetzner.com/api/v1"
+        private const val DNS_BASE_URL = "https://api.hetzner.cloud/v1"
     }
 
     private val dotenv = dotenv {
@@ -40,14 +41,14 @@ class HetznerDnsService(
         ?: throw IllegalStateException("DOMAIN not found in environment")
 
     /** Cached zone ID — resolved once on first use. */
-    private var zoneId: String? = null
+    private var zoneId: Long? = null
 
-    private suspend fun resolveZoneId(): String {
+    private suspend fun resolveZoneId(): Long {
         zoneId?.let { return it }
 
         val response: HetznerZonesResponse = httpClient.get("$DNS_BASE_URL/zones") {
             parameter("name", domain)
-            header("Auth-API-Token", dnsToken)
+            header("Authorization", "Bearer $dnsToken")
         }.body()
 
         val id = response.zones?.firstOrNull()?.id
@@ -65,22 +66,21 @@ class HetznerDnsService(
         // Delete any existing A records for this subdomain first
         deleteExistingRecords(subdomain, zId)
 
-        val request = HetznerCreateDnsRecordRequest(
-            zone_id = zId,
-            type = "A",
+        val request = HetznerCreateRRsetRequest(
             name = subdomain,
-            value = ipAddress,
+            type = "A",
+            records = listOf(HetznerRRsetRecord(value = ipAddress)),
             ttl = 300
         )
 
-        val response: HetznerCreateDnsRecordResponse = httpClient.post("$DNS_BASE_URL/records") {
+        val response: HetznerCreateRRsetResponse = httpClient.post("$DNS_BASE_URL/zones/$zId/rrsets") {
             contentType(ContentType.Application.Json)
-            header("Auth-API-Token", dnsToken)
+            header("Authorization", "Bearer $dnsToken")
             setBody(request)
         }.body()
 
-        response.record?.id
-            ?: throw IllegalStateException("Hetzner DNS did not return a record ID")
+        response.rrset?.id
+            ?: throw IllegalStateException("Hetzner DNS did not return an RRset ID")
 
         val fullDomain = "$subdomain.$domain"
         application.log.info("Hetzner DNS record created: $fullDomain -> $ipAddress")
@@ -91,36 +91,31 @@ class HetznerDnsService(
         application.log.info("Deleting Hetzner DNS record: $subdomain.$domain")
         try {
             val zId = resolveZoneId()
-            deleteExistingRecords(subdomain, zId)
+            httpClient.delete("$DNS_BASE_URL/zones/$zId/rrsets/$subdomain/A") {
+                header("Authorization", "Bearer $dnsToken")
+            }
+            application.log.info("Deleted Hetzner DNS record: $subdomain.$domain")
         } catch (e: Exception) {
             application.log.warn("Error deleting Hetzner DNS record for $subdomain: ${e.message}")
         }
     }
 
-    private suspend fun deleteExistingRecords(subdomain: String, zoneId: String) {
+    private suspend fun deleteExistingRecords(subdomain: String, zoneId: Long) {
         try {
-            val response: HetznerDnsRecordsResponse = httpClient.get("$DNS_BASE_URL/records") {
-                parameter("zone_id", zoneId)
-                header("Auth-API-Token", dnsToken)
+            val response: HetznerRRsetsResponse = httpClient.get("$DNS_BASE_URL/zones/$zoneId/rrsets") {
+                parameter("type", "A")
+                header("Authorization", "Bearer $dnsToken")
             }.body()
 
-            val matchingIds = response.records
-                ?.filter { it.type == "A" && it.name == subdomain }
-                ?.mapNotNull { it.id }
-                ?: emptyList()
-
-            matchingIds.forEach { id ->
-                try {
-                    httpClient.delete("$DNS_BASE_URL/records/$id") {
-                        header("Auth-API-Token", dnsToken)
-                    }
-                    application.log.info("Deleted Hetzner DNS record $id for $subdomain")
-                } catch (e: Exception) {
-                    application.log.warn("Failed to delete Hetzner DNS record $id: ${e.message}")
+            val exists = response.rrsets?.any { it.name == subdomain } ?: false
+            if (exists) {
+                httpClient.delete("$DNS_BASE_URL/zones/$zoneId/rrsets/$subdomain/A") {
+                    header("Authorization", "Bearer $dnsToken")
                 }
+                application.log.info("Deleted existing Hetzner DNS record for $subdomain")
             }
         } catch (e: Exception) {
-            application.log.warn("Error listing Hetzner DNS records for $subdomain: ${e.message}")
+            application.log.warn("Error checking/deleting existing Hetzner DNS record for $subdomain: ${e.message}")
         }
     }
 }

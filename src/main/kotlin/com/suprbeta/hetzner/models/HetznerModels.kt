@@ -53,7 +53,7 @@ data class HetznerIpv4(
     val dns_ptr: String? = null
 )
 
-// ── Hetzner DNS models ───────────────────────────────────────────────────────
+// ── Hetzner DNS models (api.hetzner.cloud/v1) ────────────────────────────────
 
 @Serializable
 data class HetznerZonesResponse(
@@ -62,35 +62,37 @@ data class HetznerZonesResponse(
 
 @Serializable
 data class HetznerZone(
-    val id: String? = null,
+    val id: Long? = null,
     val name: String? = null
 )
 
 @Serializable
-data class HetznerCreateDnsRecordRequest(
-    val zone_id: String,
-    val type: String,
+data class HetznerCreateRRsetRequest(
     val name: String,
-    val value: String,
+    val type: String,
+    val records: List<HetznerRRsetRecord>,
     val ttl: Int
 )
 
 @Serializable
-data class HetznerCreateDnsRecordResponse(
-    val record: HetznerDnsRecord? = null
+data class HetznerRRsetRecord(
+    val value: String
 )
 
 @Serializable
-data class HetznerDnsRecordsResponse(
-    val records: List<HetznerDnsRecord>? = null
+data class HetznerCreateRRsetResponse(
+    val rrset: HetznerRRset? = null
 )
 
 @Serializable
-data class HetznerDnsRecord(
+data class HetznerRRsetsResponse(
+    val rrsets: List<HetznerRRset>? = null
+)
+
+@Serializable
+data class HetznerRRset(
     val id: String? = null,
-    val zone_id: String? = null,
-    val type: String? = null,
     val name: String? = null,
-    val value: String? = null,
-    val ttl: Int? = null
+    val type: String? = null,
+    val zone: Long? = null
 )
