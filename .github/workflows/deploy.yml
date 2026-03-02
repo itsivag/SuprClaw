@@ -67,15 +67,24 @@ jobs:
 
       - name: Test SSH connection
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.SERVER_IP }} "echo 'SSH connection successful'"
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$DEPLOY_USER@$SERVER_IP" "echo 'SSH connection successful'"
+        env:
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          SERVER_IP: ${{ secrets.SERVER_IP }}
 
       - name: Upload to server
         run: |
-          scp -i ~/.ssh/deploy_key suprclaw-deploy.tar.gz ${{ secrets.DEPLOY_USER }}@${{ secrets.SERVER_IP }}:~/
+          scp -i ~/.ssh/deploy_key suprclaw-deploy.tar.gz "$DEPLOY_USER@$SERVER_IP":~/
+        env:
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          SERVER_IP: ${{ secrets.SERVER_IP }}
 
       - name: Deploy on server
+        env:
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          SERVER_IP: ${{ secrets.SERVER_IP }}
         run: |
-          ssh -i ~/.ssh/deploy_key ${{ secrets.DEPLOY_USER }}@${{ secrets.SERVER_IP }} << 'ENDSSH'
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$SERVER_IP" << 'ENDSSH'
             cd ~
 
             # Backup config files BEFORE moving directory
