@@ -20,6 +20,8 @@ import com.suprbeta.hetzner.HetznerService
 import com.suprbeta.provider.DnsProvider
 import com.suprbeta.provider.VpsService
 import com.suprbeta.supabase.SupabaseAgentRepository
+import com.suprbeta.supabase.HostedSupabaseManagementService
+import com.suprbeta.supabase.SelfHostedSupabaseManagementService
 import com.suprbeta.supabase.SupabaseManagementService
 import com.suprbeta.supabase.SupabaseSchemaRepository
 import com.suprbeta.supabase.SupabaseService
@@ -72,7 +74,15 @@ fun Application.module() {
     // Create shared HttpClient for API calls
     val httpClient = createHttpClient()
 
-    val managementService = SupabaseManagementService(httpClient, this)
+    val dotenvForMode = io.github.cdimascio.dotenv.dotenv { ignoreIfMissing = true; directory = "." }
+    val supabaseMode = (dotenvForMode["SUPABASE_MODE"] ?: System.getenv("SUPABASE_MODE"))?.lowercase() ?: "hosted"
+    val managementService: SupabaseManagementService = if (supabaseMode == "self-hosted") {
+        log.info("Supabase mode: self-hosted")
+        SelfHostedSupabaseManagementService(httpClient, this)
+    } else {
+        log.info("Supabase mode: hosted")
+        HostedSupabaseManagementService(httpClient, this)
+    }
 
     configureWebSockets(httpClient, firebaseAuthService, firestoreRepository)
     val configuringService = configureDigitalOcean(
@@ -196,7 +206,7 @@ fun Application.configureDigitalOcean(
     firestoreRepository: FirestoreRepository,
     agentRepository: SupabaseAgentRepository,
     schemaRepository: SupabaseSchemaRepository,
-    managementService: SupabaseManagementService,
+    managementService: SupabaseManagementService,  // interface — hosted or self-hosted
     userClientProvider: UserSupabaseClientProvider
 ): DropletConfigurationService {
     // Select VPS + DNS providers based on VPS_PROVIDER env var (default: digitalocean)

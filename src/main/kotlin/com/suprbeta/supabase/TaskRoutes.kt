@@ -28,8 +28,7 @@ fun Application.configureTaskRoutes(
                         call.respond(HttpStatusCode.NotFound, mapOf("error" to "No droplet found for user"))
                         return@get
                     }
-                    val supabaseUrl = "https://${droplet.supabaseProjectRef}.supabase.co"
-                    val client = userClientProvider.getClient(supabaseUrl, droplet.supabaseServiceKey)
+                    val client = userClientProvider.getClient(droplet.resolveSupabaseUrl(), droplet.supabaseServiceKey, droplet.supabaseSchema)
                     try {
                         val tasks = taskRepository.getTasks(client)
                         call.respond(
@@ -65,8 +64,7 @@ fun Application.configureTaskRoutes(
                         call.respond(HttpStatusCode.NotFound, mapOf("error" to "No droplet found for user"))
                         return@get
                     }
-                    val supabaseUrl = "https://${droplet.supabaseProjectRef}.supabase.co"
-                    val client = userClientProvider.getClient(supabaseUrl, droplet.supabaseServiceKey)
+                    val client = userClientProvider.getClient(droplet.resolveSupabaseUrl(), droplet.supabaseServiceKey, droplet.supabaseSchema)
                     try {
                         val detail = taskRepository.getTaskDetail(client, id)
                         if (detail == null) {

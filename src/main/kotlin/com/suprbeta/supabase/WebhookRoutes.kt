@@ -88,8 +88,7 @@ fun Application.configureWebhookRoutes(
             }
 
             // Get agent session_key from the user's Supabase project
-            val supabaseUrl = "https://${droplet.supabaseProjectRef}.supabase.co"
-            val client = userClientProvider.getClient(supabaseUrl, droplet.supabaseServiceKey)
+            val client = userClientProvider.getClient(droplet.resolveSupabaseUrl(), droplet.supabaseServiceKey, droplet.supabaseSchema)
             val agent = agentRepository.getAgentById(client, agentId)
             if (agent == null) {
                 log.warn("Webhook: agent $agentId not found in project $projectRef")

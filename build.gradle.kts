@@ -47,6 +47,7 @@ dependencies {
     implementation(platform("io.github.jan-tennert.supabase:bom:$supabase_version"))
     implementation("io.github.jan-tennert.supabase:supabase-kt")
     implementation("io.github.jan-tennert.supabase:postgrest-kt")
+    implementation("org.postgresql:postgresql:42.7.4")
     testImplementation("io.ktor:ktor-server-test-host")
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit:$kotlin_version")
 }

@@ -40,8 +40,7 @@ class DropletConfigurationServiceImpl(
         logger.info("Creating OpenClaw agent '$name' on droplet ${userDroplet.dropletId}")
         val output = sshCommandExecutor.runSshCommand(userDroplet.ipAddress, command)
 
-        val supabaseUrl = "https://${userDroplet.supabaseProjectRef}.supabase.co"
-        val client = userClientProvider.getClient(supabaseUrl, userDroplet.supabaseServiceKey)
+        val client = userClientProvider.getClient(userDroplet.resolveSupabaseUrl(), userDroplet.supabaseServiceKey, userDroplet.supabaseSchema)
         agentRepository.saveAgent(
             client,
             AgentInsert(
@@ -96,8 +95,7 @@ class DropletConfigurationServiceImpl(
             logger.info("Marketplace config applied to $workspacePath for agent '${agent.id}'")
 
             // Step 3: Save to user's Supabase project
-            val supabaseUrl = "https://${userDroplet.supabaseProjectRef}.supabase.co"
-            val client = userClientProvider.getClient(supabaseUrl, userDroplet.supabaseServiceKey)
+            val client = userClientProvider.getClient(userDroplet.resolveSupabaseUrl(), userDroplet.supabaseServiceKey, userDroplet.supabaseSchema)
             agentRepository.saveAgent(
                 client,
                 AgentInsert(
@@ -143,8 +141,7 @@ class DropletConfigurationServiceImpl(
         sshCommandExecutor.runSshCommand(userDroplet.ipAddress, "rm -rf $workspacePath")
         logger.info("Deleted workspace '$workspacePath' on droplet ${userDroplet.dropletId}")
 
-        val supabaseUrl = "https://${userDroplet.supabaseProjectRef}.supabase.co"
-        val client = userClientProvider.getClient(supabaseUrl, userDroplet.supabaseServiceKey)
+        val client = userClientProvider.getClient(userDroplet.resolveSupabaseUrl(), userDroplet.supabaseServiceKey, userDroplet.supabaseSchema)
         agentRepository.deleteAgent(client, name)
         return output
     }

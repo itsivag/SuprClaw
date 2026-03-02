@@ -8,10 +8,12 @@ import java.util.concurrent.ConcurrentHashMap
 class UserSupabaseClientProvider {
     private val clients = ConcurrentHashMap<String, SupabaseClient>()
 
-    fun getClient(supabaseUrl: String, serviceKey: String): SupabaseClient =
-        clients.getOrPut(supabaseUrl) {
+    fun getClient(supabaseUrl: String, serviceKey: String, schema: String = "public"): SupabaseClient =
+        clients.getOrPut("$supabaseUrl:$schema") {
             createSupabaseClient(supabaseUrl = supabaseUrl, supabaseKey = serviceKey) {
-                install(Postgrest)
+                install(Postgrest) {
+                    defaultSchema = schema
+                }
             }
         }
 }

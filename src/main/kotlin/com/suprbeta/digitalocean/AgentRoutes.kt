@@ -35,8 +35,7 @@ fun Application.configureAgentRoutes(
                             call.respond(HttpStatusCode.NotFound, mapOf("error" to "No droplet found for user"))
                             return@get
                         }
-                        val supabaseUrl = "https://${droplet.supabaseProjectRef}.supabase.co"
-                        val client = userClientProvider.getClient(supabaseUrl, droplet.supabaseServiceKey)
+                        val client = userClientProvider.getClient(droplet.resolveSupabaseUrl(), droplet.supabaseServiceKey, droplet.supabaseSchema)
                         val agents = agentRepository.getAgents(client)
                         call.respond(
                             HttpStatusCode.OK,

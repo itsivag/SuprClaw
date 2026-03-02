@@ -35,10 +35,25 @@ data class ProjectResult(
     val endpoint: String
 )
 
-class SupabaseManagementService(
+interface SupabaseManagementService {
+    /** Token or key used to identify/authenticate with the Supabase instance (written to VPS mcp.env). */
+    val managementToken: String
+    val webhookBaseUrl: String
+    val webhookSecret: String
+    suspend fun createProject(name: String): ProjectResult
+    suspend fun waitForProjectActive(projectRef: String)
+    suspend fun getServiceKey(projectRef: String): String
+    suspend fun runSql(projectRef: String, sql: String)
+    suspend fun createDatabaseWebhook(projectRef: String)
+    suspend fun deleteProject(projectRef: String)
+    /** For hosted: returns "public". For self-hosted: returns the schema name (== projectRef). */
+    fun resolveSchema(projectRef: String): String
+}
+
+class HostedSupabaseManagementService(
     private val httpClient: HttpClient,
     private val application: Application
-) {
+) : SupabaseManagementService {
     private val logger = application.log
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -47,7 +62,7 @@ class SupabaseManagementService(
         directory = "."
     }
 
-    val managementToken: String = dotenv["SUPABASE_MANAGEMENT_TOKEN"]
+    override val managementToken: String = dotenv["SUPABASE_MANAGEMENT_TOKEN"]
         ?: throw IllegalStateException("SUPABASE_MANAGEMENT_TOKEN not found in environment")
 
     private val orgId: String = dotenv["SUPABASE_ORG_ID"]
@@ -55,13 +70,13 @@ class SupabaseManagementService(
 
     private val region: String = dotenv["SUPABASE_REGION"] ?: "us-east-1"
 
-    val webhookBaseUrl: String = dotenv["WEBHOOK_BASE_URL"] ?: "https://api.suprclaw.com"
+    override val webhookBaseUrl: String = dotenv["WEBHOOK_BASE_URL"] ?: "https://api.suprclaw.com"
 
-    val webhookSecret: String = dotenv["WEBHOOK_SECRET"]
+    override val webhookSecret: String = dotenv["WEBHOOK_SECRET"]
         ?: throw IllegalStateException("WEBHOOK_SECRET not found in environment")
 
     /** Creates a new Supabase project under the organization. */
-    suspend fun createProject(name: String): ProjectResult {
+    override suspend fun createProject(name: String): ProjectResult {
         logger.info("Creating Supabase project: $name")
 
         val dbPass = generateDbPassword()
@@ -94,7 +109,7 @@ class SupabaseManagementService(
     }
 
     /** Polls until the project status is ACTIVE_HEALTHY. Timeout: 3 minutes. */
-    suspend fun waitForProjectActive(projectRef: String) {
+    override suspend fun waitForProjectActive(projectRef: String) {
         logger.info("Waiting for Supabase project $projectRef to become active...")
         val deadline = System.currentTimeMillis() + 180_000L
 
@@ -123,7 +138,7 @@ class SupabaseManagementService(
     }
 
     /** Fetches the service_role API key for the project. */
-    suspend fun getServiceKey(projectRef: String): String {
+    override suspend fun getServiceKey(projectRef: String): String {
         logger.info("Fetching service key for project $projectRef")
 
         val response: HttpResponse = httpClient.get("$MANAGEMENT_API_BASE/projects/$projectRef/api-keys") {
@@ -144,7 +159,7 @@ class SupabaseManagementService(
     }
 
     /** Executes SQL against the project's database via the Management API. */
-    suspend fun runSql(projectRef: String, sql: String) {
+    override suspend fun runSql(projectRef: String, sql: String) {
         logger.info("Running SQL on project $projectRef (${sql.length} chars)")
 
         val response: HttpResponse = httpClient.post("$MANAGEMENT_API_BASE/projects/$projectRef/database/query") {
@@ -167,7 +182,7 @@ class SupabaseManagementService(
      * (only present on dashboard-created projects).
      * The webhook fires on INSERT and POSTs to the backend at /webhooks/tasks/{projectRef}.
      */
-    suspend fun createDatabaseWebhook(projectRef: String) {
+    override suspend fun createDatabaseWebhook(projectRef: String) {
         val url = "$webhookBaseUrl/webhooks/tasks/$projectRef"
         // Escape single quotes for use inside single-quoted SQL strings
         val safeUrl = url.replace("'", "''")
@@ -215,7 +230,7 @@ class SupabaseManagementService(
     }
 
     /** Deletes a Supabase project. */
-    suspend fun deleteProject(projectRef: String) {
+    override suspend fun deleteProject(projectRef: String) {
         logger.info("Deleting Supabase project $projectRef")
 
         httpClient.delete("$MANAGEMENT_API_BASE/projects/$projectRef") {
@@ -224,6 +239,8 @@ class SupabaseManagementService(
 
         logger.info("🗑️ Supabase project $projectRef deleted")
     }
+
+    override fun resolveSchema(projectRef: String): String = "public"
 
     private fun generateDbPassword(): String {
         val chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#\$%"

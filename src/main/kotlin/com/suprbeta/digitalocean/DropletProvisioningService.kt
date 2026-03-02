@@ -137,6 +137,7 @@ class DropletProvisioningServiceImpl(
 
             var ipAddress: String? = null
             var serviceKey: String? = null
+            var resolvedSupabaseUrl: String? = null
 
             coroutineScope {
                 val waitForActiveDeferred = async { waitForDropletReady(dropletId) }
@@ -146,18 +147,20 @@ class DropletProvisioningServiceImpl(
                     val result = managementService.createProject(projectName)
                     managementService.waitForProjectActive(result.projectRef)
                     val sk = managementService.getServiceKey(result.projectRef)
-                    Pair(result.projectRef, sk)
+                    Triple(result.projectRef, sk, result.endpoint)
                 }
 
                 ipAddress = waitForActiveDeferred.await()
-                val (pRef, sk) = createProjectDeferred.await()
+                val (pRef, sk, endpoint) = createProjectDeferred.await()
                 projectRef = pRef
                 serviceKey = sk
+                resolvedSupabaseUrl = endpoint
             }
 
             val resolvedIp = ipAddress!!
             val resolvedProjectRef = projectRef!!
             val resolvedServiceKey = serviceKey!!
+            val resolvedSupabaseEndpoint = resolvedSupabaseUrl!!
 
             logger.info("Droplet $dropletId active at $resolvedIp, Supabase project $resolvedProjectRef ready")
 
@@ -238,6 +241,8 @@ class DropletProvisioningServiceImpl(
                 gatewayToken = gatewayToken
             )
 
+            val resolvedSchema = managementService.resolveSchema(resolvedProjectRef)
+
             // Create internal droplet with both URLs and Supabase project info
             val userDropletInternal = UserDropletInternal(
                 userId = userId,
@@ -254,6 +259,8 @@ class DropletProvisioningServiceImpl(
                 sslEnabled = AppConfig.sslEnabled,
                 supabaseProjectRef = resolvedProjectRef,
                 supabaseServiceKey = resolvedServiceKey,
+                supabaseUrl = resolvedSupabaseEndpoint,
+                supabaseSchema = resolvedSchema,
                 configuredMcpTools = McpToolRegistry.defaultTools
             )
 
@@ -266,8 +273,7 @@ class DropletProvisioningServiceImpl(
                 saveDroplet.await()
 
                 // Save lead agent to user's own Supabase project
-                val supabaseUrl = "https://$resolvedProjectRef.supabase.co"
-                val userClient = userClientProvider.getClient(supabaseUrl, resolvedServiceKey)
+                val userClient = userClientProvider.getClient(resolvedSupabaseEndpoint, resolvedServiceKey, resolvedSchema)
                 agentRepository.saveAgent(
                     userClient,
                     AgentInsert(

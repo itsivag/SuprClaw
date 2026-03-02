@@ -5,7 +5,7 @@ import kotlinx.serialization.Serializable
 /**
  * Internal representation of user droplet with VPS gateway URL
  * Used only by backend services - NOT exposed to clients
- * 
+ *
  * This class contains sensitive information (vpsGatewayUrl, sshKey) that should
  * only be used by the proxy to route connections to the user's specific VPS.
  */
@@ -24,13 +24,22 @@ data class UserDropletInternal(
     val createdAt: String = "",           // ISO 8601 timestamp
     val status: String = "active",        // Status: active, provisioning, error, deleted
     val sslEnabled: Boolean = true,       // Whether SSL/HTTPS is enabled
-    val supabaseProjectRef: String = "",  // User's Supabase project ref (e.g. "abcxyz123")
+    val supabaseProjectRef: String = "",  // User's Supabase project ref (hosted: project ID; self-hosted: schema name)
     val supabaseServiceKey: String = "",  // User's Supabase service role key
+    val supabaseUrl: String = "",         // Full Supabase base URL (empty = derive from supabaseProjectRef for hosted)
+    val supabaseSchema: String = "public", // PostgREST schema to query (hosted: "public"; self-hosted: schema name)
     val configuredMcpTools: List<String> = listOf("supabase") // MCP tools configured on this VPS
 ) {
     // No-arg constructor for Firestore deserialization
-    constructor() : this("", 0, "", "", "", "", "", "", "", null, "", "active", true, "", "", listOf("supabase"))
-    
+    constructor() : this("", 0, "", "", "", "", "", "", "", null, "", "active", true, "", "", "", "public", listOf("supabase"))
+
+    /**
+     * Resolves the full Supabase base URL.
+     * For hosted: derives URL from supabaseProjectRef if supabaseUrl is blank.
+     * For self-hosted: uses the stored supabaseUrl directly.
+     */
+    fun resolveSupabaseUrl(): String = supabaseUrl.ifBlank { "https://$supabaseProjectRef.supabase.co" }
+
     /**
      * Convert to client-safe UserDroplet (without vpsGatewayUrl)
      * This method strips sensitive VPS URL before sending to clients
