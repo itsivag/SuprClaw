@@ -13,7 +13,7 @@ Each user gets their own VPS (powered by [OpenClaw](https://github.com/anthropic
 ### Architecture Overview
 
 ```
-Client (Android/Web)
+Client (Android/iOS/macOS)
         │
         ▼
   SuprClaw Backend (this repo)

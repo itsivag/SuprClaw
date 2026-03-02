@@ -37,7 +37,7 @@ class DnsService(
      * @param ipAddress The IP address to point to
      * @return The full domain name (e.g., "my-droplet.yourdomain.com")
      */
-    suspend fun createDnsRecord(subdomain: String, ipAddress: String): String {
+    override suspend fun createDnsRecord(subdomain: String, ipAddress: String): String {
         application.log.info("Creating DNS record: $subdomain.$domain -> $ipAddress")
 
         try {
@@ -127,7 +127,7 @@ class DnsService(
     }
 
     /** Deletes all A records for a subdomain (called during teardown). */
-    suspend fun deleteDnsRecord(subdomain: String) {
+    override suspend fun deleteDnsRecord(subdomain: String) {
         application.log.info("Deleting DNS record: $subdomain.$domain")
         try {
             val ids = findRecordIds(subdomain)
