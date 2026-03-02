@@ -69,6 +69,11 @@ class SelfHostedSupabaseManagementService(
 
         withContext(Dispatchers.IO) {
             executeJdbc("CREATE SCHEMA IF NOT EXISTS $schemaName")
+            // Grant PostgREST roles access to the new schema and all future tables in it
+            executeJdbc("GRANT USAGE ON SCHEMA $schemaName TO anon, authenticated, service_role")
+            executeJdbc("ALTER DEFAULT PRIVILEGES IN SCHEMA $schemaName GRANT ALL ON TABLES TO anon, authenticated, service_role")
+            executeJdbc("ALTER DEFAULT PRIVILEGES IN SCHEMA $schemaName GRANT ALL ON SEQUENCES TO anon, authenticated, service_role")
+            executeJdbc("ALTER DEFAULT PRIVILEGES IN SCHEMA $schemaName GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role")
         }
 
         addSchemaToPostgrest(schemaName)
