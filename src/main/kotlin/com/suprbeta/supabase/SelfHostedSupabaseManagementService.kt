@@ -157,10 +157,11 @@ class SelfHostedSupabaseManagementService(
     // ── PostgREST .env management via SSH ─────────────────────────────────
 
     private fun addSchemaToPostgrest(schemaName: String) {
+        val d = "\$"  // literal $ for use inside triple-quoted shell commands
         val command = """
             cd $dockerDir && \
-            CURRENT=$(grep '^PGRST_DB_SCHEMAS=' .env | cut -d= -f2) && \
-            sed -i "s|^PGRST_DB_SCHEMAS=.*|PGRST_DB_SCHEMAS=\${CURRENT},$schemaName|" .env && \
+            CURRENT=${d}(grep '^PGRST_DB_SCHEMAS=' .env | cut -d= -f2) && \
+            sed -i "s|^PGRST_DB_SCHEMAS=.*|PGRST_DB_SCHEMAS=${d}{CURRENT},$schemaName|" .env && \
             docker compose restart pgrst
         """.trimIndent()
         logger.info("Adding schema $schemaName to PostgREST and restarting pgrst")
@@ -169,11 +170,12 @@ class SelfHostedSupabaseManagementService(
     }
 
     private fun removeSchemaFromPostgrest(schemaName: String) {
+        val d = "\$"  // literal $ for use inside triple-quoted shell commands
         val command = """
             cd $dockerDir && \
-            CURRENT=$(grep '^PGRST_DB_SCHEMAS=' .env | cut -d= -f2) && \
-            NEW=$(echo "\$CURRENT" | tr ',' '\n' | grep -v '^$schemaName$' | tr '\n' ',' | sed 's/,\$//') && \
-            sed -i "s|^PGRST_DB_SCHEMAS=.*|PGRST_DB_SCHEMAS=\$NEW|" .env && \
+            CURRENT=${d}(grep '^PGRST_DB_SCHEMAS=' .env | cut -d= -f2) && \
+            NEW=${d}(echo "${d}CURRENT" | tr ',' '\n' | grep -v '^$schemaName${d}' | tr '\n' ',' | sed 's/,${d}//') && \
+            sed -i "s|^PGRST_DB_SCHEMAS=.*|PGRST_DB_SCHEMAS=${d}NEW|" .env && \
             docker compose restart pgrst
         """.trimIndent()
         logger.info("Removing schema $schemaName from PostgREST and restarting pgrst")
