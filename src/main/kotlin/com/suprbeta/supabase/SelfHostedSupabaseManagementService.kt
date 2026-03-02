@@ -229,11 +229,7 @@ class SelfHostedSupabaseManagementService(
             ?: throw java.sql.SQLException("PostgreSQL driver returned null for URL: $jdbcUrl")
         conn.use {
             it.createStatement().use { stmt ->
-                // Execute statements individually — some JDBC drivers reject multi-statement calls
-                val statements = sql.split(";").map { s -> s.trim() }.filter { s -> s.isNotBlank() }
-                for (statement in statements) {
-                    stmt.execute(statement)
-                }
+                stmt.execute(sql)
             }
         }
     }
