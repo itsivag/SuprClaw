@@ -83,9 +83,12 @@ open class DropletMcpServiceImpl(
     // ── File writers ─────────────────────────────────────────────────────
 
     private fun writeMcpEnv(ip: String, droplet: UserDropletInternal, toolDefs: List<McpToolDefinition>) {
+        val scopedAccessToken = generateScopedJwt(droplet.supabaseProjectRef)
+            .ifBlank { managementService.managementToken }
+
         val lines = mutableListOf(
             "SUPABASE_PROJECT_REF=${droplet.supabaseProjectRef}",
-            "SUPABASE_ACCESS_TOKEN=${managementService.managementToken}",
+            "SUPABASE_ACCESS_TOKEN=$scopedAccessToken",
             "AWS_ACCESS_KEY_ID=${env("AWS_ACCESS_KEY_ID")}",
             "AWS_SECRET_ACCESS_KEY=${env("AWS_SECRET_ACCESS_KEY")}",
             "AWS_REGION=${env("AWS_REGION").ifBlank { "us-east-1" }}",
@@ -104,18 +107,15 @@ open class DropletMcpServiceImpl(
     }
 
     private fun writeMcpRoutes(ip: String, toolDefs: List<McpToolDefinition>) {
-        val selfHostedMcp = env("SUPABASE_MCP_URL").isNotBlank()
-        val routes = toolDefs
-            .filter { !(it.name == "supabase" && selfHostedMcp) }
-            .joinToString(",") { tool ->
-                val auth = when (tool.authType) {
-                    "bearer" -> """{"type":"bearer","envVar":"${tool.authEnvVar}"}"""
-                    "path-prefix" -> """{"type":"path-prefix","envVar":"${tool.authEnvVar}","template":"${tool.authTemplate}"}"""
-                    else -> """{"type":"${tool.authType}","envVar":"${tool.authEnvVar}"}"""
-                }
-                val upstream = if (tool.name == "supabase") env("SUPABASE_MCP_URL").ifBlank { tool.upstream } else tool.upstream
-                """"${tool.name}":{"upstream":"$upstream","auth":$auth}"""
+        val routes = toolDefs.joinToString(",") { tool ->
+            val auth = when (tool.authType) {
+                "bearer" -> """{"type":"bearer","envVar":"${tool.authEnvVar}"}"""
+                "path-prefix" -> """{"type":"path-prefix","envVar":"${tool.authEnvVar}","template":"${tool.authTemplate}"}"""
+                else -> """{"type":"${tool.authType}","envVar":"${tool.authEnvVar}"}"""
             }
+            val upstream = if (tool.name == "supabase") env("SUPABASE_MCP_URL").ifBlank { tool.upstream } else tool.upstream
+            """"${tool.name}":{"upstream":"$upstream","auth":$auth}"""
+        }
         val json = "{$routes}"
         val encoded = Base64.getEncoder().encodeToString(json.toByteArray())
         sshCommandExecutor.runSshCommand(ip, "echo $encoded | base64 -d | sudo tee /etc/suprclaw/mcp-routes.json > /dev/null")
@@ -139,16 +139,9 @@ open class DropletMcpServiceImpl(
     }
 
     private fun writeMcporterConfig(ip: String, toolDefs: List<McpToolDefinition>, projectRef: String) {
-        val selfHostedMcp = env("SUPABASE_MCP_URL").isNotBlank()
         val servers = toolDefs.joinToString(",") { tool ->
-            if (tool.name == "supabase" && selfHostedMcp) {
-                val supabaseUrl = env("SUPABASE_SELF_HOSTED_URL")
-                val scopedJwt = generateScopedJwt(projectRef)
-                """"supabase":{"command":"npx","args":["-y","@supabase/mcp-server-supabase@latest"],"env":{"SUPABASE_URL":"$supabaseUrl","SUPABASE_ACCESS_TOKEN":"$scopedJwt"}}"""
-            } else {
-                val url = tool.mcporterUrlTemplate.replace("{projectRef}", projectRef)
-                """"${tool.name}":{"url":"$url","lifecycle":"keep-alive"}"""
-            }
+            val url = tool.mcporterUrlTemplate.replace("{projectRef}", projectRef)
+            """"${tool.name}":{"url":"$url","lifecycle":"keep-alive"}"""
         }
         val json = """{"mcpServers":{$servers}}"""
         val encoded = Base64.getEncoder().encodeToString(json.toByteArray())

@@ -13,8 +13,8 @@ import kotlin.test.Test
 /**
  * Unit tests for [DropletMcpServiceImpl].
  *
- * Tests JWT generation, MCP route filtering (supabase excluded in self-hosted mode),
- * and mcporter.json format (stdio vs URL) using a testable subclass that overrides env().
+ * Tests JWT generation, mcp-routes.json upstream selection, mcp.env JWT/fallback behaviour,
+ * and mcporter.json URL format using a testable subclass that overrides env().
  */
 class DropletMcpServiceTest {
 
@@ -113,15 +113,13 @@ class DropletMcpServiceTest {
             "Role must use schema name + _rpc suffix, got: $payload")
     }
 
-    // ── mcp-routes.json: self-hosted filters supabase ─────────────────────
+    // ── mcp-routes.json: upstream selection ───────────────────────────────
 
     @Test
-    fun `configureMcpTools self-hosted mode excludes supabase from mcp-routes json`() = testApplication {
+    fun `mcp-routes uses SUPABASE_MCP_URL as upstream when set`() = testApplication {
         val commands = captureCommands()
         val service = buildService(application, mapOf(
-            "SUPABASE_MCP_URL" to "https://supabase.suprclaw.com/api/mcp",
-            "SUPABASE_SELF_HOSTED_URL" to "https://supabase.suprclaw.com",
-            "SUPABASE_SELF_HOSTED_JWT_SECRET" to "test-secret-at-least-32-characters-long!!"
+            "SUPABASE_MCP_URL" to "https://supabase.suprclaw.com"
         ))
 
         service.configureMcpTools(testDroplet, listOf("supabase"))
@@ -129,117 +127,69 @@ class DropletMcpServiceTest {
         val routesCmd = commands.find { it.contains("mcp-routes.json") && it.contains("base64") }
         assertNotNull(routesCmd, "Expected mcp-routes.json write command")
         val json = decodeBase64FromCmd(routesCmd)
-        assertFalse(json.contains("\"supabase\""),
-            "mcp-routes.json must NOT contain supabase in self-hosted mode, got: $json")
+        assertTrue(json.contains("\"upstream\":\"https://supabase.suprclaw.com\""),
+            "mcp-routes.json upstream must use SUPABASE_MCP_URL, got: $json")
     }
 
     @Test
-    fun `configureMcpTools self-hosted mode produces empty routes object when only tool is supabase`() = testApplication {
+    fun `mcp-routes uses default upstream when SUPABASE_MCP_URL is blank`() = testApplication {
         val commands = captureCommands()
-        val service = buildService(application, mapOf(
-            "SUPABASE_MCP_URL" to "https://supabase.suprclaw.com/api/mcp",
-            "SUPABASE_SELF_HOSTED_URL" to "https://supabase.suprclaw.com",
-            "SUPABASE_SELF_HOSTED_JWT_SECRET" to "test-secret-at-least-32-characters-long!!"
-        ))
-
-        service.configureMcpTools(testDroplet, listOf("supabase"))
-
-        val routesCmd = commands.find { it.contains("mcp-routes.json") && it.contains("base64") }
-        assertNotNull(routesCmd)
-        val json = decodeBase64FromCmd(routesCmd)
-        assertEquals("{}", json, "Routes must be empty object when only supabase is present in self-hosted mode")
-    }
-
-    @Test
-    fun `configureMcpTools hosted mode includes supabase in mcp-routes json`() = testApplication {
-        val commands = captureCommands()
-        // SUPABASE_MCP_URL blank → hosted mode
-        val service = buildService(application)
+        val service = buildService(application) // SUPABASE_MCP_URL blank
 
         service.configureMcpTools(testDroplet, listOf("supabase"))
 
         val routesCmd = commands.find { it.contains("mcp-routes.json") && it.contains("base64") }
         assertNotNull(routesCmd, "Expected mcp-routes.json write command")
         val json = decodeBase64FromCmd(routesCmd)
-        assertTrue(json.contains("\"supabase\""),
-            "mcp-routes.json must contain supabase in hosted mode, got: $json")
+        assertTrue(json.contains("\"upstream\":\"https://mcp.supabase.com\""),
+            "mcp-routes.json upstream must fall back to mcp.supabase.com, got: $json")
     }
 
-    // ── mcporter.json: self-hosted uses stdio ──────────────────────────────
+    // ── mcp.env: JWT / fallback ────────────────────────────────────────────
 
     @Test
-    fun `configureMcpTools self-hosted mode writes supabase as stdio entry in mcporter json`() = testApplication {
+    fun `mcp env uses scoped JWT when JWT secret is present`() = testApplication {
         val commands = captureCommands()
         val service = buildService(application, mapOf(
-            "SUPABASE_MCP_URL" to "https://supabase.suprclaw.com/api/mcp",
-            "SUPABASE_SELF_HOSTED_URL" to "https://supabase.suprclaw.com",
             "SUPABASE_SELF_HOSTED_JWT_SECRET" to "test-secret-at-least-32-characters-long!!"
         ))
 
         service.configureMcpTools(testDroplet, listOf("supabase"))
 
-        val mcporterCmd = commands.find { it.contains("mcporter.json") && it.contains("base64 -d >") }
-        assertNotNull(mcporterCmd, "Expected mcporter.json write command")
-        val json = decodeBase64FromCmd(mcporterCmd)
-        assertTrue(json.contains("\"command\":\"npx\""),
-            "mcporter.json must have stdio npx command in self-hosted mode, got: $json")
-        assertTrue(json.contains("@supabase/mcp-server-supabase"),
-            "mcporter.json must reference supabase mcp server package, got: $json")
-        assertFalse(json.contains("\"lifecycle\""),
-            "Stdio entry must not have lifecycle field, got: $json")
-    }
-
-    @Test
-    fun `configureMcpTools self-hosted mode mcporter json has SUPABASE_URL env`() = testApplication {
-        val commands = captureCommands()
-        val service = buildService(application, mapOf(
-            "SUPABASE_MCP_URL" to "https://supabase.suprclaw.com/api/mcp",
-            "SUPABASE_SELF_HOSTED_URL" to "https://supabase.suprclaw.com",
-            "SUPABASE_SELF_HOSTED_JWT_SECRET" to "test-secret-at-least-32-characters-long!!"
-        ))
-
-        service.configureMcpTools(testDroplet, listOf("supabase"))
-
-        val mcporterCmd = commands.find { it.contains("mcporter.json") && it.contains("base64 -d >") }
-        assertNotNull(mcporterCmd)
-        val json = decodeBase64FromCmd(mcporterCmd)
-        assertTrue(json.contains("https://supabase.suprclaw.com"),
-            "mcporter.json must contain SUPABASE_SELF_HOSTED_URL value, got: $json")
-        assertTrue(json.contains("SUPABASE_ACCESS_TOKEN"),
-            "mcporter.json must have SUPABASE_ACCESS_TOKEN env var, got: $json")
-    }
-
-    @Test
-    fun `configureMcpTools self-hosted mcporter access token is JWT scoped to project schema`() = testApplication {
-        val commands = captureCommands()
-        val service = buildService(application, mapOf(
-            "SUPABASE_MCP_URL" to "https://supabase.suprclaw.com/api/mcp",
-            "SUPABASE_SELF_HOSTED_URL" to "https://supabase.suprclaw.com",
-            "SUPABASE_SELF_HOSTED_JWT_SECRET" to "test-secret-at-least-32-characters-long!!"
-        ))
-
-        service.configureMcpTools(testDroplet, listOf("supabase"))
-
-        val mcporterCmd = commands.find { it.contains("mcporter.json") && it.contains("base64 -d >") }
-        assertNotNull(mcporterCmd)
-        val json = decodeBase64FromCmd(mcporterCmd)
-
-        val tokenMatch = Regex(""""SUPABASE_ACCESS_TOKEN":"([^"]+)"""").find(json)
-        assertNotNull(tokenMatch, "Expected SUPABASE_ACCESS_TOKEN value in JSON")
-        val jwtStr = tokenMatch.groupValues[1]
-
-        val parts = jwtStr.split(".")
+        val envCmd = commands.find { it.contains("mcp.env") && it.contains("base64") }
+        assertNotNull(envCmd, "Expected mcp.env write command")
+        val content = decodeBase64FromCmd(envCmd)
+        val tokenLine = content.lines().find { it.startsWith("SUPABASE_ACCESS_TOKEN=") }
+        assertNotNull(tokenLine, "mcp.env must contain SUPABASE_ACCESS_TOKEN")
+        val token = tokenLine.removePrefix("SUPABASE_ACCESS_TOKEN=")
+        val parts = token.split(".")
         assertEquals(3, parts.size, "SUPABASE_ACCESS_TOKEN must be a valid JWT")
-
         val payload = String(Base64.getUrlDecoder().decode(parts[1]))
-        assertTrue(payload.contains("proj_abc12345_rpc"),
+        assertTrue(payload.contains("\"proj_abc12345_rpc\""),
             "JWT role must be scoped to proj_abc12345_rpc, got: $payload")
     }
 
     @Test
-    fun `configureMcpTools hosted mode writes supabase as URL entry in mcporter json`() = testApplication {
+    fun `mcp env falls back to managementToken when JWT secret is blank`() = testApplication {
         val commands = captureCommands()
-        val service = buildService(application) // SUPABASE_MCP_URL blank → hosted
+        every { managementService.managementToken } returns "mgmt-fallback-token"
+        val service = buildService(application) // no JWT secret
+
+        service.configureMcpTools(testDroplet, listOf("supabase"))
+
+        val envCmd = commands.find { it.contains("mcp.env") && it.contains("base64") }
+        assertNotNull(envCmd, "Expected mcp.env write command")
+        val content = decodeBase64FromCmd(envCmd)
+        assertTrue(content.contains("SUPABASE_ACCESS_TOKEN=mgmt-fallback-token"),
+            "mcp.env must fall back to managementToken, got: $content")
+    }
+
+    // ── mcporter.json: always URL mode ────────────────────────────────────
+
+    @Test
+    fun `mcporter json always uses URL config for supabase`() = testApplication {
+        val commands = captureCommands()
+        val service = buildService(application)
 
         service.configureMcpTools(testDroplet, listOf("supabase"))
 
@@ -247,11 +197,25 @@ class DropletMcpServiceTest {
         assertNotNull(mcporterCmd, "Expected mcporter.json write command")
         val json = decodeBase64FromCmd(mcporterCmd)
         assertTrue(json.contains("\"url\""),
-            "mcporter.json must have url config in hosted mode, got: $json")
+            "mcporter.json must have url config, got: $json")
         assertTrue(json.contains("\"lifecycle\""),
-            "mcporter.json must have lifecycle in hosted mode, got: $json")
+            "mcporter.json must have lifecycle field, got: $json")
         assertFalse(json.contains("\"command\""),
-            "mcporter.json must NOT have command field in hosted mode, got: $json")
+            "mcporter.json must NOT have command field, got: $json")
+    }
+
+    @Test
+    fun `mcporter json supabase URL contains project_ref`() = testApplication {
+        val commands = captureCommands()
+        val service = buildService(application)
+
+        service.configureMcpTools(testDroplet, listOf("supabase"))
+
+        val mcporterCmd = commands.find { it.contains("mcporter.json") && it.contains("base64 -d >") }
+        assertNotNull(mcporterCmd, "Expected mcporter.json write command")
+        val json = decodeBase64FromCmd(mcporterCmd)
+        assertTrue(json.contains("?project_ref=proj_abc12345"),
+            "mcporter.json supabase URL must contain ?project_ref=proj_abc12345, got: $json")
     }
 
     // ── mcporter service restart ───────────────────────────────────────────
