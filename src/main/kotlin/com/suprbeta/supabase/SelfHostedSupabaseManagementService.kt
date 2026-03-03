@@ -203,6 +203,13 @@ class SelfHostedSupabaseManagementService(
             // DROP ROLE subsequently fails with "cannot be dropped because some objects depend on
             // it".  Explicit REVOKE removes the pg_default_acl rows so DROP ROLE can proceed.
             for (revoke in listOf(
+                // Revoke explicit grants on existing objects (tables/sequences already created).
+                // ALTER DEFAULT PRIVILEGES REVOKE only removes pg_default_acl (future grants);
+                // it does NOT remove grants already applied to existing tables/sequences.
+                "REVOKE ALL ON ALL TABLES IN SCHEMA $projectRef FROM ${projectRef}_rpc",
+                "REVOKE ALL ON ALL SEQUENCES IN SCHEMA $projectRef FROM ${projectRef}_rpc",
+                "REVOKE USAGE ON SCHEMA $projectRef FROM ${projectRef}_rpc",
+                // Revoke default privilege entries (pg_default_acl rows).
                 "ALTER DEFAULT PRIVILEGES IN SCHEMA $projectRef REVOKE ALL ON TABLES FROM ${projectRef}_rpc",
                 "ALTER DEFAULT PRIVILEGES IN SCHEMA $projectRef REVOKE ALL ON SEQUENCES FROM ${projectRef}_rpc",
                 "ALTER DEFAULT PRIVILEGES IN SCHEMA $projectRef REVOKE ALL ON FUNCTIONS FROM ${projectRef}_rpc"

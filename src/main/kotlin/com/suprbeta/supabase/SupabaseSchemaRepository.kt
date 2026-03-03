@@ -1,10 +1,6 @@
 package com.suprbeta.supabase
 
-import io.github.jan.supabase.SupabaseClient
-import io.github.jan.supabase.postgrest.postgrest
 import io.ktor.server.application.*
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 
 private val USER_PROJECT_SQL = """
 CREATE TABLE IF NOT EXISTS public.agents (
@@ -81,16 +77,13 @@ CREATE TABLE IF NOT EXISTS public.agent_actions (
 );
 """.trimIndent()
 
-class SupabaseSchemaRepository(
-    private val supabase: SupabaseClient,
-    application: Application
-) {
+class SupabaseSchemaRepository(application: Application) {
     private val logger = application.log
 
     /**
-     * Initialises a freshly-created per-user Supabase project:
-     *  1. Creates all tables in the project's public schema via Management API SQL.
-     *  2. Registers the user's gateway in the central project's user_droplets table.
+     * Initialises a freshly-created per-user schema:
+     *  1. Creates all tables via the management service.
+     *  2. Creates the database webhook trigger.
      */
     suspend fun initializeUserProject(
         managementService: SupabaseManagementService,
@@ -100,24 +93,14 @@ class SupabaseSchemaRepository(
         gatewayToken: String
     ) {
         managementService.runSql(projectRef, USER_PROJECT_SQL)
-        logger.info("✅ Tables created in Supabase project $projectRef for userId=$userId")
+        logger.info("✅ Tables created in schema $projectRef for userId=$userId")
 
         managementService.createDatabaseWebhook(projectRef)
-        logger.info("✅ Database webhook created in Supabase project $projectRef")
-
-        val schemaName = schemaName(userId)
-        supabase.postgrest.rpc("insert_user_droplet", buildJsonObject {
-            put("p_schema_name", schemaName)
-            put("p_vps_gateway_url", vpsGatewayUrl)
-            put("p_gateway_token", gatewayToken)
-        })
-        logger.info("✅ Registered droplet in central user_droplets: schema=$schemaName for userId=$userId")
+        logger.info("✅ Database webhook created in schema $projectRef")
     }
 
     /**
-     * Cleans up a user's Supabase project:
-     *  1. Deletes the per-user Supabase project via Management API.
-     *  2. Removes the user's gateway row from the central project's user_droplets table.
+     * Cleans up a user's schema via the management service.
      */
     suspend fun cleanupUserProject(
         managementService: SupabaseManagementService,
@@ -125,14 +108,6 @@ class SupabaseSchemaRepository(
         userId: String
     ) {
         managementService.deleteProject(projectRef)
-        logger.info("🗑️ Supabase project $projectRef deleted for userId=$userId")
-
-        val schemaName = schemaName(userId)
-        supabase.postgrest.rpc("delete_user_droplet", buildJsonObject {
-            put("p_schema_name", schemaName)
-        })
-        logger.info("🗑️ Removed user_droplets row for schema=$schemaName userId=$userId")
+        logger.info("🗑️ Schema $projectRef deleted for userId=$userId")
     }
-
-    private fun schemaName(userId: String) = "user_" + userId.replace(Regex("[^a-zA-Z0-9]"), "_")
 }

@@ -20,18 +20,15 @@ import com.suprbeta.hetzner.HetznerService
 import com.suprbeta.provider.DnsProvider
 import com.suprbeta.provider.VpsService
 import com.suprbeta.supabase.SupabaseAgentRepository
-import com.suprbeta.supabase.HostedSupabaseManagementService
 import com.suprbeta.supabase.SelfHostedSupabaseManagementService
 import com.suprbeta.supabase.SupabaseManagementService
 import com.suprbeta.supabase.SupabaseSchemaRepository
-import com.suprbeta.supabase.SupabaseService
 import com.suprbeta.supabase.SupabaseTaskRepository
 import com.suprbeta.supabase.UserSupabaseClientProvider
 import com.suprbeta.supabase.configureTaskRoutes
 import com.suprbeta.marketplace.MarketplaceService
 import com.suprbeta.marketplace.configureMarketplaceRoutes
 import com.suprbeta.supabase.configureWebhookRoutes
-import io.github.jan.supabase.SupabaseClient
 import com.suprbeta.websocket.OpenClawConnector
 import com.suprbeta.websocket.ProxySessionManager
 import com.suprbeta.websocket.configureWebSocketRoutes
@@ -65,24 +62,16 @@ fun Application.module() {
     configureSerialization()
     configureHTTP()
     val (firebaseAuthService, firestoreRepository) = configureFirebase()
-    val supabaseClient = configureSupabase()
     val agentRepository = SupabaseAgentRepository(this)
     val taskRepository = SupabaseTaskRepository(this)
-    val schemaRepository = SupabaseSchemaRepository(supabaseClient, this)
+    val schemaRepository = SupabaseSchemaRepository(this)
     val userClientProvider = UserSupabaseClientProvider()
 
     // Create shared HttpClient for API calls
     val httpClient = createHttpClient()
 
-    val dotenvForMode = io.github.cdimascio.dotenv.dotenv { ignoreIfMissing = true; directory = "." }
-    val supabaseMode = (dotenvForMode["SUPABASE_MODE"] ?: System.getenv("SUPABASE_MODE"))?.lowercase() ?: "hosted"
-    val managementService: SupabaseManagementService = if (supabaseMode == "self-hosted") {
-        log.info("Supabase mode: self-hosted")
-        SelfHostedSupabaseManagementService(httpClient, this)
-    } else {
-        log.info("Supabase mode: hosted")
-        HostedSupabaseManagementService(httpClient, this)
-    }
+    val managementService: SupabaseManagementService = SelfHostedSupabaseManagementService(httpClient, this)
+    log.info("Supabase mode: self-hosted")
 
     configureWebSockets(httpClient, firebaseAuthService, firestoreRepository)
     val configuringService = configureDigitalOcean(
@@ -274,19 +263,6 @@ private fun Application.createProviders(
             Pair(doService, DnsService(httpClient, this))
         }
     }
-}
-
-fun Application.configureSupabase(): SupabaseClient {
-    val supabaseService = SupabaseService(this)
-
-    monitor.subscribe(ApplicationStopped) {
-        log.info("Application stopping - closing Supabase client")
-        runBlocking { supabaseService.close() }
-    }
-
-    log.info("Supabase client initialized and ready")
-
-    return supabaseService.client
 }
 
 fun Application.configureFirebase(): Pair<FirebaseAuthService, FirestoreRepository> {
