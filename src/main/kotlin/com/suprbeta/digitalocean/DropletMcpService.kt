@@ -39,7 +39,7 @@ class DropletMcpServiceImpl(
     companion object {
         val ALWAYS_PRESENT_ENV_VARS = setOf(
             "SUPABASE_PROJECT_REF", "SUPABASE_ACCESS_TOKEN",
-            "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION",
+            "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_BEARER_TOKEN_BEDROCK",
             "OPENCLAW_GATEWAY_TOKEN"
         )
     }
@@ -89,6 +89,7 @@ class DropletMcpServiceImpl(
             "AWS_ACCESS_KEY_ID=${env("AWS_ACCESS_KEY_ID")}",
             "AWS_SECRET_ACCESS_KEY=${env("AWS_SECRET_ACCESS_KEY")}",
             "AWS_REGION=${env("AWS_REGION").ifBlank { "us-east-1" }}",
+            "AWS_BEARER_TOKEN_BEDROCK=${env("AWS_BEARER_TOKEN_BEDROCK")}",
             "OPENCLAW_GATEWAY_TOKEN=${droplet.gatewayToken}"
         )
         for (tool in toolDefs) {
