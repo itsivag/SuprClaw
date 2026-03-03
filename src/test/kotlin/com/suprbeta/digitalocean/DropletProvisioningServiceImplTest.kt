@@ -301,6 +301,103 @@ class DropletProvisioningServiceImplTest {
         every { userClientProvider.getClient(any(), any(), any()) } returns mockk(relaxed = true)
     }
 
+    // ── MCP configuration during provisioning ─────────────────────────────────
+
+    @Test
+    fun `provisionDroplet calls configureMcpTools with default tools`() = testApplication {
+        val service = buildService(application)
+        setupHappyPath(
+            projectRef = "proj_mcptest",
+            endpoint = "https://supabase.suprclaw.com",
+            schema = "proj_mcptest"
+        )
+
+        val (dropletId, _, password) = service.createAndProvision("mcp-test")
+        service.provisionDroplet(dropletId, password, "user-mcp")
+
+        coVerify { mcpService.configureMcpTools(any(), listOf("supabase")) }
+    }
+
+    @Test
+    fun `provisionDroplet passes correct droplet state to configureMcpTools`() = testApplication {
+        val service = buildService(application)
+        setupHappyPath(
+            projectRef = "proj_mcpstate",
+            endpoint = "https://supabase.suprclaw.com",
+            schema = "proj_mcpstate"
+        )
+
+        val (dropletId, _, password) = service.createAndProvision("mcp-state-test")
+        service.provisionDroplet(dropletId, password, "user-mcp-state")
+
+        val dropletSlot = slot<UserDropletInternal>()
+        coVerify { mcpService.configureMcpTools(capture(dropletSlot), any()) }
+        assertEquals("proj_mcpstate", dropletSlot.captured.supabaseProjectRef)
+        assertEquals("1.2.3.4", dropletSlot.captured.ipAddress)
+    }
+
+    // ── Full lifecycle: provision → MCP configured → teardown ─────────────────
+
+    @Test
+    fun `full lifecycle provision then teardown cleans all resources`() = testApplication {
+        val service = buildService(application)
+        setupHappyPath(
+            projectRef = "proj_lifecycle",
+            endpoint = "https://supabase.suprclaw.com",
+            schema = "proj_lifecycle"
+        )
+
+        // Phase 1: Provision
+        val (dropletId, _, password) = service.createAndProvision("lifecycle-test")
+        service.provisionDroplet(dropletId, password, "user-lifecycle")
+
+        assertEquals(ProvisioningStatus.PHASE_COMPLETE, service.getStatus(dropletId)?.phase,
+            "Expected PHASE_COMPLETE after successful provision")
+        coVerify { mcpService.configureMcpTools(any(), listOf("supabase")) }
+
+        // Phase 2: Wire up teardown mocks using the droplet that was saved to Firestore
+        val savedDroplet = captureLastSavedDroplet()
+        coEvery { firestoreRepository.getUserDropletInternal("user-lifecycle") } returns savedDroplet
+        coEvery { vpsService.deleteServer(savedDroplet.dropletId) } just Runs
+        coEvery { schemaRepository.cleanupUserProject(managementService, "proj_lifecycle", "user-lifecycle") } just Runs
+        coEvery { firestoreRepository.deleteUserDroplet("user-lifecycle") } just Runs
+        coEvery { firestoreRepository.deleteProjectRefMapping("proj_lifecycle") } just Runs
+
+        // Phase 3: Teardown
+        service.teardown("user-lifecycle")
+
+        coVerify { vpsService.deleteServer(savedDroplet.dropletId) }
+        coVerify { schemaRepository.cleanupUserProject(managementService, "proj_lifecycle", "user-lifecycle") }
+        coVerify { firestoreRepository.deleteUserDroplet("user-lifecycle") }
+        coVerify { firestoreRepository.deleteProjectRefMapping("proj_lifecycle") }
+        assertNull(service.getStatus(savedDroplet.dropletId),
+            "Status must be cleared after teardown")
+    }
+
+    @Test
+    fun `full lifecycle teardown after MCP failure still cleans VPS and Supabase`() = testApplication {
+        val service = buildService(application)
+        setupHappyPath(
+            projectRef = "proj_mcpfail",
+            endpoint = "https://supabase.suprclaw.com",
+            schema = "proj_mcpfail"
+        )
+        // MCP configuration throws after project is created — provisioning should roll back
+        coEvery { mcpService.configureMcpTools(any(), any()) } throws RuntimeException("MCP config failed")
+        coEvery { vpsService.deleteServer(any()) } just Runs
+        coEvery { managementService.deleteProject(any()) } just Runs
+
+        val (dropletId, _, password) = service.createAndProvision("mcp-fail-test")
+        assertFailsWith<Exception> {
+            service.provisionDroplet(dropletId, password, "user-mcpfail")
+        }
+
+        coVerify { vpsService.deleteServer(1L) }
+        coVerify { managementService.deleteProject("proj_mcpfail") }
+        assertEquals(ProvisioningStatus.PHASE_FAILED, service.getStatus(dropletId)?.phase,
+            "Status must be PHASE_FAILED after MCP config exception")
+    }
+
     // ── Teardown tests ────────────────────────────────────────────────────────
 
     @Test

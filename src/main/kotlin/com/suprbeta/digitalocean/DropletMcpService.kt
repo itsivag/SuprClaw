@@ -25,7 +25,7 @@ interface DropletMcpService {
     suspend fun configureMcpTools(droplet: UserDropletInternal, toolNames: List<String>)
 }
 
-class DropletMcpServiceImpl(
+open class DropletMcpServiceImpl(
     private val managementService: SupabaseManagementService,
     private val sshCommandExecutor: SshCommandExecutor,
     application: Application
@@ -34,7 +34,7 @@ class DropletMcpServiceImpl(
     private val logger = application.log
     private val dotenv = dotenv { ignoreIfMissing = true; directory = "." }
 
-    private fun env(key: String): String = dotenv[key] ?: System.getenv(key) ?: ""
+    internal open fun env(key: String): String = dotenv[key] ?: System.getenv(key) ?: ""
 
     companion object {
         val ALWAYS_PRESENT_ENV_VARS = setOf(
@@ -104,14 +104,18 @@ class DropletMcpServiceImpl(
     }
 
     private fun writeMcpRoutes(ip: String, toolDefs: List<McpToolDefinition>) {
-        val routes = toolDefs.joinToString(",") { tool ->
-            val auth = when (tool.authType) {
-                "bearer" -> """{"type":"bearer","envVar":"${tool.authEnvVar}"}"""
-                "path-prefix" -> """{"type":"path-prefix","envVar":"${tool.authEnvVar}","template":"${tool.authTemplate}"}"""
-                else -> """{"type":"${tool.authType}","envVar":"${tool.authEnvVar}"}"""
+        val selfHostedMcp = env("SUPABASE_MCP_URL").isNotBlank()
+        val routes = toolDefs
+            .filter { !(it.name == "supabase" && selfHostedMcp) }
+            .joinToString(",") { tool ->
+                val auth = when (tool.authType) {
+                    "bearer" -> """{"type":"bearer","envVar":"${tool.authEnvVar}"}"""
+                    "path-prefix" -> """{"type":"path-prefix","envVar":"${tool.authEnvVar}","template":"${tool.authTemplate}"}"""
+                    else -> """{"type":"${tool.authType}","envVar":"${tool.authEnvVar}"}"""
+                }
+                val upstream = if (tool.name == "supabase") env("SUPABASE_MCP_URL").ifBlank { tool.upstream } else tool.upstream
+                """"${tool.name}":{"upstream":"$upstream","auth":$auth}"""
             }
-            """"${tool.name}":{"upstream":"${tool.upstream}","auth":$auth}"""
-        }
         val json = "{$routes}"
         val encoded = Base64.getEncoder().encodeToString(json.toByteArray())
         sshCommandExecutor.runSshCommand(ip, "echo $encoded | base64 -d | sudo tee /etc/suprclaw/mcp-routes.json > /dev/null")
@@ -119,13 +123,36 @@ class DropletMcpServiceImpl(
         sshCommandExecutor.runSshCommand(ip, "sudo chown root:root /etc/suprclaw/mcp-routes.json")
     }
 
+    internal fun generateScopedJwt(schemaName: String): String {
+        val secret = env("SUPABASE_SELF_HOSTED_JWT_SECRET").ifBlank { return "" }
+        val header = Base64.getUrlEncoder().withoutPadding()
+            .encodeToString("""{"alg":"HS256","typ":"JWT"}""".toByteArray())
+        val now = System.currentTimeMillis() / 1000
+        val exp = now + 10L * 365 * 24 * 3600
+        val payload = Base64.getUrlEncoder().withoutPadding()
+            .encodeToString("""{"role":"${schemaName}_rpc","iss":"supabase","iat":$now,"exp":$exp}""".toByteArray())
+        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+        mac.init(javax.crypto.spec.SecretKeySpec(secret.toByteArray(), "HmacSHA256"))
+        val sig = Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(mac.doFinal("$header.$payload".toByteArray()))
+        return "$header.$payload.$sig"
+    }
+
     private fun writeMcporterConfig(ip: String, toolDefs: List<McpToolDefinition>, projectRef: String) {
+        val selfHostedMcp = env("SUPABASE_MCP_URL").isNotBlank()
         val servers = toolDefs.joinToString(",") { tool ->
-            val url = tool.mcporterUrlTemplate.replace("{projectRef}", projectRef)
-            """"${tool.name}":{"url":"$url","lifecycle":"keep-alive"}"""
+            if (tool.name == "supabase" && selfHostedMcp) {
+                val supabaseUrl = env("SUPABASE_SELF_HOSTED_URL")
+                val scopedJwt = generateScopedJwt(projectRef)
+                """"supabase":{"command":"npx","args":["-y","@supabase/mcp-server-supabase@latest"],"env":{"SUPABASE_URL":"$supabaseUrl","SUPABASE_ACCESS_TOKEN":"$scopedJwt"}}"""
+            } else {
+                val url = tool.mcporterUrlTemplate.replace("{projectRef}", projectRef)
+                """"${tool.name}":{"url":"$url","lifecycle":"keep-alive"}"""
+            }
         }
         val json = """{"mcpServers":{$servers}}"""
         val encoded = Base64.getEncoder().encodeToString(json.toByteArray())
         sshCommandExecutor.runSshCommand(ip, "echo $encoded | base64 -d > /home/openclaw/.mcporter/mcporter.json")
+        sshCommandExecutor.runSshCommand(ip, "echo $encoded | base64 -d > /home/openclaw/config/mcporter.json")
     }
 }

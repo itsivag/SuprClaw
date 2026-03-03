@@ -74,6 +74,10 @@ class SelfHostedSupabaseManagementService(
             executeJdbc("ALTER DEFAULT PRIVILEGES IN SCHEMA $schemaName GRANT ALL ON TABLES TO anon, authenticated, service_role")
             executeJdbc("ALTER DEFAULT PRIVILEGES IN SCHEMA $schemaName GRANT ALL ON SEQUENCES TO anon, authenticated, service_role")
             executeJdbc("ALTER DEFAULT PRIVILEGES IN SCHEMA $schemaName GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role")
+            // Create schema-scoped role for per-VPS MCP isolation
+            for (sql in roleCreationStatements(schemaName)) {
+                executeJdbc(sql)
+            }
         }
 
         addSchemaToPostgrest(schemaName)
@@ -108,6 +112,20 @@ class SelfHostedSupabaseManagementService(
          *  redirected to the per-user schema.  Exposed as `internal` for unit testing. */
         internal fun adaptSqlForSchema(sql: String, schema: String): String =
             sql.replace("public.", "$schema.")
+
+        /** Returns the ordered list of SQL statements that create the schema-scoped MCP role. */
+        internal fun roleCreationStatements(schemaName: String): List<String> = listOf(
+            "CREATE ROLE ${schemaName}_rpc NOLOGIN",
+            "GRANT USAGE ON SCHEMA $schemaName TO ${schemaName}_rpc",
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA $schemaName TO ${schemaName}_rpc",
+            "ALTER DEFAULT PRIVILEGES IN SCHEMA $schemaName GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${schemaName}_rpc",
+            "ALTER DEFAULT PRIVILEGES IN SCHEMA $schemaName GRANT USAGE, SELECT ON SEQUENCES TO ${schemaName}_rpc",
+            "ALTER ROLE ${schemaName}_rpc SET search_path = $schemaName"
+        )
+
+        /** Returns the SQL statement that safely drops the schema-scoped MCP role. */
+        internal fun roleDropStatement(schemaName: String): String =
+            "DROP ROLE IF EXISTS ${schemaName}_rpc"
 
         /**
          * Normalises any supported DB URL variant to `jdbc:postgresql://…`.
@@ -176,6 +194,22 @@ class SelfHostedSupabaseManagementService(
     override suspend fun deleteProject(projectRef: String) {
         logger.info("Dropping self-hosted schema $projectRef")
         withContext(Dispatchers.IO) {
+            // Revoke ALTER DEFAULT PRIVILEGES grants before dropping the role.
+            //
+            // Background: createProject runs ALTER DEFAULT PRIVILEGES IN SCHEMA $projectRef
+            // GRANT ... TO ${projectRef}_rpc.  This writes pg_default_acl entries where postgres
+            // is the grantor and ${projectRef}_rpc is the grantee.  DROP OWNED BY only removes
+            // entries where the role is the *owner/grantor*, so it does NOT clean these up, and
+            // DROP ROLE subsequently fails with "cannot be dropped because some objects depend on
+            // it".  Explicit REVOKE removes the pg_default_acl rows so DROP ROLE can proceed.
+            for (revoke in listOf(
+                "ALTER DEFAULT PRIVILEGES IN SCHEMA $projectRef REVOKE ALL ON TABLES FROM ${projectRef}_rpc",
+                "ALTER DEFAULT PRIVILEGES IN SCHEMA $projectRef REVOKE ALL ON SEQUENCES FROM ${projectRef}_rpc",
+                "ALTER DEFAULT PRIVILEGES IN SCHEMA $projectRef REVOKE ALL ON FUNCTIONS FROM ${projectRef}_rpc"
+            )) {
+                runCatching { executeJdbc(revoke) }
+            }
+            executeJdbc(roleDropStatement(projectRef))
             executeJdbc("DROP SCHEMA IF EXISTS $projectRef CASCADE")
         }
         removeSchemaFromPostgrest(projectRef)
