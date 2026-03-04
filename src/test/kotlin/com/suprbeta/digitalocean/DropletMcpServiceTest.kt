@@ -246,6 +246,22 @@ class DropletMcpServiceTest {
     // ── mcp.env ────────────────────────────────────────────────────────────
 
     @Test
+    fun `mcp env includes SUPABASE_API_KEY from SUPABASE_SELF_HOSTED_SERVICE_KEY`() = testApplication {
+        val commands = captureCommands()
+        val service = buildService(application, mapOf(
+            "SUPABASE_SELF_HOSTED_SERVICE_KEY" to "test-service-key"
+        ))
+
+        service.configureMcpTools(testDroplet, listOf("supabase"))
+
+        val envCmd = commands.find { it.contains("mcp.env") && it.contains("base64") }
+        assertNotNull(envCmd, "Expected mcp.env write command")
+        val content = decodeBase64FromCmd(envCmd)
+        assertTrue(content.contains("SUPABASE_API_KEY=test-service-key"),
+            "mcp.env must contain SUPABASE_API_KEY from SUPABASE_SELF_HOSTED_SERVICE_KEY, got: $content")
+    }
+
+    @Test
     fun `configureMcpTools writes mcp env with gateway token`() = testApplication {
         val commands = captureCommands()
         val service = buildService(application)

@@ -121,7 +121,16 @@ class SelfHostedSupabaseManagementService(
             "ALTER DEFAULT PRIVILEGES IN SCHEMA $schemaName GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${schemaName}_rpc",
             "ALTER DEFAULT PRIVILEGES IN SCHEMA $schemaName GRANT USAGE, SELECT ON SEQUENCES TO ${schemaName}_rpc",
             "ALTER ROLE ${schemaName}_rpc SET search_path = $schemaName",
-            "GRANT ${schemaName}_rpc TO authenticator"
+            "GRANT ${schemaName}_rpc TO authenticator",
+            "CREATE OR REPLACE FUNCTION ${schemaName}.execute_scoped_sql(query text) " +
+                "RETURNS json LANGUAGE plpgsql SECURITY INVOKER AS \$\$ " +
+                "DECLARE result json; " +
+                "BEGIN " +
+                "SET LOCAL search_path = ${schemaName}; " +
+                "EXECUTE 'SELECT json_agg(t) FROM (' || query || ') t' INTO result; " +
+                "RETURN COALESCE(result, '[]'::json); " +
+                "END; \$\$",
+            "GRANT EXECUTE ON FUNCTION ${schemaName}.execute_scoped_sql(text) TO ${schemaName}_rpc"
         )
 
         /** Returns the SQL statement that safely drops the schema-scoped MCP role. */
@@ -219,6 +228,7 @@ class SelfHostedSupabaseManagementService(
             )) {
                 runCatching { executeJdbc(revoke) }
             }
+            runCatching { executeJdbc("DROP FUNCTION IF EXISTS ${projectRef}.execute_scoped_sql(text)") }
             executeJdbc(roleDropStatement(projectRef))
             executeJdbc("DROP SCHEMA IF EXISTS $projectRef CASCADE")
         }

@@ -313,28 +313,32 @@ class ProvisioningMcpIntegrationTest {
         log.info("[INTG] DIAG A: role ${schemaName}_rpc exists in pg_roles = $roleExists")
         assertTrue(roleExists, "Role ${schemaName}_rpc must exist in pg_roles before isolation test")
 
-        // 7f: Scoped JWT cannot access public schema via PostgREST
-        // Kong requires both `apikey` (service key) and `Authorization: Bearer` (scoped JWT).
-        // apikey satisfies Kong auth; Authorization determines the Postgres role PostgREST assigns.
-        // The proj_xxx_rpc role has no USAGE on public → PostgREST returns 4xx.
-        log.info("[INTG] 7f: Verifying scoped JWT is denied access to public schema (PostgREST)...")
-        val response7f = httpClient.get("$supabaseUrl/rest/v1/") {
+        // 7f: Scoped JWT cannot access another user's schema table via PostgREST.
+        // The proj_xxx_rpc role has USAGE only on its own schema → PostgREST returns 403.
+        // We use the integration_sentinel table which the full provisioning test creates in each schema.
+        // apikey satisfies Kong key-auth; Authorization: Bearer sets the Postgres role in PostgREST.
+        log.info("[INTG] 7f: Verifying scoped JWT is denied access to another user schema (PostgREST)...")
+        // Find a foreign schema — any proj_ schema that is not ours and is in PGRST_DB_SCHEMAS.
+        val foreignSchema = listOf(
+            "proj_196891d2", "proj_0fc12ade", "proj_020709a2", "proj_e793ea3c",
+            "proj_bfd493d1", "proj_95cc4da7", "proj_7368c9b2", "proj_cd803194", "proj_0771b58d"
+        ).first { it != schemaName }
+        val response7f = httpClient.get("$supabaseUrl/rest/v1/integration_sentinel") {
             header("apikey", supabaseServiceKey)
             header("Authorization", "Bearer $accessToken")
-            header("Accept-Profile", "public")
+            header("Accept-Profile", foreignSchema)
         }
-        val publicStatus = response7f.status.value
-        log.info("[INTG] 7f public schema HTTP status: $publicStatus  body: ${response7f.bodyAsText().take(200)}")
+        val foreignStatus = response7f.status.value
+        log.info("[INTG] 7f foreign schema ($foreignSchema) HTTP status: $foreignStatus  body: ${response7f.bodyAsText().take(200)}")
         assertTrue(
-            publicStatus in 400..499,
-            "Scoped JWT must NOT access public schema — expected 4xx, got: $publicStatus"
+            foreignStatus in 400..499,
+            "Scoped JWT must NOT access foreign schema $foreignSchema — expected 4xx, got: $foreignStatus"
         )
-        log.info("[INTG] 7f PASS (public schema denied: HTTP $publicStatus)")
+        log.info("[INTG] 7f PASS (foreign schema denied: HTTP $foreignStatus)")
 
-        // 7g: Scoped JWT CAN access its own schema via PostgREST
-        // Accept-Profile: schemaName → PostgREST exposes own schema tables → 200 OK.
+        // 7g: Scoped JWT CAN access its own schema table via PostgREST → 200 OK.
         log.info("[INTG] 7g: Verifying scoped JWT can access own schema $schemaName (PostgREST)...")
-        val response7g = httpClient.get("$supabaseUrl/rest/v1/") {
+        val response7g = httpClient.get("$supabaseUrl/rest/v1/integration_sentinel") {
             header("apikey", supabaseServiceKey)
             header("Authorization", "Bearer $accessToken")
             header("Accept-Profile", schemaName)
@@ -346,6 +350,18 @@ class ProvisioningMcpIntegrationTest {
             "Scoped JWT must access own schema $schemaName — expected 200, got: $ownStatus"
         )
         log.info("[INTG] 7g PASS (own schema accessible: HTTP $ownStatus)")
+
+        // 7h: execute_sql cannot access another user's schema table
+        log.info("[INTG] 7h: Verifying execute_sql cannot access foreign schema table...")
+        val crossSchemaResult = ssh.runSshCommand(ip,
+            mcporterScript("execute_sql query=\"SELECT * FROM ${foreignSchema}.integration_sentinel\""))
+        log.info("[INTG] 7h result: $crossSchemaResult")
+        assertTrue(
+            crossSchemaResult.contains("error") || crossSchemaResult.contains("denied") ||
+            crossSchemaResult.contains("permission") || crossSchemaResult.contains("42501"),
+            "execute_sql must NOT access foreign schema table. Got: $crossSchemaResult"
+        )
+        log.info("[INTG] 7h PASS")
 
         log.info("[INTG] ✅ All MCP assertions passed")
     }

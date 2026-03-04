@@ -77,6 +77,14 @@ open class DropletMcpServiceImpl(
         // Restart mcporter if already running; silently skip if not yet started (provisioning).
         sshCommandExecutor.runSshCommand(ip, "sudo systemctl restart mcporter 2>/dev/null || true")
 
+        // Deploy the latest mcp-auth-proxy.js from resources to VPS.
+        val proxyJs = javaClass.getResourceAsStream("/mcp-auth-proxy.js")!!
+            .bufferedReader().readText()
+        val proxyEncoded = Base64.getEncoder().encodeToString(proxyJs.toByteArray())
+        sshCommandExecutor.runSshCommand(ip, "echo $proxyEncoded | base64 -d | sudo tee /usr/local/bin/mcp-auth-proxy.js > /dev/null")
+        sshCommandExecutor.runSshCommand(ip, "sudo chmod 700 /usr/local/bin/mcp-auth-proxy.js && sudo chown root:root /usr/local/bin/mcp-auth-proxy.js")
+        sshCommandExecutor.runSshCommand(ip, "sudo systemctl restart mcp-auth-proxy")
+
         logger.info("MCP tools configured on droplet ${droplet.dropletId}: ${toolNames.joinToString()}")
     }
 
@@ -93,7 +101,8 @@ open class DropletMcpServiceImpl(
             "AWS_SECRET_ACCESS_KEY=${env("AWS_SECRET_ACCESS_KEY")}",
             "AWS_REGION=${env("AWS_REGION").ifBlank { "us-east-1" }}",
             "AWS_BEARER_TOKEN_BEDROCK=${env("AWS_BEARER_TOKEN_BEDROCK")}",
-            "OPENCLAW_GATEWAY_TOKEN=${droplet.gatewayToken}"
+            "OPENCLAW_GATEWAY_TOKEN=${droplet.gatewayToken}",
+            "SUPABASE_API_KEY=${env("SUPABASE_SELF_HOSTED_SERVICE_KEY")}"
         )
         for (tool in toolDefs) {
             if (tool.authEnvVar !in ALWAYS_PRESENT_ENV_VARS) {
