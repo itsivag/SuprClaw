@@ -28,6 +28,7 @@ repositories {
 
 dependencies {
     implementation("org.openfolder:kotlin-asyncapi-ktor:3.1.3")
+    implementation("io.ktor:ktor-server-call-logging")
     implementation("io.ktor:ktor-server-default-headers")
     implementation("io.ktor:ktor-server-core")
     implementation("io.ktor:ktor-server-openapi")

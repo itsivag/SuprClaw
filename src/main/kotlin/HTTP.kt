@@ -4,13 +4,20 @@ import com.asyncapi.kotlinasyncapi.context.service.AsyncApiExtension
 import com.asyncapi.kotlinasyncapi.ktor.AsyncApiPlugin
 import io.ktor.openapi.*
 import io.ktor.server.application.*
+import io.ktor.server.plugins.calllogging.*
 import io.ktor.server.plugins.defaultheaders.*
+import io.ktor.server.request.*
 import io.ktor.server.plugins.openapi.*
 import io.ktor.server.plugins.swagger.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 
 fun Application.configureHTTP() {
+    install(CallLogging) {
+        format { call ->
+            "${call.request.httpMethod.value} ${call.request.path()} → ${call.response.status()}"
+        }
+    }
     install(AsyncApiPlugin) {
         extension = AsyncApiExtension.builder {
             info {

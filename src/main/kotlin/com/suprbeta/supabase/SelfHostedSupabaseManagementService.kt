@@ -124,10 +124,17 @@ class SelfHostedSupabaseManagementService(
             "GRANT ${schemaName}_rpc TO authenticator",
             "CREATE OR REPLACE FUNCTION ${schemaName}.execute_scoped_sql(query text) " +
                 "RETURNS json LANGUAGE plpgsql SECURITY INVOKER AS \$\$ " +
-                "DECLARE result json; " +
+                "DECLARE result json; q_upper text; " +
                 "BEGIN " +
                 "SET LOCAL search_path = ${schemaName}; " +
+                "q_upper := upper(left(trim(query), 10)); " +
+                "IF q_upper LIKE 'SELECT%' OR q_upper LIKE 'WITH%' THEN " +
                 "EXECUTE 'SELECT json_agg(t) FROM (' || query || ') t' INTO result; " +
+                "ELSIF position('RETURNING' IN upper(query)) > 0 THEN " +
+                "EXECUTE 'WITH _q AS (' || query || ') SELECT json_agg(t) FROM _q t' INTO result; " +
+                "ELSE " +
+                "EXECUTE query; result := '[]'::json; " +
+                "END IF; " +
                 "RETURN COALESCE(result, '[]'::json); " +
                 "END; \$\$",
             "GRANT EXECUTE ON FUNCTION ${schemaName}.execute_scoped_sql(text) TO ${schemaName}_rpc"

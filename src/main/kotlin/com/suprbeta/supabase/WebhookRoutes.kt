@@ -96,7 +96,10 @@ fun Application.configureWebhookRoutes(
                 return@post
             }
 
-            log.info("Webhook resolved agent=${agent.name} sessionKey=${agent.sessionKey} vpsUrl=${droplet.vpsGatewayUrl}")
+            // Derive the openclaw agent ID from session_key (format: "agent:{openclawId}:...")
+            // Using agent.name would break for the lead agent ("Lead" in DB vs "main" in openclaw).
+            val openclawAgentId = agent.sessionKey.split(":").getOrNull(1)?.ifBlank { null } ?: agent.name
+            log.info("Webhook resolved agent=${agent.name} openclawId=$openclawAgentId sessionKey=${agent.sessionKey} vpsUrl=${droplet.vpsGatewayUrl}")
 
             // Forward task assignment to openclaw hooks endpoint
             val notifyUrl = "${droplet.vpsGatewayUrl}/hooks/agent"
@@ -105,9 +108,10 @@ fun Application.configureWebhookRoutes(
                 val response: HttpResponse = httpClient.post(notifyUrl) {
                     header(HttpHeaders.Authorization, "Bearer ${droplet.hookToken}")
                     contentType(ContentType.Application.Json)
-                    setBody("""{"message":"Task $taskId has been assigned to you","agentId":"${agent.name}","sessionKey":"$hookSessionKey"}""")
+                    setBody("""{"message":"Task $taskId has been assigned to you","agentId":"$openclawAgentId","sessionKey":"$hookSessionKey"}""")
                 }
-                log.info("Webhook forwarded task=$taskId agent=${agent.name} sessionKey=$hookSessionKey to VPS status=${response.status}")
+                val responseBody = response.bodyAsText()
+                log.info("Webhook forwarded task=$taskId agent=${agent.name} openclawId=$openclawAgentId sessionKey=$hookSessionKey to VPS status=${response.status} body=$responseBody")
             } catch (e: Exception) {
                 log.error("Webhook: failed to notify VPS hooks endpoint for task=$taskId agent=${agent.name} url=$notifyUrl", e)
             }
