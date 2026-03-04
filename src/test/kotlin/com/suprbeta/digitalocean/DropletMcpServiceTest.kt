@@ -141,8 +141,8 @@ class DropletMcpServiceTest {
         val routesCmd = commands.find { it.contains("mcp-routes.json") && it.contains("base64") }
         assertNotNull(routesCmd, "Expected mcp-routes.json write command")
         val json = decodeBase64FromCmd(routesCmd)
-        assertTrue(json.contains("\"upstream\":\"https://mcp.supabase.com\""),
-            "mcp-routes.json upstream must fall back to mcp.supabase.com, got: $json")
+        assertTrue(json.contains("\"upstream\":\"https://supabase.suprclaw.com\""),
+            "mcp-routes.json upstream must fall back to supabase.suprclaw.com, got: $json")
     }
 
     // ── mcp.env: JWT / fallback ────────────────────────────────────────────

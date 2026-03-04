@@ -23,7 +23,7 @@ object McpToolRegistry {
     val tools: Map<String, McpToolDefinition> = mapOf(
         "supabase" to McpToolDefinition(
             name = "supabase",
-            upstream = "https://mcp.supabase.com",
+            upstream = "https://supabase.suprclaw.com",
             authType = "bearer",
             authEnvVar = "SUPABASE_ACCESS_TOKEN",
             mcporterUrlTemplate = "http://127.0.0.1:18790/supabase/mcp?project_ref={projectRef}"
