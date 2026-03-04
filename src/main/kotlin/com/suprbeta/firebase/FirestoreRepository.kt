@@ -369,6 +369,34 @@ class FirestoreRepository(
         }
     }
 
+    // ==================== FCM Token Operations ====================
+
+    suspend fun saveFcmToken(userId: String, token: String) {
+        try {
+            firestore.collection(USERS)
+                .document(userId)
+                .set(mapOf("fcmToken" to token), SetOptions.merge())
+                .await()
+            application.log.info("FCM token saved for userId=$userId")
+        } catch (e: Exception) {
+            application.log.error("Failed to save FCM token for userId=$userId", e)
+            throw e
+        }
+    }
+
+    suspend fun getFcmToken(userId: String): String? {
+        return try {
+            firestore.collection(USERS)
+                .document(userId)
+                .get()
+                .await()
+                .getString("fcmToken")
+        } catch (e: Exception) {
+            application.log.error("Failed to get FCM token for userId=$userId", e)
+            null
+        }
+    }
+
     // ==================== Supabase Project Ref Mapping ====================
 
     /** Stores a projectRef → userId mapping for webhook routing. */

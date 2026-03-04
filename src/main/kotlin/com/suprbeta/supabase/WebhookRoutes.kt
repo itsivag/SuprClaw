@@ -1,5 +1,6 @@
 package com.suprbeta.supabase
 
+import com.suprbeta.firebase.FcmNotificationService
 import com.suprbeta.firebase.FirestoreRepository
 import io.ktor.client.*
 import io.ktor.client.request.*
@@ -21,6 +22,7 @@ fun Application.configureWebhookRoutes(
     webhookSecret: String
 ) {
     val json = Json { ignoreUnknownKeys = true }
+    val fcmService = FcmNotificationService(this)
 
     routing {
         /**
@@ -300,6 +302,19 @@ fun Application.configureWebhookRoutes(
                 log.info("Document webhook forwarded task=$taskId document=$documentId to lead openclawId=$openclawAgentId status=${response.status} body=$responseBody")
             } catch (e: Exception) {
                 log.error("Document webhook: failed to notify VPS for task=$taskId document=$documentId url=$notifyUrl", e)
+            }
+
+            // Send FCM push notification to the user
+            val fcmToken = firestoreRepository.getFcmToken(droplet.userId)
+            if (!fcmToken.isNullOrBlank()) {
+                fcmService.sendNotification(
+                    fcmToken = fcmToken,
+                    title = if (!title.isNullOrBlank()) "📄 $title" else "New Document",
+                    body = "An agent created a new document for your task.",
+                    data = mapOf("taskId" to taskId, "documentId" to documentId)
+                )
+            } else {
+                log.debug("No FCM token for userId=${droplet.userId}, skipping push notification")
             }
 
             call.respond(HttpStatusCode.OK)
