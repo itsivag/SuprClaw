@@ -16,7 +16,12 @@ data class Task(
     @SerialName("locked_by") val lockedBy: String? = null,
     @SerialName("locked_at") val lockedAt: String? = null,
     @SerialName("created_at") val createdAt: String? = null,
-    @SerialName("updated_at") val updatedAt: String? = null
+    @SerialName("updated_at") val updatedAt: String? = null,
+    @SerialName("is_recurring") val isRecurring: Boolean = false,
+    @SerialName("cron_expression") val cronExpression: String? = null,
+    @SerialName("recurrence_interval") val recurrenceInterval: String? = null,
+    @SerialName("next_run_at") val nextRunAt: String? = null,
+    @SerialName("last_run_at") val lastRunAt: String? = null,
 )
 
 @Serializable

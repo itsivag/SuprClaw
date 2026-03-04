@@ -25,7 +25,12 @@ CREATE TABLE IF NOT EXISTS public.tasks (
     locked_by UUID REFERENCES public.agents(id),
     locked_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    is_recurring BOOLEAN NOT NULL DEFAULT FALSE,
+    cron_expression TEXT,
+    recurrence_interval TEXT,
+    next_run_at TIMESTAMPTZ,
+    last_run_at TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS public.task_messages (
