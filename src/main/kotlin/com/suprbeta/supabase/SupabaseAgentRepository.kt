@@ -30,6 +30,17 @@ class SupabaseAgentRepository(
         }
     }
 
+    suspend fun getLeadAgent(client: SupabaseClient): UserAgent? {
+        return try {
+            client.from("agents").select {
+                filter { eq("is_lead", true) }
+            }.decodeSingleOrNull<UserAgent>()
+        } catch (e: Exception) {
+            application.log.error("Failed to fetch lead agent", e)
+            null
+        }
+    }
+
     suspend fun getAgentById(client: SupabaseClient, agentId: String): UserAgent? {
         return try {
             application.log.debug("Fetching agent by id=$agentId")

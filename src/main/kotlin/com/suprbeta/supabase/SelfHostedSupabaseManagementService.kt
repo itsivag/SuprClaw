@@ -202,6 +202,70 @@ class SelfHostedSupabaseManagementService(
             FOR EACH ROW EXECUTE FUNCTION public._suprclaw_task_assignment_notify();
         """.trimIndent())
 
+        val messagesUrl = "$webhookBaseUrl/webhooks/messages/$projectRef"
+        val safeMessagesUrl = messagesUrl.replace("'", "''")
+
+        runSql(projectRef, """
+            CREATE OR REPLACE FUNCTION public._suprclaw_task_message_notify()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS '
+            BEGIN
+              PERFORM net.http_post(
+                url := ''$safeMessagesUrl'',
+                body := jsonb_build_object(
+                  ''type'', ''INSERT'',
+                  ''table'', TG_TABLE_NAME,
+                  ''record'', to_jsonb(NEW),
+                  ''schema'', TG_TABLE_SCHEMA,
+                  ''old_record'', NULL::jsonb
+                ),
+                headers := ''$headersJson''::jsonb,
+                timeout_milliseconds := 5000
+              );
+              RETURN NEW;
+            END;
+            ';
+        """.trimIndent())
+
+        runSql(projectRef, """
+            CREATE OR REPLACE TRIGGER "task-message-hook"
+            AFTER INSERT ON public.task_messages
+            FOR EACH ROW EXECUTE FUNCTION public._suprclaw_task_message_notify();
+        """.trimIndent())
+
+        val documentsUrl = "$webhookBaseUrl/webhooks/documents/$projectRef"
+        val safeDocumentsUrl = documentsUrl.replace("'", "''")
+
+        runSql(projectRef, """
+            CREATE OR REPLACE FUNCTION public._suprclaw_task_document_notify()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS '
+            BEGIN
+              PERFORM net.http_post(
+                url := ''$safeDocumentsUrl'',
+                body := jsonb_build_object(
+                  ''type'', ''INSERT'',
+                  ''table'', TG_TABLE_NAME,
+                  ''record'', to_jsonb(NEW),
+                  ''schema'', TG_TABLE_SCHEMA,
+                  ''old_record'', NULL::jsonb
+                ),
+                headers := ''$headersJson''::jsonb,
+                timeout_milliseconds := 5000
+              );
+              RETURN NEW;
+            END;
+            ';
+        """.trimIndent())
+
+        runSql(projectRef, """
+            CREATE OR REPLACE TRIGGER "task-document-hook"
+            AFTER INSERT ON public.task_documents
+            FOR EACH ROW EXECUTE FUNCTION public._suprclaw_task_document_notify();
+        """.trimIndent())
+
         logger.info("✅ Self-hosted database webhook created for schema $projectRef")
     }
 

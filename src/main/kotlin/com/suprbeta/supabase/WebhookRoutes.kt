@@ -118,5 +118,191 @@ fun Application.configureWebhookRoutes(
 
             call.respond(HttpStatusCode.OK)
         }
+
+        /**
+         * POST /webhooks/messages/{projectRef}
+         *
+         * Fires on every task_messages INSERT. Always routes to the lead agent so it
+         * can observe and react to messages sent by sub-agents.
+         *
+         * Expected body (Supabase webhook format):
+         * {
+         *   "type": "INSERT",
+         *   "table": "task_messages",
+         *   "record": { "id": "uuid", "task_id": "uuid", "from_agent": "uuid", "content": "..." },
+         *   "schema": "public",
+         *   "old_record": null
+         * }
+         */
+        post("/webhooks/messages/{projectRef}") {
+            val projectRef = call.parameters["projectRef"]
+            if (projectRef.isNullOrBlank()) {
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing projectRef"))
+                return@post
+            }
+
+            val authHeader = call.request.header(HttpHeaders.Authorization) ?: ""
+            if (authHeader != "Bearer $webhookSecret") {
+                log.warn("Message webhook rejected: invalid auth for projectRef=$projectRef")
+                call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "Unauthorized"))
+                return@post
+            }
+
+            val body = call.receiveText()
+            log.info("Message webhook received for projectRef=$projectRef body=${body.take(300)}")
+
+            val parsed = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull()
+            if (parsed == null) {
+                call.respond(HttpStatusCode.OK)
+                return@post
+            }
+
+            val record = parsed["record"]?.jsonObject
+            val messageId = record?.get("id")?.jsonPrimitive?.content
+            val taskId = record?.get("task_id")?.jsonPrimitive?.content
+            val fromAgentId = record?.get("from_agent")?.jsonPrimitive?.content
+            val content = record?.get("content")?.jsonPrimitive?.content
+
+            if (taskId.isNullOrBlank() || messageId.isNullOrBlank()) {
+                log.warn("Message webhook ignored: missing task_id or id for projectRef=$projectRef")
+                call.respond(HttpStatusCode.OK)
+                return@post
+            }
+
+            val droplet = firestoreRepository.getUserDropletInternalByProjectRef(projectRef)
+            if (droplet == null) {
+                log.warn("Message webhook: no droplet found for projectRef=$projectRef")
+                call.respond(HttpStatusCode.OK)
+                return@post
+            }
+
+            val client = userClientProvider.getClient(droplet.resolveSupabaseUrl(), droplet.supabaseServiceKey, droplet.supabaseSchema)
+            val leadAgent = agentRepository.getLeadAgent(client)
+            if (leadAgent == null) {
+                log.warn("Message webhook: no lead agent found for projectRef=$projectRef")
+                call.respond(HttpStatusCode.OK)
+                return@post
+            }
+
+            // Skip if the message was sent by the lead agent itself to avoid loops
+            val leadAgentUuid = leadAgent.id
+            if (!leadAgentUuid.isNullOrBlank() && leadAgentUuid == fromAgentId) {
+                log.info("Message webhook: skipping message from lead agent itself task=$taskId")
+                call.respond(HttpStatusCode.OK)
+                return@post
+            }
+
+            val openclawAgentId = leadAgent.sessionKey.split(":").getOrNull(1)?.ifBlank { null } ?: leadAgent.name
+            log.info("Message webhook routing to lead=${leadAgent.name} openclawId=$openclawAgentId task=$taskId message=$messageId")
+
+            val notifyUrl = "${droplet.vpsGatewayUrl}/hooks/agent"
+            val hookSessionKey = "hook:task:$taskId"
+            val preview = content?.take(120)?.replace("\"", "\\\"") ?: ""
+            try {
+                val response: HttpResponse = httpClient.post(notifyUrl) {
+                    header(HttpHeaders.Authorization, "Bearer ${droplet.hookToken}")
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"message":"New message on task $taskId: $preview","agentId":"$openclawAgentId","sessionKey":"$hookSessionKey"}""")
+                }
+                val responseBody = response.bodyAsText()
+                log.info("Message webhook forwarded task=$taskId message=$messageId to lead openclawId=$openclawAgentId status=${response.status} body=$responseBody")
+            } catch (e: Exception) {
+                log.error("Message webhook: failed to notify VPS for task=$taskId message=$messageId url=$notifyUrl", e)
+            }
+
+            call.respond(HttpStatusCode.OK)
+        }
+
+        /**
+         * POST /webhooks/documents/{projectRef}
+         *
+         * Fires on every task_documents INSERT. Always routes to the lead agent.
+         *
+         * Expected body (Supabase webhook format):
+         * {
+         *   "type": "INSERT",
+         *   "table": "task_documents",
+         *   "record": { "id": "uuid", "task_id": "uuid", "created_by": "uuid", "title": "...", "content": "..." },
+         *   "schema": "public",
+         *   "old_record": null
+         * }
+         */
+        post("/webhooks/documents/{projectRef}") {
+            val projectRef = call.parameters["projectRef"]
+            if (projectRef.isNullOrBlank()) {
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing projectRef"))
+                return@post
+            }
+
+            val authHeader = call.request.header(HttpHeaders.Authorization) ?: ""
+            if (authHeader != "Bearer $webhookSecret") {
+                log.warn("Document webhook rejected: invalid auth for projectRef=$projectRef")
+                call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "Unauthorized"))
+                return@post
+            }
+
+            val body = call.receiveText()
+            log.info("Document webhook received for projectRef=$projectRef body=${body.take(300)}")
+
+            val parsed = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull()
+            if (parsed == null) {
+                call.respond(HttpStatusCode.OK)
+                return@post
+            }
+
+            val record = parsed["record"]?.jsonObject
+            val documentId = record?.get("id")?.jsonPrimitive?.content
+            val taskId = record?.get("task_id")?.jsonPrimitive?.content
+            val createdBy = record?.get("created_by")?.jsonPrimitive?.content
+            val title = record?.get("title")?.jsonPrimitive?.content
+
+            if (taskId.isNullOrBlank() || documentId.isNullOrBlank()) {
+                log.warn("Document webhook ignored: missing task_id or id for projectRef=$projectRef")
+                call.respond(HttpStatusCode.OK)
+                return@post
+            }
+
+            val droplet = firestoreRepository.getUserDropletInternalByProjectRef(projectRef)
+            if (droplet == null) {
+                log.warn("Document webhook: no droplet found for projectRef=$projectRef")
+                call.respond(HttpStatusCode.OK)
+                return@post
+            }
+
+            val client = userClientProvider.getClient(droplet.resolveSupabaseUrl(), droplet.supabaseServiceKey, droplet.supabaseSchema)
+            val leadAgent = agentRepository.getLeadAgent(client)
+            if (leadAgent == null) {
+                log.warn("Document webhook: no lead agent found for projectRef=$projectRef")
+                call.respond(HttpStatusCode.OK)
+                return@post
+            }
+
+            // Skip if the document was created by the lead agent itself to avoid loops
+            if (!leadAgent.id.isNullOrBlank() && leadAgent.id == createdBy) {
+                log.info("Document webhook: skipping document created by lead agent itself task=$taskId")
+                call.respond(HttpStatusCode.OK)
+                return@post
+            }
+
+            val openclawAgentId = leadAgent.sessionKey.split(":").getOrNull(1)?.ifBlank { null } ?: leadAgent.name
+            log.info("Document webhook routing to lead=${leadAgent.name} openclawId=$openclawAgentId task=$taskId document=$documentId")
+
+            val notifyUrl = "${droplet.vpsGatewayUrl}/hooks/agent"
+            val hookSessionKey = "hook:task:$taskId"
+            val safeTitle = title?.replace("\"", "\\\"") ?: ""
+            try {
+                val response: HttpResponse = httpClient.post(notifyUrl) {
+                    header(HttpHeaders.Authorization, "Bearer ${droplet.hookToken}")
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"message":"New document on task $taskId: $safeTitle","agentId":"$openclawAgentId","sessionKey":"$hookSessionKey"}""")
+                }
+                val responseBody = response.bodyAsText()
+                log.info("Document webhook forwarded task=$taskId document=$documentId to lead openclawId=$openclawAgentId status=${response.status} body=$responseBody")
+            } catch (e: Exception) {
+                log.error("Document webhook: failed to notify VPS for task=$taskId document=$documentId url=$notifyUrl", e)
+            }
+
+            call.respond(HttpStatusCode.OK)
+        }
     }
 }
