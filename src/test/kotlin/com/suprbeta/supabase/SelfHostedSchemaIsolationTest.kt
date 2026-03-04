@@ -16,10 +16,11 @@ class SelfHostedSchemaIsolationTest {
     // ── Role creation statements ──────────────────────────────────────────
 
     @Test
-    fun `roleCreationStatements returns exactly 6 statements`() {
+    fun `roleCreationStatements returns exactly 9 statements`() {
         // CREATE ROLE + GRANT USAGE + GRANT CRUD TABLES + ALTER DEFAULT TABLES +
-        // ALTER DEFAULT SEQUENCES + ALTER ROLE search_path
-        assertEquals(6, SelfHostedSupabaseManagementService.roleCreationStatements("proj_abc").size)
+        // ALTER DEFAULT SEQUENCES + ALTER ROLE search_path + GRANT authenticator +
+        // CREATE FUNCTION execute_scoped_sql + GRANT EXECUTE
+        assertEquals(9, SelfHostedSupabaseManagementService.roleCreationStatements("proj_abc").size)
     }
 
     @Test
