@@ -212,6 +212,19 @@ fun Application.configureWebhookRoutes(
                 log.error("Message webhook: failed to notify VPS for task=$taskId message=$messageId url=$notifyUrl", e)
             }
 
+            // Send FCM push notification to the user
+            val fcmToken = firestoreRepository.getFcmToken(droplet.userId)
+            if (!fcmToken.isNullOrBlank()) {
+                fcmService.sendNotification(
+                    fcmToken = fcmToken,
+                    title = "New Message",
+                    body = if (preview.isNotBlank()) preview else "You have a new message on your task.",
+                    data = mapOf("taskId" to taskId, "messageId" to messageId)
+                )
+            } else {
+                log.debug("No FCM token for userId=${droplet.userId}, skipping push notification")
+            }
+
             call.respond(HttpStatusCode.OK)
         }
 
