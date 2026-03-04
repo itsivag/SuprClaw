@@ -120,7 +120,8 @@ class SelfHostedSupabaseManagementService(
             "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA $schemaName TO ${schemaName}_rpc",
             "ALTER DEFAULT PRIVILEGES IN SCHEMA $schemaName GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${schemaName}_rpc",
             "ALTER DEFAULT PRIVILEGES IN SCHEMA $schemaName GRANT USAGE, SELECT ON SEQUENCES TO ${schemaName}_rpc",
-            "ALTER ROLE ${schemaName}_rpc SET search_path = $schemaName"
+            "ALTER ROLE ${schemaName}_rpc SET search_path = $schemaName",
+            "GRANT ${schemaName}_rpc TO authenticator"
         )
 
         /** Returns the SQL statement that safely drops the schema-scoped MCP role. */
@@ -203,6 +204,8 @@ class SelfHostedSupabaseManagementService(
             // DROP ROLE subsequently fails with "cannot be dropped because some objects depend on
             // it".  Explicit REVOKE removes the pg_default_acl rows so DROP ROLE can proceed.
             for (revoke in listOf(
+                // Revoke authenticator's ability to SET ROLE to this scoped role.
+                "REVOKE ${projectRef}_rpc FROM authenticator",
                 // Revoke explicit grants on existing objects (tables/sequences already created).
                 // ALTER DEFAULT PRIVILEGES REVOKE only removes pg_default_acl (future grants);
                 // it does NOT remove grants already applied to existing tables/sequences.
