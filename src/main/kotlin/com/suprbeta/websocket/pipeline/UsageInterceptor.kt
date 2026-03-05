@@ -114,8 +114,8 @@ class UsageInterceptor(
 
     private suspend fun processWorkItem(workItem: UsageWorkItem) {
         val model = resolveModel(workItem.userId, workItem.agentId)
-        val tokens = tokenCalculator.countFrameTokens(workItem.frame, model)
-        if (tokens <= 0L) return
+        val delta = tokenCalculator.extractTokenUsage(workItem.frame, model)
+        if (delta.isZero()) return
 
         val dayUtc = currentDayUtc()
         val key = bufferKey(workItem.sessionId, dayUtc)
@@ -125,10 +125,6 @@ class UsageInterceptor(
 
         var snapshot: UsageSnapshot? = null
         buffer.mutex.withLock {
-            val delta = when (workItem.direction) {
-                MessageDirection.INBOUND -> TokenUsageDelta.inbound(tokens)
-                MessageDirection.OUTBOUND -> TokenUsageDelta.outbound(tokens)
-            }
             buffer.pending = buffer.pending.plus(delta)
             buffer.pendingEvents += delta.usageEvents.toInt()
 

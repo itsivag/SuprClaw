@@ -140,7 +140,6 @@ fun Application.configureWebSockets(httpClient: HttpClient, authService: Firebas
 
     val tokenCalculator = TokenCalculator(
         application = this,
-        httpClient = httpClient,
         json = json
     )
     val usageInterceptor = UsageInterceptor(

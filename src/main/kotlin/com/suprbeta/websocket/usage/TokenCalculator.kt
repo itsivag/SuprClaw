@@ -1,129 +1,106 @@
 package com.suprbeta.websocket.usage
 
+import com.suprbeta.websocket.models.TokenUsageDelta
 import com.suprbeta.websocket.models.WebSocketFrame
-import io.ktor.client.*
-import io.ktor.client.request.*
-import io.ktor.client.statement.*
-import io.ktor.http.*
 import io.ktor.server.application.*
 import kotlinx.serialization.json.*
-import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
-import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.math.ceil
 
 /**
- * Calculates token count from websocket frame payloads.
+ * Extracts perfect token usage metadata from Bedrock models.
+ * It strictly follows the OpenClaw WebSocket API Schemas.
  */
 class TokenCalculator(
     application: Application,
-    private val httpClient: HttpClient,
-    private val json: Json,
-    private val geminiApiKey: String? = run {
-        val dotenv = io.github.cdimascio.dotenv.dotenv { ignoreIfMissing = true; directory = "." }
-        dotenv["GEMINI_API_KEY"] ?: System.getenv("GEMINI_API_KEY")
-    }
+    private val json: Json
 ) {
     companion object {
-        private const val GEMINI_COUNT_TOKENS_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
-        const val DEFAULT_MODEL = "google/gemini-2.5-flash"
+        const val DEFAULT_MODEL = "amazon/nova-pro"
     }
 
     private val logger = application.log
-    private val missingKeyWarned = AtomicBoolean(false)
-    private val excludedKeys = setOf(
-        "auth", "token", "signature", "nonce", "id", "requestId",
-        "sessionId", "sessionKey", "method", "event", "type"
-    )
 
-    suspend fun countFrameTokens(frame: WebSocketFrame, model: String): Long {
-        val tokenizableSegments = mutableListOf<String>()
-        collectTokenizableStrings(frame.params, tokenizableSegments)
-        collectTokenizableStrings(frame.payload, tokenizableSegments)
-        collectTokenizableStrings(frame.result, tokenizableSegments)
+    /**
+     * Inspects the frame for usage metadata.
+     * According to OpenClaw schemas, token usage is primarily sent in the 
+     * 'chat' event payload.
+     */
+    fun extractTokenUsage(frame: WebSocketFrame, model: String): TokenUsageDelta {
+        var inputTokens = 0L
+        var outputTokens = 0L
 
-        val merged = tokenizableSegments
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .joinToString("\n")
-
-        if (merged.isEmpty()) return 0
-
-        return try {
-            countWithGemini(model, merged)
-        } catch (e: Exception) {
-            logger.warn("Gemini countTokens failed for model=$model, falling back to heuristic: ${e.message}")
-            heuristicTokens(merged)
+        // 1. Check for 'chat' events (where Bedrock usage is typically attached)
+        if (frame.event == "chat" && frame.payload is JsonObject) {
+            val payload = frame.payload.jsonObject
+            payload["usage"]?.jsonObject?.let { usage ->
+                val (inT, outT) = findTokensInObject(usage)
+                inputTokens += inT
+                outputTokens += outT
+            }
         }
+
+        // 2. Fallback: Search anywhere in payload/result for robustness
+        if (inputTokens == 0L && outputTokens == 0L) {
+            val (inT, outT) = findTokensInObject(frame.payload)
+            inputTokens += inT
+            outputTokens += outT
+            
+            if (inputTokens == 0L && outputTokens == 0L) {
+                val (inTRes, outTRes) = findTokensInObject(frame.result)
+                inputTokens += inTRes
+                outputTokens += outTRes
+            }
+        }
+
+        if (inputTokens == 0L && outputTokens == 0L) {
+            return TokenUsageDelta()
+        }
+
+        logger.debug("Perfect Usage match: In=$inputTokens, Out=$outputTokens")
+
+        return TokenUsageDelta(
+            promptTokens = inputTokens,
+            completionTokens = outputTokens,
+            totalTokens = inputTokens + outputTokens,
+            // Map prompt to inbound and completion to outbound relative to the model
+            inboundPromptTokens = inputTokens,
+            inboundTotalTokens = inputTokens,
+            outboundCompletionTokens = outputTokens,
+            outboundTotalTokens = outputTokens,
+            usageEvents = 1
+        )
     }
 
-    private suspend fun countWithGemini(model: String, text: String): Long {
-        val key = geminiApiKey?.trim()
-        if (key.isNullOrEmpty()) {
-            if (missingKeyWarned.compareAndSet(false, true)) {
-                logger.warn("GEMINI_API_KEY not configured; token counting will use heuristic fallback")
-            }
-            return heuristicTokens(text)
+    /**
+     * Recursively looks for Bedrock token keys in a JSON object.
+     */
+    private fun findTokensInObject(element: JsonElement?): Pair<Long, Long> {
+        if (element == null || element !is JsonObject) return Pair(0L, 0L)
+        
+        var inT = 0L
+        var outT = 0L
+
+        // Direct keys in this object
+        inT += element["inputTokens"]?.jsonPrimitive?.longOrNull ?: 0L
+        inT += element["prompt_tokens"]?.jsonPrimitive?.longOrNull ?: 0L
+        inT += element["inputTokenCount"]?.jsonPrimitive?.longOrNull ?: 0L
+
+        outT += element["outputTokens"]?.jsonPrimitive?.longOrNull ?: 0L
+        outT += element["completion_tokens"]?.jsonPrimitive?.longOrNull ?: 0L
+        outT += element["outputTokenCount"]?.jsonPrimitive?.longOrNull ?: 0L
+
+        // Check if there's a nested usage or metrics block
+        element["usage"]?.jsonObject?.let { 
+            val nested = findTokensInObject(it)
+            inT += nested.first
+            outT += nested.second
+        }
+        
+        element["amazon-bedrock-invocationMetrics"]?.jsonObject?.let {
+            val nested = findTokensInObject(it)
+            inT += nested.first
+            outT += nested.second
         }
 
-        val encodedModel = URLEncoder.encode(model, StandardCharsets.UTF_8)
-        val response = httpClient.post("$GEMINI_COUNT_TOKENS_BASE_URL/$encodedModel:countTokens?key=$key") {
-            contentType(ContentType.Application.Json)
-            setBody(
-                buildJsonObject {
-                    putJsonArray("contents") {
-                        add(
-                            buildJsonObject {
-                                putJsonArray("parts") {
-                                    add(
-                                        buildJsonObject {
-                                            put("text", text)
-                                        }
-                                    )
-                                }
-                            }
-                        )
-                    }
-                }.toString()
-            )
-        }
-
-        if (!response.status.isSuccess()) {
-            throw IllegalStateException("HTTP ${response.status.value}")
-        }
-
-        val body = response.bodyAsText()
-        val totalTokens = json.parseToJsonElement(body)
-            .jsonObject["totalTokens"]
-            ?.jsonPrimitive
-            ?.longOrNull
-
-        return totalTokens ?: throw IllegalStateException("Missing totalTokens in countTokens response")
-    }
-
-    private fun heuristicTokens(text: String): Long {
-        return ceil(text.length / 4.0).toLong()
-    }
-
-    private fun collectTokenizableStrings(element: JsonElement?, output: MutableList<String>) {
-        when (element) {
-            null -> return
-            is JsonObject -> {
-                element.forEach { (key, value) ->
-                    if (excludedKeys.contains(key)) return@forEach
-                    collectTokenizableStrings(value, output)
-                }
-            }
-            is JsonArray -> {
-                element.forEach { item ->
-                    collectTokenizableStrings(item, output)
-                }
-            }
-            is JsonPrimitive -> {
-                if (element.isString) {
-                    output.add(element.content)
-                }
-            }
-        }
+        return Pair(inT, outT)
     }
 }
