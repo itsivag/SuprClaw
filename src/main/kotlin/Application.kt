@@ -63,7 +63,7 @@ fun Application.module() {
     configureSerialization()
     configureHTTP()
     val cryptoService = com.suprbeta.core.CryptoService(this)
-    val (firebaseAuthService, firestoreRepository) = configureFirebase(cryptoService)
+    val (firebaseAuthService, firestoreRepository, remoteConfigService) = configureFirebase(cryptoService)
     val agentRepository = SupabaseAgentRepository(this)
     val taskRepository = SupabaseTaskRepository(this)
     val schemaRepository = SupabaseSchemaRepository(this)
@@ -75,7 +75,7 @@ fun Application.module() {
     val managementService: SupabaseManagementService = SelfHostedSupabaseManagementService(httpClient, this)
     log.info("Supabase mode: self-hosted")
 
-    configureWebSockets(httpClient, firebaseAuthService, firestoreRepository)
+    configureWebSockets(httpClient, firebaseAuthService, firestoreRepository, remoteConfigService)
     val configuringService = configureDigitalOcean(
         httpClient, firestoreRepository, agentRepository, schemaRepository, managementService, userClientProvider
     )
@@ -129,7 +129,12 @@ private fun configureJvmNetworking() {
     }
 }
 
-fun Application.configureWebSockets(httpClient: HttpClient, authService: FirebaseAuthService, firestoreRepository: FirestoreRepository) {
+fun Application.configureWebSockets(
+    httpClient: HttpClient,
+    authService: FirebaseAuthService,
+    firestoreRepository: FirestoreRepository,
+    remoteConfigService: com.suprbeta.firebase.RemoteConfigService
+) {
     // Configure shared JSON serializer
     val json = Json {
         ignoreUnknownKeys = true
@@ -148,6 +153,11 @@ fun Application.configureWebSockets(httpClient: HttpClient, authService: Firebas
         tokenCalculator = tokenCalculator,
         application = this
     )
+    
+    val rateLimitInterceptor = com.suprbeta.websocket.pipeline.RateLimitInterceptor(
+        application = this,
+        remoteConfigService = remoteConfigService
+    )
 
     // Initialize pipeline with interceptors
     val messagePipeline = MessagePipeline(
@@ -155,6 +165,7 @@ fun Application.configureWebSockets(httpClient: HttpClient, authService: Firebas
         interceptors = listOf(
             LoggingInterceptor(this),
             AuthInterceptor(authService, this),
+            rateLimitInterceptor,
             usageInterceptor
         )
     )
@@ -267,11 +278,12 @@ private fun Application.createProviders(
     }
 }
 
-fun Application.configureFirebase(cryptoService: com.suprbeta.core.CryptoService): Pair<FirebaseAuthService, FirestoreRepository> {
+fun Application.configureFirebase(cryptoService: com.suprbeta.core.CryptoService): Triple<FirebaseAuthService, FirestoreRepository, com.suprbeta.firebase.RemoteConfigService> {
     // Initialize Firebase services
     val firebaseService = FirebaseService(this)
     val firestoreRepository = FirestoreRepository(firebaseService.firestore, this, cryptoService)
     val firebaseAuthService = FirebaseAuthService(firebaseService, this)
+    val remoteConfigService = com.suprbeta.firebase.RemoteConfigService(this, firebaseService.firebaseApp)
 
     // Install HTTP authentication plugin
     install(FirebaseAuthPlugin) {
@@ -289,5 +301,5 @@ fun Application.configureFirebase(cryptoService: com.suprbeta.core.CryptoService
 
     log.info("Firebase Authentication and Firestore initialized and ready")
 
-    return Pair(firebaseAuthService, firestoreRepository)
+    return Triple(firebaseAuthService, firestoreRepository, remoteConfigService)
 }

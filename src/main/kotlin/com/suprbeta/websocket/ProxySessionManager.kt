@@ -30,27 +30,31 @@ class ProxySessionManager(
     /**
      * Create or resume a proxy session for a mobile client
      */
-    fun getOrCreateSession(
+    suspend fun getOrCreateSession(
         clientSession: DefaultWebSocketSession,
         token: String,
         platform: String? = null,
         userId: String,
         userEmail: String?,
         emailVerified: Boolean,
-        authProvider: String?
+        authProvider: String?,
+        userTier: String
     ): ProxySession {
         val existingSession = sessions[userId]
 
         if (existingSession != null) {
-            logger.info("Resuming existing session for user: $userId")
-            // Cancel any pending disconnect job
+            logger.info("Resuming existing session for user: $userId (Tier: $userTier)")
             existingSession.disconnectJob?.cancel()
             existingSession.disconnectJob = null
-            
-            // Update client session
             existingSession.clientSession = clientSession
+            // Optionally, update userTier if they upgraded mid-session
+            // We'd need to make metadata vars mutable if we want that, 
+            // but for now, they get new limits on full reconnect.
             return existingSession
         }
+
+        val todayUtc = java.time.LocalDate.now(java.time.ZoneOffset.UTC).toString()
+        val currentTokens = firestoreRepository.getDailyTokenUsage(userId, todayUtc)
 
         val metadata = SessionMetadata(
             clientToken = token,
@@ -58,8 +62,10 @@ class ProxySessionManager(
             userEmail = userEmail,
             emailVerified = emailVerified,
             authProvider = authProvider,
+            userTier = userTier,
             platform = platform
         )
+        metadata.currentDailyTokens.set(currentTokens)
 
         val session = ProxySession(
             clientSession = clientSession,

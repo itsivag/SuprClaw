@@ -461,6 +461,25 @@ class FirestoreRepository(
         }
     }
 
+    suspend fun getDailyTokenUsage(userId: String, dayUtc: String): Long {
+        return try {
+            val docRef = firestore.collection(USERS)
+                .document(userId)
+                .collection(USER_USAGE_SUBCOLLECTION)
+                .document(dayUtc)
+
+            val snapshot = docRef.get().await()
+            if (snapshot.exists()) {
+                snapshot.getLong("totalTokens") ?: 0L
+            } else {
+                0L
+            }
+        } catch (e: Exception) {
+            application.log.error("Failed to fetch daily token usage for user $userId day $dayUtc", e)
+            0L
+        }
+    }
+
     suspend fun incrementUserTokenUsageDaily(
         userId: String,
         dayUtc: String,

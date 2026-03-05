@@ -52,11 +52,11 @@ class UsageInterceptor(
                         processWorkItem(workItem)
                     } catch (e: Exception) {
                         logger.error(
-                            "Usage processing failed for session ${workItem.sessionId}: ${e.message}",
+                            "Usage processing failed for session ${workItem.session.sessionId}: ${e.message}",
                             e
                         )
                     } finally {
-                        pendingQueueBySession[workItem.sessionId]?.decrementAndGet()
+                        pendingQueueBySession[workItem.session.sessionId]?.decrementAndGet()
                     }
                 }
             }
@@ -76,7 +76,7 @@ class UsageInterceptor(
         val agentId = extractAgentId(frame) ?: return InterceptorResult.Continue(frame)
 
         val workItem = UsageWorkItem(
-            sessionId = session.sessionId,
+            session = session,
             userId = userId,
             agentId = agentId,
             direction = direction,
@@ -117,8 +117,11 @@ class UsageInterceptor(
         val delta = tokenCalculator.extractTokenUsage(workItem.frame, model)
         if (delta.isZero()) return
 
+        // Update in-memory counter immediately for rate-limiting
+        workItem.session.metadata.incrementDailyTokens(delta.totalTokens)
+
         val dayUtc = currentDayUtc()
-        val key = bufferKey(workItem.sessionId, dayUtc)
+        val key = bufferKey(workItem.session.sessionId, dayUtc)
         val buffer = sessionBuffers.computeIfAbsent(key) {
             SessionDayBuffer(userId = workItem.userId, dayUtc = dayUtc)
         }
@@ -129,7 +132,7 @@ class UsageInterceptor(
             buffer.pendingEvents += delta.usageEvents.toInt()
 
             if (buffer.pendingEvents >= FLUSH_THRESHOLD) {
-                snapshot = buffer.createSnapshot(workItem.sessionId)
+                snapshot = buffer.createSnapshot(workItem.session.sessionId)
             }
         }
 
@@ -229,7 +232,7 @@ class UsageInterceptor(
     private fun bufferKey(sessionId: String, dayUtc: String): String = "$sessionId|$dayUtc"
 
     private data class UsageWorkItem(
-        val sessionId: String,
+        val session: ProxySession,
         val userId: String,
         val agentId: String,
         val direction: MessageDirection,

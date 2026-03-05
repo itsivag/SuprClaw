@@ -39,9 +39,10 @@ fun Application.configureWebSocketRoutes(
             }
 
             val platform = call.request.queryParameters["platform"]
+            val userTier = call.request.headers["X-User-Tier"]?.lowercase() ?: "free"
             val userId = user.uid
 
-            logger.info("New WebSocket connection request for user: $userId")
+            logger.info("New WebSocket connection request for user: $userId (Tier: $userTier)")
 
             // Create or resume proxy session
             val session = sessionManager.getOrCreateSession(
@@ -51,7 +52,8 @@ fun Application.configureWebSocketRoutes(
                 userId = userId,
                 userEmail = user.email,
                 emailVerified = user.emailVerified,
-                authProvider = user.provider
+                authProvider = user.provider,
+                userTier = userTier
             )
 
             try {
