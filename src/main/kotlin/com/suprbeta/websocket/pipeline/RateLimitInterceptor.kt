@@ -26,12 +26,12 @@ class RateLimitInterceptor(
         }
 
         val userTier = session.metadata.userTier
-        val limit = remoteConfigService.getDailyCreditLimit(userTier)
-        val currentUsage = session.metadata.currentDailyTokens.get()
+        val limit = remoteConfigService.getWeeklyCreditLimit(userTier)
+        val currentUsage = session.metadata.currentWeeklyCredits.get()
 
         if (currentUsage >= limit) {
             val userId = session.metadata.userId
-            logger.warn("Rate limit exceeded for user $userId (Tier: $userTier). Usage: $currentUsage, Limit: $limit")
+            logger.warn("Rate limit exceeded for user $userId (Tier: $userTier). Usage: $currentUsage credits, Limit: $limit credits")
 
             // Block message and return standard OpenClaw error response to the client
             val errorFrame = WebSocketFrame(
@@ -40,7 +40,7 @@ class RateLimitInterceptor(
                 ok = false,
                 error = buildJsonObject {
                     put("code", "QUOTA_EXCEEDED")
-                    put("message", "Daily credit limit exceeded. Please try again tomorrow or upgrade your plan.")
+                    put("message", "Weekly credit limit exceeded ($limit credits/week). Please try again next week or upgrade your plan.")
                 }
             )
 
@@ -52,7 +52,7 @@ class RateLimitInterceptor(
                 logger.error("Failed to send rate limit error frame to client", e)
             }
 
-            return InterceptorResult.Drop("Daily credit limit exceeded")
+            return InterceptorResult.Drop("Weekly credit limit exceeded")
         }
 
         return InterceptorResult.Continue(frame)

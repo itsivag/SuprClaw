@@ -1,6 +1,7 @@
 package com.suprbeta.websocket.pipeline
 
 import com.suprbeta.firebase.FirestoreRepository
+import com.suprbeta.usage.CreditCalculator
 import com.suprbeta.websocket.models.ProxySession
 import com.suprbeta.websocket.models.TokenUsageDelta
 import com.suprbeta.websocket.models.WebSocketFrame
@@ -117,8 +118,9 @@ class UsageInterceptor(
         val delta = tokenCalculator.extractTokenUsage(workItem.frame, model)
         if (delta.isZero()) return
 
-        // Update in-memory counter immediately for rate-limiting
-        workItem.session.metadata.incrementDailyTokens(delta.totalTokens)
+        // Update in-memory counter immediately for rate-limiting (use credits)
+        val credits = CreditCalculator.toCredits(delta)
+        workItem.session.metadata.incrementWeeklyCredits(credits)
 
         val dayUtc = currentDayUtc()
         val key = bufferKey(workItem.session.sessionId, dayUtc)

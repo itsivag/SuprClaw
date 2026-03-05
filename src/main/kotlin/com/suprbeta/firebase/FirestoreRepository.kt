@@ -9,6 +9,8 @@ import com.google.cloud.firestore.SetOptions
 import com.suprbeta.digitalocean.models.ProvisioningStatus
 import com.suprbeta.digitalocean.models.UserDroplet
 import com.suprbeta.digitalocean.models.UserDropletInternal
+import com.suprbeta.usage.CreditCalculator
+import com.suprbeta.usage.DailyUsageData
 import com.suprbeta.websocket.models.TokenUsageDelta
 import io.ktor.server.application.*
 import kotlinx.coroutines.Dispatchers
@@ -480,6 +482,67 @@ class FirestoreRepository(
         }
     }
 
+    /**
+     * Retrieves daily credit usage for a specific user and day.
+     * Credits are weighted: input=1x, output=2x, 1000 tokens = 1 credit
+     */
+    suspend fun getDailyCreditUsage(userId: String, dayUtc: String): Long {
+        return try {
+            val docRef = firestore.collection(USERS)
+                .document(userId)
+                .collection(USER_USAGE_SUBCOLLECTION)
+                .document(dayUtc)
+
+            val snapshot = docRef.get().await()
+            if (snapshot.exists()) {
+                snapshot.getLong("credits") ?: 0L
+            } else {
+                0L
+            }
+        } catch (e: Exception) {
+            application.log.error("Failed to fetch daily credit usage for user $userId day $dayUtc", e)
+            0L
+        }
+    }
+
+    /**
+     * Retrieves detailed daily usage data for a specific user and day.
+     * Returns null if no usage data exists for that day.
+     */
+    suspend fun getDailyUsageDetail(userId: String, dayUtc: String): DailyUsageData? {
+        return try {
+            val docRef = firestore.collection(USERS)
+                .document(userId)
+                .collection(USER_USAGE_SUBCOLLECTION)
+                .document(dayUtc)
+
+            val snapshot = docRef.get().await()
+            if (snapshot.exists()) {
+                DailyUsageData(
+                    userId = snapshot.getString("userId") ?: userId,
+                    dayUtc = snapshot.getString("dayUtc") ?: dayUtc,
+                    promptTokens = snapshot.getLong("promptTokens") ?: 0L,
+                    completionTokens = snapshot.getLong("completionTokens") ?: 0L,
+                    totalTokens = snapshot.getLong("totalTokens") ?: 0L,
+                    inboundPromptTokens = snapshot.getLong("inboundPromptTokens") ?: 0L,
+                    inboundCompletionTokens = snapshot.getLong("inboundCompletionTokens") ?: 0L,
+                    inboundTotalTokens = snapshot.getLong("inboundTotalTokens") ?: 0L,
+                    outboundPromptTokens = snapshot.getLong("outboundPromptTokens") ?: 0L,
+                    outboundCompletionTokens = snapshot.getLong("outboundCompletionTokens") ?: 0L,
+                    outboundTotalTokens = snapshot.getLong("outboundTotalTokens") ?: 0L,
+                    usageEvents = snapshot.getLong("usageEvents") ?: 0L,
+                    lastSessionId = snapshot.getString("lastSessionId") ?: "",
+                    credits = snapshot.getLong("credits") ?: 0L
+                )
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            application.log.error("Failed to fetch daily usage detail for user $userId day $dayUtc", e)
+            null
+        }
+    }
+
     suspend fun incrementUserTokenUsageDaily(
         userId: String,
         dayUtc: String,
@@ -487,6 +550,9 @@ class FirestoreRepository(
         sessionId: String
     ) {
         if (delta.isZero()) return
+
+        // Calculate credits: (input * 1 + output * 2) / 1000
+        val credits = CreditCalculator.toCredits(delta)
 
         try {
             firestore.collection(USERS)
@@ -508,7 +574,8 @@ class FirestoreRepository(
                         "outboundPromptTokens" to FieldValue.increment(delta.outboundPromptTokens),
                         "outboundCompletionTokens" to FieldValue.increment(delta.outboundCompletionTokens),
                         "outboundTotalTokens" to FieldValue.increment(delta.outboundTotalTokens),
-                        "usageEvents" to FieldValue.increment(delta.usageEvents)
+                        "usageEvents" to FieldValue.increment(delta.usageEvents),
+                        "credits" to FieldValue.increment(credits)
                     ),
                     SetOptions.merge()
                 )

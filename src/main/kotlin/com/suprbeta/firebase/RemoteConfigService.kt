@@ -14,11 +14,13 @@ class RemoteConfigService(
     private val logger = application.log
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     
-    // In-memory cache for fast lookups per tier
+    // In-memory cache for fast lookups per tier (weekly credit limits)
+    // Credits = (inputTokens * 1 + outputTokens * 2) / 1000
+    // Example: 1000 input + 500 output tokens = (1000*1 + 500*2)/1000 = 2 credits
     private val cachedLimits = mapOf(
-        "free" to AtomicLong(100_000L), // Default 100k credits
-        "pro"  to AtomicLong(1_000_000L), // Default 1M credits
-        "max"  to AtomicLong(5_000_000L)  // Default 5M credits
+        "free" to AtomicLong(1_000L),   // ~500K-1M tokens/week depending on input/output mix
+        "pro"  to AtomicLong(10_000L),  // ~5M-10M tokens/week
+        "max"  to AtomicLong(50_000L)   // ~25M-50M tokens/week
     )
     
     init {
@@ -38,9 +40,9 @@ class RemoteConfigService(
                 remoteConfig.templateAsync.get()
             }
             
-            // Fetch limits for all tiers
+            // Fetch weekly limits for all tiers
             for ((tier, atomicLimit) in cachedLimits) {
-                val paramName = "daily_credit_limit_$tier"
+                val paramName = "weekly_credit_limit_$tier"
                 val param = template.parameters[paramName]
                 val explicitDefault = param?.defaultValue as? com.google.firebase.remoteconfig.ParameterValue.Explicit
                 val limitStr = explicitDefault?.value
@@ -61,10 +63,10 @@ class RemoteConfigService(
     }
 
     /**
-     * Gets the daily credit limit for a specific user tier.
+     * Gets the weekly credit limit for a specific user tier.
      * Falls back to the 'free' tier limit if the requested tier is unknown.
      */
-    fun getDailyCreditLimit(tier: String): Long {
+    fun getWeeklyCreditLimit(tier: String): Long {
         val normalizedTier = tier.lowercase().trim()
         val limit = cachedLimits[normalizedTier] ?: cachedLimits["free"]!!
         return limit.get()

@@ -53,8 +53,18 @@ class ProxySessionManager(
             return existingSession
         }
 
-        val todayUtc = java.time.LocalDate.now(java.time.ZoneOffset.UTC).toString()
-        val currentTokens = firestoreRepository.getDailyTokenUsage(userId, todayUtc)
+        // Calculate current week credits usage for rate limiting
+        val today = java.time.LocalDate.now(java.time.ZoneOffset.UTC)
+        val dayOfWeek = today.dayOfWeek.value
+        val weekStart = today.minusDays((dayOfWeek - 1).toLong()) // Monday
+        val weekEnd = today
+        
+        var currentWeeklyCredits = 0L
+        var currentDate = weekStart
+        while (!currentDate.isAfter(weekEnd)) {
+            currentWeeklyCredits += firestoreRepository.getDailyCreditUsage(userId, currentDate.toString())
+            currentDate = currentDate.plusDays(1)
+        }
 
         val metadata = SessionMetadata(
             clientToken = token,
@@ -65,7 +75,7 @@ class ProxySessionManager(
             userTier = userTier,
             platform = platform
         )
-        metadata.currentDailyTokens.set(currentTokens)
+        metadata.currentWeeklyCredits.set(currentWeeklyCredits)
 
         val session = ProxySession(
             clientSession = clientSession,

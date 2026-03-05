@@ -30,6 +30,7 @@ import com.suprbeta.marketplace.MarketplaceService
 import com.suprbeta.marketplace.configureMarketplaceRoutes
 import com.suprbeta.firebase.configureFcmRoutes
 import com.suprbeta.supabase.configureWebhookRoutes
+import com.suprbeta.usage.configureUsageRoutes
 import com.suprbeta.websocket.OpenClawConnector
 import com.suprbeta.websocket.ProxySessionManager
 import com.suprbeta.websocket.configureWebSocketRoutes
@@ -83,6 +84,7 @@ fun Application.module() {
     configureWebhookRoutes(firestoreRepository, userClientProvider, agentRepository, httpClient, managementService.webhookSecret)
     configureFcmRoutes(firestoreRepository)
     configureMarketplaceRoutes(configuringService, MarketplaceService(httpClient))
+    configureUsageRoutes(firestoreRepository, remoteConfigService)
     configureRouting()
 }
 

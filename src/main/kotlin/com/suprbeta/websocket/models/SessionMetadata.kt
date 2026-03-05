@@ -15,14 +15,14 @@ data class SessionMetadata(
     val userTier: String,          // "free", "pro", "max", etc.
     val connectedAt: Instant = Instant.now(),
     val platform: String? = null,
-    val currentDailyTokens: AtomicLong = AtomicLong(0L),
+    val currentWeeklyCredits: AtomicLong = AtomicLong(0L),
     val messagesSent: AtomicLong = AtomicLong(0),
     val messagesReceived: AtomicLong = AtomicLong(0)
 ) {
     fun incrementSent() = messagesSent.incrementAndGet()
     fun incrementReceived() = messagesReceived.incrementAndGet()
     
-    fun incrementDailyTokens(amount: Long) = currentDailyTokens.addAndGet(amount)
+    fun incrementWeeklyCredits(amount: Long) = currentWeeklyCredits.addAndGet(amount)
 
     fun getSentCount() = messagesSent.get()
     fun getReceivedCount() = messagesReceived.get()
