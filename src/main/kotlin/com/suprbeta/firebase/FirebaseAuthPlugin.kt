@@ -6,12 +6,6 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.util.*
 
-private object AuthRouteSelector : RouteSelector() {
-    override suspend fun evaluate(context: RoutingResolveContext, segmentIndex: Int) =
-        RouteSelectorEvaluation.Transparent
-    override fun toString() = "(authenticated)"
-}
-
 /**
  * Ktor plugin for Firebase Authentication
  *
@@ -58,41 +52,47 @@ val firebaseUserKey = AttributeKey<FirebaseUser>("FirebaseUser")
  * }
  * ```
  */
-fun Route.authenticated(build: Route.() -> Unit): Route {
-    // Create a transparent child route so the interceptor is scoped only to
-    // routes registered inside this block — not all routes globally.
-    val authRoute = createChild(AuthRouteSelector)
-
-    authRoute.intercept(ApplicationCallPipeline.Call) {
+val FirebaseAuthGuard = createRouteScopedPlugin("FirebaseAuthGuard") {
+    onCall { call ->
         val authHeader = call.request.headers["Authorization"]
 
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-            application.log.warn("Authentication failed: Missing or invalid Authorization header")
+            call.application.log.warn("Authentication failed: Missing or invalid Authorization header")
             call.respond(
                 HttpStatusCode.Unauthorized,
                 mapOf("error" to "Missing or invalid Authorization header")
             )
-            finish()
-            return@intercept
+            return@onCall
         }
 
         val token = authHeader.removePrefix("Bearer ").trim()
-        val authService = application.plugin(FirebaseAuthPlugin).authService
+        val authService = call.application.plugin(FirebaseAuthPlugin).authService
         val user = authService.verifyToken(token)
 
         if (user == null) {
-            application.log.warn("Authentication failed: Invalid or expired token")
+            call.application.log.warn("Authentication failed: Invalid or expired token")
             call.respond(
                 HttpStatusCode.Unauthorized,
                 mapOf("error" to "Invalid or expired token")
             )
-            finish()
-            return@intercept
+            return@onCall
         }
 
-        application.log.debug("Authentication successful for user: ${user.uid}")
+        call.application.log.debug("Authentication successful for user: ${user.uid}")
         call.attributes.put(firebaseUserKey, user)
     }
+}
+
+fun Route.authenticated(build: Route.() -> Unit): Route {
+    // Create a transparent child route with a unique instance of RouteSelector 
+    // to prevent DuplicatePluginException when the plugin is installed multiple times.
+    val authRoute = createChild(object : RouteSelector() {
+        override suspend fun evaluate(context: RoutingResolveContext, segmentIndex: Int) =
+            RouteSelectorEvaluation.Transparent
+        override fun toString() = "(authenticated)"
+    })
+
+    authRoute.install(FirebaseAuthGuard)
 
     authRoute.build()
 

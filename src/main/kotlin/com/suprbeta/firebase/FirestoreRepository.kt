@@ -23,7 +23,8 @@ private suspend fun <T> ApiFuture<T>.await(): T = withContext(Dispatchers.IO) {
 
 class FirestoreRepository(
     private val firestore: Firestore,
-    private val application: Application
+    private val application: Application,
+    private val cryptoService: com.suprbeta.core.CryptoService
 ) {
     companion object {
         private const val PROVISIONING_COLLECTION = "provisioning_status"
@@ -187,6 +188,24 @@ class FirestoreRepository(
 
     // ==================== User Droplets Operations ====================
 
+    private fun encryptDroplet(droplet: UserDropletInternal): UserDropletInternal {
+        return droplet.copy(
+            gatewayToken = cryptoService.encrypt(droplet.gatewayToken, droplet.userId),
+            hookToken = cryptoService.encrypt(droplet.hookToken, droplet.userId),
+            sshKey = cryptoService.encrypt(droplet.sshKey, droplet.userId),
+            supabaseServiceKey = cryptoService.encrypt(droplet.supabaseServiceKey, droplet.userId)
+        )
+    }
+
+    private fun decryptDroplet(droplet: UserDropletInternal): UserDropletInternal {
+        return droplet.copy(
+            gatewayToken = cryptoService.decrypt(droplet.gatewayToken, droplet.userId),
+            hookToken = cryptoService.decrypt(droplet.hookToken, droplet.userId),
+            sshKey = cryptoService.decrypt(droplet.sshKey, droplet.userId),
+            supabaseServiceKey = cryptoService.decrypt(droplet.supabaseServiceKey, droplet.userId)
+        )
+    }
+
     /**
      * Saves or updates a user's droplet information (internal version with VPS URL)
      * One user can have only one droplet
@@ -201,7 +220,8 @@ class FirestoreRepository(
                 .collection(USER_DROPLETS_SUBCOLLECTION)
                 .document(dropletDocId)
 
-            docRef.set(droplet).await()
+            val encryptedDroplet = encryptDroplet(droplet)
+            docRef.set(encryptedDroplet).await()
 
             if (droplet.supabaseProjectRef.isNotBlank()) {
                 saveProjectRefMapping(droplet.supabaseProjectRef, droplet.userId)
@@ -244,7 +264,7 @@ class FirestoreRepository(
             val snapshot: DocumentSnapshot = docRef.get().await()
 
             if (snapshot.exists()) {
-                val droplet = snapshot.toObject(UserDropletInternal::class.java)
+                val droplet = snapshot.toObject(UserDropletInternal::class.java)?.let { decryptDroplet(it) }
                 application.log.debug("Found droplet for user $userId: dropletId=${droplet?.dropletId}, doc=${dropletDoc.id}")
                 droplet
             } else {

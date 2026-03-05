@@ -49,6 +49,8 @@ class HetznerService(
     private val serverType: String = dotenv["HETZNER_SERVER_TYPE"] ?: DEFAULT_SERVER_TYPE
     private val location: String = dotenv["HETZNER_LOCATION"] ?: DEFAULT_LOCATION
 
+    private val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+
     private val sshKeys: List<Long>? = dotenv["HETZNER_SSH_KEY_IDS"]
         ?.split(",")
         ?.mapNotNull { it.trim().toLongOrNull() }
@@ -80,8 +82,7 @@ class HetznerService(
         }
         val rawBody = httpResponse.body<String>()
         application.log.info("Hetzner create server response [${httpResponse.status}]: $rawBody")
-        val response = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-            .decodeFromString(CreateServerResponse.serializer(), rawBody)
+        val response = json.decodeFromString(CreateServerResponse.serializer(), rawBody)
 
         val serverId = response.server?.id
             ?: throw IllegalStateException("Hetzner did not return a server ID")

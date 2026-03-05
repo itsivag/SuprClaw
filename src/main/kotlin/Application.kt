@@ -62,7 +62,8 @@ fun Application.module() {
 
     configureSerialization()
     configureHTTP()
-    val (firebaseAuthService, firestoreRepository) = configureFirebase()
+    val cryptoService = com.suprbeta.core.CryptoService(this)
+    val (firebaseAuthService, firestoreRepository) = configureFirebase(cryptoService)
     val agentRepository = SupabaseAgentRepository(this)
     val taskRepository = SupabaseTaskRepository(this)
     val schemaRepository = SupabaseSchemaRepository(this)
@@ -266,10 +267,10 @@ private fun Application.createProviders(
     }
 }
 
-fun Application.configureFirebase(): Pair<FirebaseAuthService, FirestoreRepository> {
+fun Application.configureFirebase(cryptoService: com.suprbeta.core.CryptoService): Pair<FirebaseAuthService, FirestoreRepository> {
     // Initialize Firebase services
     val firebaseService = FirebaseService(this)
-    val firestoreRepository = FirestoreRepository(firebaseService.firestore, this)
+    val firestoreRepository = FirestoreRepository(firebaseService.firestore, this, cryptoService)
     val firebaseAuthService = FirebaseAuthService(firebaseService, this)
 
     // Install HTTP authentication plugin
