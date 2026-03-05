@@ -4,19 +4,22 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 
 /**
- * WebSocket protocol frame matching the mobile client and OpenClaw VPS protocol.
- * All fields are nullable to support various message types.
+ * WebSocket protocol frame matching the OpenClaw Gateway protocol.
+ * Ref: OpenClaw_WebSocket_Schemas.md
  */
 @Serializable
 data class WebSocketFrame(
-    val event: String? = null,
-    val type: String? = null,
-    val id: String? = null,
-    val method: String? = null,
-    val params: JsonElement? = null,
-    val payload: JsonElement? = null,
-    val result: JsonElement? = null,
-    val error: JsonElement? = null
+    val type: String? = null,    // "req", "res", "event", "hello-ok"
+    val id: String? = null,      // Request/Response correlation ID
+    val method: String? = null,  // Method name for requests
+    val event: String? = null,   // Event name for events (e.g., "chat", "tick")
+    val ok: Boolean? = null,     // Success flag for responses
+    val seq: Int? = null,        // Sequence number for events
+    val params: JsonElement? = null,  // Request parameters
+    val payload: JsonElement? = null, // Response/Event payload
+    val result: JsonElement? = null,  // Legacy/Alternate response payload
+    val error: JsonElement? = null,   // Error object
+    val state: String? = null    // State for streaming (delta, final, etc.)
 )
 
 /**
@@ -30,9 +33,6 @@ data class ConnectRequest(
     val params: ConnectParams
 )
 
-/**
- * Connection parameters for the connect request
- */
 @Serializable
 data class ConnectParams(
     val minProtocol: Int = 3,
@@ -48,9 +48,6 @@ data class ConnectParams(
     val userAgent: String = "suprclaw-proxy/1.0"
 )
 
-/**
- * Client information
- */
 @Serializable
 data class ClientInfo(
     val id: String,
@@ -59,9 +56,6 @@ data class ClientInfo(
     val mode: String
 )
 
-/**
- * Authentication information
- */
 @Serializable
 data class AuthInfo(
     val token: String

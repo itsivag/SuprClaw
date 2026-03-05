@@ -135,9 +135,10 @@ class DropletProvisioningServiceImpl(
             // Phase 2 — Wait for active + IP and create Supabase project in parallel
             updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_ACTIVE, "Polling VPS provider API and creating Supabase project...")
 
-            var ipAddress: String? = null
-            var serviceKey: String? = null
-            var resolvedSupabaseUrl: String? = null
+            val resolvedIp: String
+            val resolvedProjectRef: String
+            val resolvedServiceKey: String
+            val resolvedSupabaseEndpoint: String
 
             coroutineScope {
                 val waitForActiveDeferred = async { waitForDropletReady(dropletId) }
@@ -150,17 +151,12 @@ class DropletProvisioningServiceImpl(
                     Triple(result.projectRef, sk, result.endpoint)
                 }
 
-                ipAddress = waitForActiveDeferred.await()
+                resolvedIp = waitForActiveDeferred.await()
                 val (pRef, sk, endpoint) = createProjectDeferred.await()
-                projectRef = pRef
-                serviceKey = sk
-                resolvedSupabaseUrl = endpoint
+                resolvedProjectRef = pRef
+                resolvedServiceKey = sk
+                resolvedSupabaseEndpoint = endpoint
             }
-
-            val resolvedIp = ipAddress!!
-            val resolvedProjectRef = projectRef!!
-            val resolvedServiceKey = serviceKey!!
-            val resolvedSupabaseEndpoint = resolvedSupabaseUrl!!
 
             logger.info("Droplet $dropletId active at $resolvedIp, Supabase project $resolvedProjectRef ready")
 
@@ -313,7 +309,7 @@ class DropletProvisioningServiceImpl(
             // Clean up: delete the Supabase project if it was created
             if (projectRef != null) {
                 try {
-                    managementService.deleteProject(projectRef!!)
+                    managementService.deleteProject(projectRef)
                     logger.info("🗑️ Supabase project $projectRef deleted after provisioning failure")
                 } catch (deleteError: Exception) {
                     logger.error("Failed to delete Supabase project $projectRef: ${deleteError.message}")
