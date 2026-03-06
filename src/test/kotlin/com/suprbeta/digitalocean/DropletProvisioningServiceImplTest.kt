@@ -16,10 +16,10 @@ import com.suprbeta.websocket.OpenClawConnector
 import io.ktor.server.application.*
 import io.ktor.server.testing.*
 import io.mockk.*
-import org.junit.After
-import org.junit.Before
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Test
 import kotlin.test.*
-import kotlin.test.Test
 
 /**
  * Unit tests for [DropletProvisioningServiceImpl].
@@ -32,13 +32,13 @@ class DropletProvisioningServiceImplTest {
 
     // ── AppConfig mock (SSL disabled so no cert file reads in test environment) ──
 
-    @Before
+    @BeforeEach
     fun mockSslDisabled() {
         mockkObject(AppConfig)
         every { AppConfig.sslEnabled } returns false
     }
 
-    @After
+    @AfterEach
     fun unmockAppConfig() {
         unmockkObject(AppConfig)
     }
