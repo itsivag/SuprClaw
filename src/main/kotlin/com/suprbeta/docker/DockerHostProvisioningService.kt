@@ -204,6 +204,11 @@ class DockerHostProvisioningService(
                 """{"mcpServers":{${servers.joinToString(",")}}}"""
             }
 
+            val awsAccessKeyId = dotenv["AWS_ACCESS_KEY_ID"] ?: System.getenv("AWS_ACCESS_KEY_ID") ?: ""
+            val awsSecretAccessKey = dotenv["AWS_SECRET_ACCESS_KEY"] ?: System.getenv("AWS_SECRET_ACCESS_KEY") ?: ""
+            val awsRegion = dotenv["AWS_REGION"] ?: System.getenv("AWS_REGION") ?: "us-east-1"
+            val awsBearerTokenBedrock = dotenv["AWS_BEARER_TOKEN_BEDROCK"] ?: System.getenv("AWS_BEARER_TOKEN_BEDROCK") ?: ""
+
             val containerInfo = containerService.createContainer(
                 hostIp = hostIp,
                 userId = userId,
@@ -215,7 +220,11 @@ class DockerHostProvisioningService(
                 hostPort = allocatedPort,
                 mcpRoutesJson = mcpRoutesJson,
                 mcpMcporterJson = mcpMcporterJson,
-                webhookBaseUrl = managementService.webhookBaseUrl
+                webhookBaseUrl = managementService.webhookBaseUrl,
+                awsAccessKeyId = awsAccessKeyId,
+                awsSecretAccessKey = awsSecretAccessKey,
+                awsRegion = awsRegion,
+                awsBearerTokenBedrock = awsBearerTokenBedrock
             )
 
             containerId = containerInfo.containerId

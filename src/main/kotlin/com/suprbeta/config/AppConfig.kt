@@ -19,7 +19,7 @@ object AppConfig {
     val dockerHostCapacity: Int =
         (dotenv["DOCKER_HOST_CAPACITY"] ?: System.getenv("DOCKER_HOST_CAPACITY") ?: "20").toIntOrNull() ?: 20
     val dockerContainerMemory: String =
-        dotenv["DOCKER_CONTAINER_MEMORY"] ?: System.getenv("DOCKER_CONTAINER_MEMORY") ?: "512m"
+        dotenv["DOCKER_CONTAINER_MEMORY"] ?: System.getenv("DOCKER_CONTAINER_MEMORY") ?: "1g"
     val dockerContainerCpu: String =
         dotenv["DOCKER_CONTAINER_CPU"] ?: System.getenv("DOCKER_CONTAINER_CPU") ?: "0.5"
     val dockerPortMin: Int =

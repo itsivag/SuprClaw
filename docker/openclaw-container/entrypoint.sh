@@ -53,43 +53,88 @@ validate_env() {
 # Setup OpenClaw configuration
 setup_openclaw_config() {
     log_info "Setting up OpenClaw configuration..."
-    
+
     local config_dir="/home/openclaw/.openclaw"
     local config_file="$config_dir/openclaw.json"
-    
-    # Ensure directory exists
+
     mkdir -p "$config_dir"
-    
-    # Create OpenClaw configuration
+
+    local bedrock_model="${OPENCLAW_MODEL:-amazon-bedrock/minimax.minimax-m2.1}"
+    local bedrock_model_id="${bedrock_model##*/}"
+    local aws_region="${AWS_REGION:-us-east-1}"
+
     cat > "$config_file" <<EOF
 {
-  "gateway": {
-    "mode": "local",
-    "auth": {
-      "token": "${GATEWAY_TOKEN}"
+  "models": {
+    "providers": {
+      "amazon-bedrock": {
+        "baseUrl": "https://bedrock-runtime.${aws_region}.amazonaws.com",
+        "auth": "aws-sdk",
+        "api": "bedrock-converse-stream",
+        "models": [
+          {
+            "id": "${bedrock_model_id}",
+            "name": "MiniMax M2.1 (Bedrock)",
+            "reasoning": false,
+            "input": ["text"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 1000000,
+            "maxTokens": 8192
+          }
+        ]
+      }
     },
-    "remote": {
-      "token": "${GATEWAY_TOKEN}"
+    "bedrockDiscovery": {
+      "enabled": false,
+      "region": "${aws_region}",
+      "providerFilter": ["minimax"],
+      "refreshInterval": 3600
     }
   },
-  "hooks": {
-    "token": "${HOOK_TOKEN}",
-    "url": "${WEBHOOK_BASE_URL:-}"
+  "agents": {
+    "defaults": {
+      "model": { "primary": "${bedrock_model}" },
+      "models": { "${bedrock_model}": { "alias": "MiniMax" } },
+      "workspace": "/home/openclaw/.openclaw/workspace-shared",
+      "compaction": { "mode": "safeguard" },
+      "heartbeat": { "every": "4h" },
+      "maxConcurrent": 4,
+      "subagents": { "maxConcurrent": 8 },
+      "sandbox": { "mode": "non-main", "workspaceAccess": "rw", "scope": "agent" }
+    },
+    "list": [
+      { "id": "main", "name": "main", "workspace": "/home/openclaw/.openclaw/workspace", "model": "${bedrock_model}" }
+    ]
   },
-  "database": {
-    "supabase": {
-      "url": "${SUPABASE_URL}",
-      "serviceKey": "${SUPABASE_SERVICE_KEY}",
-      "projectRef": "${SUPABASE_PROJECT_REF}"
+  "messages": { "ackReactionScope": "group-mentions" },
+  "commands": { "native": "auto", "nativeSkills": "auto" },
+  "hooks": {
+    "enabled": true,
+    "path": "/hooks",
+    "token": "${HOOK_TOKEN}",
+    "defaultSessionKey": "hook:ingress",
+    "allowRequestSessionKey": true,
+    "allowedSessionKeyPrefixes": ["hook:"],
+    "allowedAgentIds": ["main"]
+  },
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "auth": {
+      "mode": "token",
+      "token": "${GATEWAY_TOKEN}"
+    },
+    "tailscale": { "mode": "off", "resetOnExit": false },
+    "nodes": {
+      "denyCommands": ["camera.snap","camera.clip","screen.record","calendar.add","contacts.add","reminders.add"]
     }
   }
 }
 EOF
-    
-    # Set proper ownership
+
     chown -R openclaw:openclaw "$config_dir"
     chmod 600 "$config_file"
-    
+
     log_info "OpenClaw configuration written to $config_file"
 }
 
@@ -138,6 +183,10 @@ SUPABASE_PROJECT_REF=${SUPABASE_PROJECT_REF}
 SUPABASE_SCHEMA=${SUPABASE_SCHEMA:-public}
 SUPABASE_API_KEY=${SUPABASE_API_KEY:-}
 SUPABASE_ACCESS_TOKEN=${SUPABASE_SERVICE_KEY}
+AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+AWS_REGION=${AWS_REGION:-us-east-1}
+AWS_BEARER_TOKEN_BEDROCK=${AWS_BEARER_TOKEN_BEDROCK:-}
 USER_ID=${USER_ID}
 EOF
 

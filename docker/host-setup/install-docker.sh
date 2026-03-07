@@ -206,9 +206,6 @@ providers:
   file:
     directory: /opt/traefik/dynamic
     watch: true
-  docker:
-    exposedByDefault: false
-
 log:
   level: INFO
   format: json

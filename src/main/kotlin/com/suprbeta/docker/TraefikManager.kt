@@ -159,10 +159,6 @@ class TraefikManager(
                   loadBalancer:
                     servers:
                       - url: "http://127.0.0.1:$port"
-                    healthCheck:
-                      path: /health
-                      interval: 10s
-                      timeout: 5s
         """.trimIndent()
     }
     

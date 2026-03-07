@@ -49,7 +49,11 @@ class DockerContainerService(
         hostPort: Int,
         mcpRoutesJson: String = "{}",
         mcpMcporterJson: String = "{\"mcpServers\":{}}",
-        webhookBaseUrl: String = ""
+        webhookBaseUrl: String = "",
+        awsAccessKeyId: String = "",
+        awsSecretAccessKey: String = "",
+        awsRegion: String = "us-east-1",
+        awsBearerTokenBedrock: String = ""
     ): ContainerInfo {
         logger.info("Creating container for user $userId on host $hostIp with port $hostPort")
 
@@ -72,7 +76,11 @@ class DockerContainerService(
             userId = userId,
             mcpRoutesJson = mcpRoutesJson,
             mcpMcporterJson = mcpMcporterJson,
-            webhookBaseUrl = webhookBaseUrl
+            webhookBaseUrl = webhookBaseUrl,
+            awsAccessKeyId = awsAccessKeyId,
+            awsSecretAccessKey = awsSecretAccessKey,
+            awsRegion = awsRegion,
+            awsBearerTokenBedrock = awsBearerTokenBedrock
         )
         
         // Build docker run command
@@ -216,7 +224,11 @@ class DockerContainerService(
         userId: String,
         mcpRoutesJson: String,
         mcpMcporterJson: String,
-        webhookBaseUrl: String
+        webhookBaseUrl: String,
+        awsAccessKeyId: String,
+        awsSecretAccessKey: String,
+        awsRegion: String,
+        awsBearerTokenBedrock: String
     ): Map<String, String> {
         return mapOf(
             "GATEWAY_TOKEN" to gatewayToken,
@@ -230,6 +242,10 @@ class DockerContainerService(
             "MCP_ROUTES_JSON" to mcpRoutesJson,
             "MCP_MCPORTER_JSON" to mcpMcporterJson,
             "WEBHOOK_BASE_URL" to webhookBaseUrl,
+            "AWS_ACCESS_KEY_ID" to awsAccessKeyId,
+            "AWS_SECRET_ACCESS_KEY" to awsSecretAccessKey,
+            "AWS_REGION" to awsRegion,
+            "AWS_BEARER_TOKEN_BEDROCK" to awsBearerTokenBedrock,
             "USER_ID" to userId
         )
     }
