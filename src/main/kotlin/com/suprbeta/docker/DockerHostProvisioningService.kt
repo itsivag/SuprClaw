@@ -307,6 +307,17 @@ class DockerHostProvisioningService(
                 )
             )
 
+            // Patch IDENTITY.md in the container with the Supabase-generated agent ID
+            val leadAgent = agentRepository.getLeadAgent(userClient)
+            if (leadAgent?.id != null) {
+                val identityPath = "/home/openclaw/.openclaw/workspace/IDENTITY.md"
+                sshCommandExecutor.runSshCommand(
+                    hostIp,
+                    "docker exec $containerId sed -i 's/UID in Supabase: `unknown`/UID in Supabase: `${leadAgent.id}`/' $identityPath"
+                )
+                logger.info("IDENTITY.md patched with lead agent ID: ${leadAgent.id}")
+            }
+
             updateStatus(
                 dropletId,
                 ProvisioningStatus.PHASE_COMPLETE,

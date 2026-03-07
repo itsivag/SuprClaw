@@ -57,16 +57,21 @@ RUN npm install -g openclaw@latest \
 RUN npm install -g mcporter@latest \
     && npm cache clean --force
 
-# Create necessary directories
+# Create necessary directories and remove default nginx site
 RUN mkdir -p /var/log/supervisor \
     && mkdir -p /etc/supervisor/conf.d \
-    && mkdir -p /home/openclaw/.openclaw
+    && mkdir -p /home/openclaw/.openclaw \
+    && rm -f /etc/nginx/sites-enabled/default
 
 # Copy configuration files (paths relative to project root build context)
 COPY docker/openclaw-container/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY docker/openclaw-container/entrypoint.sh /entrypoint.sh
 # Copy the MCP auth proxy script (pre-built into image; no SSH deploy needed at runtime)
 COPY src/main/resources/mcp-auth-proxy.js /usr/local/bin/mcp-auth-proxy.js
+# Bake static nginx config into image (no env vars — fully static)
+COPY docker/openclaw-container/nginx-openclaw.conf /etc/nginx/conf.d/openclaw.conf
+# Bake static workspace files into image (only IDENTITY.md is written at runtime)
+COPY --chown=openclaw:openclaw docker/openclaw-container/workspace/ /home/openclaw/.openclaw/workspace/
 
 # Make entrypoint executable
 RUN chmod +x /entrypoint.sh
@@ -89,6 +94,11 @@ WORKDIR /home/openclaw
 # Run OpenClaw setup (creates default config)
 # This initializes the .openclaw directory structure
 RUN openclaw setup --non-interactive || true
+
+# Install mcporter skill from clawhub (baked into image)
+# This writes skill files to ~/.openclaw/workspace/skills/mcporter/
+# The mcporter.json config it creates will be overwritten at runtime by entrypoint
+RUN npx clawhub@latest install mcporter --force || true
 
 # Pre-configure some settings
 RUN mkdir -p /home/openclaw/.openclaw \

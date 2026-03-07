@@ -2,7 +2,7 @@
 set -e
 
 # OpenClaw Container Entrypoint
-# 
+#
 # This script configures and starts the OpenClaw environment
 # Environment variables expected:
 # - GATEWAY_TOKEN: OpenClaw gateway authentication token (required)
@@ -14,6 +14,7 @@ set -e
 # - SUPABASE_API_KEY: Kong API key for self-hosted Supabase (optional)
 # - MCP_CONFIG_JSON: JSON string with MCP tool configurations (optional)
 # - USER_ID: The user ID this container belongs to (required)
+# - LEAD_AGENT_ID: Supabase UUID for the lead agent (patched post-provisioning via docker exec)
 
 # Color codes for logging
 RED='\033[0;31m'
@@ -36,14 +37,14 @@ log_error() {
 # Validate required environment variables
 validate_env() {
     local missing=()
-    
+
     [[ -z "$GATEWAY_TOKEN" ]] && missing+=("GATEWAY_TOKEN")
     [[ -z "$HOOK_TOKEN" ]] && missing+=("HOOK_TOKEN")
     [[ -z "$SUPABASE_URL" ]] && missing+=("SUPABASE_URL")
     [[ -z "$SUPABASE_SERVICE_KEY" ]] && missing+=("SUPABASE_SERVICE_KEY")
     [[ -z "$SUPABASE_PROJECT_REF" ]] && missing+=("SUPABASE_PROJECT_REF")
     [[ -z "$USER_ID" ]] && missing+=("USER_ID")
-    
+
     if [[ ${#missing[@]} -gt 0 ]]; then
         log_error "Missing required environment variables: ${missing[*]}"
         exit 1
@@ -120,6 +121,7 @@ setup_openclaw_config() {
   "gateway": {
     "port": 18788,
     "mode": "local",
+    "bind": "loopback",
     "auth": {
       "mode": "token",
       "token": "${GATEWAY_TOKEN}"
@@ -141,34 +143,23 @@ EOF
 # Setup MCP tools configuration
 setup_mcp_config() {
     log_info "Setting up MCP configuration..."
-    
+
     local mcp_dir="/home/openclaw/.openclaw"
     local mcp_file="$mcp_dir/mcp.json"
-    
+
     if [[ -n "$MCP_CONFIG_JSON" ]]; then
-        # Write provided MCP configuration
         echo "$MCP_CONFIG_JSON" > "$mcp_file"
         chown openclaw:openclaw "$mcp_file"
         chmod 600 "$mcp_file"
         log_info "MCP configuration written"
     else
-        # Create empty MCP config
         echo '{"tools": []}' > "$mcp_file"
         chown openclaw:openclaw "$mcp_file"
         log_warn "No MCP_CONFIG_JSON provided, creating empty config"
     fi
 }
 
-# Setup systemd user directories (for openclaw service compatibility)
-setup_systemd_compat() {
-    log_info "Setting up systemd compatibility..."
-    
-    local systemd_dir="/home/openclaw/.config/systemd/user"
-    mkdir -p "$systemd_dir"
-    chown -R openclaw:openclaw /home/openclaw/.config
-}
-
-# Setup environment file for processes
+# Setup environment file for processes (secrets — root:root 600)
 setup_environment() {
     log_info "Setting up environment..."
 
@@ -194,26 +185,43 @@ EOF
     log_info "mcp.env written"
 }
 
-setup_nginx() {
-    log_info "Configuring nginx reverse proxy (18789 → 127.0.0.1:18788)..."
-    # Remove default site to avoid port conflicts
-    rm -f /etc/nginx/sites-enabled/default
-    cat > /etc/nginx/conf.d/openclaw.conf <<'NGINXEOF'
-server {
-    listen 18789;
-    location / {
-        proxy_pass http://[::1]:18788;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
-    }
-}
-NGINXEOF
+# nginx config is baked into the image — just validate it at startup
+verify_nginx() {
     nginx -t 2>&1 && log_info "nginx config OK" || { log_error "nginx config invalid"; exit 1; }
+}
+
+# Write only IDENTITY.md at runtime (needs LEAD_AGENT_ID env var interpolation).
+# All other workspace files (AGENTS.md, TOOLS.md, HEARTBEAT.md, BOOTSTRAP.md, SOUL.md,
+# memory/heartbeat-state.json) are baked into the image via Dockerfile COPY.
+setup_workspace() {
+    log_info "Setting up lead agent workspace..."
+    local workspace="/home/openclaw/.openclaw/workspace"
+    mkdir -p "$workspace/memory"
+
+    cat > "$workspace/IDENTITY.md" <<EOF
+---
+
+# IDENTITY.md — Lead Coordinator
+
+## UID
+UID in Supabase: \`${LEAD_AGENT_ID:-unknown}\`
+
+You are the Lead Coordinator a.k.a CEO is the orchestration authority of Mission Control.
+
+They see the entire task system, control assignment flow, and ensure work progresses from intake to verified completion.
+
+They do not create deliverables.
+They create movement.
+
+They operate from system state (Supabase + memory), not assumptions.
+
+Calm. Decisive. Data-driven. Minimal.
+
+Their success is measured by flow, clarity, and zero stagnation.
+EOF
+
+    chown -R openclaw:openclaw "$workspace"
+    log_info "Workspace ready at $workspace"
 }
 
 setup_mcp_routes() {
@@ -250,13 +258,11 @@ setup_mcporter_config() {
 # Setup MCP credentials directory
 setup_mcp_credentials() {
     log_info "Setting up MCP credentials..."
-    
+
     local creds_dir="/etc/suprclaw"
     mkdir -p "$creds_dir"
-    
-    # If MCP_CONFIG_JSON contains credentials, extract them
+
     if [[ -n "$MCP_CONFIG_JSON" ]]; then
-        # Parse and write individual credential files if needed
         echo "$MCP_CONFIG_JSON" | jq -r '.tools[]? | select(.env) | .name' 2>/dev/null | while read -r tool_name; do
             local tool_env=$(echo "$MCP_CONFIG_JSON" | jq -r ".tools[] | select(.name == \"$tool_name\") | .env // {}")
             if [[ "$tool_env" != "{}" && "$tool_env" != "null" ]]; then
@@ -271,12 +277,12 @@ setup_mcp_credentials() {
 # Verify OpenClaw installation
 verify_openclaw() {
     log_info "Verifying OpenClaw installation..."
-    
+
     if ! command -v openclaw &> /dev/null; then
         log_error "OpenClaw command not found"
         exit 1
     fi
-    
+
     local version=$(openclaw --version 2>/dev/null || echo "unknown")
     log_info "OpenClaw version: $version"
 }
@@ -295,29 +301,29 @@ print_banner() {
 # Main initialization
 main() {
     print_banner
-    
+
     # Validate environment
     validate_env
-    
+
     # Setup configurations
     verify_openclaw
     setup_openclaw_config
     setup_mcp_config
-    setup_systemd_compat
     setup_environment
-    setup_nginx
+    verify_nginx
+    setup_workspace
     setup_mcp_routes
     setup_mcporter_config
     setup_mcp_credentials
-    
+
     # Ensure proper permissions
     chown -R openclaw:openclaw /home/openclaw
     chown -R openclaw:openclaw /var/log/openclaw-* 2>/dev/null || true
-    
+
     log_info "Container initialization complete!"
     log_info "Starting supervisord..."
     echo ""
-    
+
     # Execute the provided command (default: supervisord)
     exec "$@"
 }
