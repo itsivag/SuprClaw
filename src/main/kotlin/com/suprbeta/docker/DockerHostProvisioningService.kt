@@ -16,11 +16,19 @@ import com.suprbeta.supabase.SupabaseManagementService
 import com.suprbeta.supabase.SupabaseSchemaRepository
 import com.suprbeta.supabase.UserSupabaseClientProvider
 import com.suprbeta.websocket.OpenClawConnector
+import com.suprbeta.websocket.models.WebSocketFrame
 import io.ktor.server.application.*
+import io.ktor.websocket.Frame
+import io.ktor.websocket.close
+import io.ktor.websocket.readText
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.security.SecureRandom
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
@@ -251,6 +259,9 @@ class DockerHostProvisioningService(
             // Phase 9: Initialize user project tables
             updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Initializing user database...")
             val vpsGatewayUrl = "https://$subdomain"
+
+            // Phase 8b: Approve pairing if required
+            approvePairingIfRequired(vpsGatewayUrl, gatewayToken, hostIp, containerId, dropletId)
             val proxyGatewayUrl = "wss://api.suprclaw.com"
 
             schemaRepository.initializeUserProject(
@@ -535,6 +546,64 @@ class DockerHostProvisioningService(
             } catch (e: Exception) {
                 logger.error("Failed to delete Supabase project", e)
             }
+        }
+    }
+
+    private suspend fun approvePairingIfRequired(
+        vpsGatewayUrl: String,
+        gatewayToken: String,
+        hostIp: String,
+        containerId: String,
+        dropletId: Long
+    ) {
+        val session = openClawConnector.connect(token = gatewayToken, vpsGatewayUrl = vpsGatewayUrl)
+        if (session == null) {
+            logger.warn("Pairing phase skipped for droplet $dropletId: unable to open websocket to $vpsGatewayUrl")
+            return
+        }
+        try {
+            val deadlineMs = System.currentTimeMillis() + 25_000L
+            while (System.currentTimeMillis() < deadlineMs) {
+                val inbound = withTimeoutOrNull(2_500L) { session.incoming.receive() } ?: continue
+                if (inbound !is Frame.Text) continue
+                val frame = json.decodeFromString<WebSocketFrame>(inbound.readText())
+
+                if (frame.event == "connect.challenge") {
+                    openClawConnector.handleConnectChallenge(session, gatewayToken, frame.payload, "android")
+                    continue
+                }
+
+                if (frame.type == "res" && frame.error == null) {
+                    logger.info("Pairing phase: connect succeeded for droplet $dropletId (no approval needed)")
+                    return
+                }
+
+                val errorObj = frame.error?.jsonObject ?: continue
+                val message = errorObj["message"]?.jsonPrimitive?.contentOrNull ?: continue
+
+                if (message == "pairing required") {
+                    val requestId = runCatching {
+                        errorObj["details"]?.jsonObject?.get("requestId")?.jsonPrimitive?.contentOrNull
+                    }.getOrNull()
+
+                    if (requestId.isNullOrBlank()) {
+                        logger.warn("Pairing phase: pairing required but no requestId for droplet $dropletId")
+                        return
+                    }
+
+                    sshCommandExecutor.runSshCommand(
+                        hostIp,
+                        "docker exec $containerId su - openclaw -s /bin/sh -c 'openclaw devices approve $requestId'"
+                    )
+                    logger.info("Pairing phase: approved requestId=$requestId for droplet $dropletId")
+                    return
+                }
+            }
+            logger.warn("Pairing phase timed out for droplet $dropletId")
+        } catch (e: Exception) {
+            logger.warn("Pairing phase failed for droplet $dropletId: ${e.message}")
+        } finally {
+            try { session.close() } catch (_: Exception) {}
         }
     }
 
