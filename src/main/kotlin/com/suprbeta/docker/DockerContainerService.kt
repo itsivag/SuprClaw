@@ -94,6 +94,7 @@ class DockerContainerService(
         // Build docker run command
         val dockerCommand = buildDockerRunCommand(
             containerName = containerName,
+            sanitizedUserId = sanitizedUserId,
             hostPort = hostPort,
             envVars = envVars
         )
@@ -264,6 +265,7 @@ class DockerContainerService(
      */
     private fun buildDockerRunCommand(
         containerName: String,
+        sanitizedUserId: String,
         hostPort: Int,
         envVars: Map<String, String>
     ): String {
@@ -277,6 +279,7 @@ class DockerContainerService(
             append(" --name $containerName")
             append(" --restart unless-stopped")
             append(" -p 127.0.0.1:$hostPort:$CONTAINER_PORT")
+            append(" -v openclaw-devices-$sanitizedUserId:/home/openclaw/.openclaw/devices")
             append(" --memory=${AppConfig.dockerContainerMemory}")
             append(" --cpus=${AppConfig.dockerContainerCpu}")
             append(" --log-driver json-file")

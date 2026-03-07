@@ -74,7 +74,7 @@ class OpenClawConnector(
                 return session
 
             } catch (e: Exception) {
-                logger.error("Failed to connect to OpenClaw VPS at $vpsGatewayUrl (attempt ${attempt + 1}/$maxRetries): ${e.message}")
+                logger.error("Failed to connect to OpenClaw VPS at $vpsGatewayUrl (attempt ${attempt + 1}/$maxRetries): [${e.javaClass.simpleName}] ${e.message} | cause: ${e.cause?.javaClass?.simpleName}: ${e.cause?.message}")
 
                 if (attempt < maxRetries - 1) {
                     delay(retryDelay)

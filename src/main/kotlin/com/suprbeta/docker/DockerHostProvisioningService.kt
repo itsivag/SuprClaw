@@ -386,6 +386,18 @@ class DockerHostProvisioningService(
             errors += "Container: ${e.message}"
         }
 
+        // 1b. Remove devices volume (device pairing approvals are user-specific and no longer needed)
+        try {
+            val sanitizedUserId = userId.lowercase().replace(Regex("[^a-z0-9-]"), "-").take(20)
+            sshCommandExecutor.runSshCommand(
+                resolvedHostIp,
+                "docker volume rm openclaw-devices-$sanitizedUserId 2>/dev/null || true"
+            )
+            logger.info("🗑️ Devices volume removed for user $userId")
+        } catch (e: Exception) {
+            logger.warn("Failed to remove devices volume (non-fatal): ${e.message}")
+        }
+
         // 2. Remove Traefik route
         try {
             val sub = hostDroplet.subdomain ?: ""

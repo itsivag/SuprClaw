@@ -129,6 +129,9 @@ setup_openclaw_config() {
       "mode": "token",
       "token": "${GATEWAY_TOKEN}"
     },
+    "remote": {
+      "token": "${GATEWAY_TOKEN}"
+    },
     "tailscale": { "mode": "off", "resetOnExit": false },
     "nodes": {
       "denyCommands": ["camera.snap","camera.clip","screen.record","calendar.add","contacts.add","reminders.add"]
