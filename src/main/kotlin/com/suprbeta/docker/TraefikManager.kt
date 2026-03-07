@@ -151,7 +151,8 @@ class TraefikManager(
                   service: $serviceName
                   entryPoints:
                     - websecure
-                  tls: {}
+                  tls:
+                    certResolver: letsencrypt
               
               services:
                 $serviceName:
