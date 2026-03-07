@@ -118,7 +118,7 @@ setup_openclaw_config() {
     "allowedAgentIds": ["main"]
   },
   "gateway": {
-    "port": 18789,
+    "port": 18788,
     "mode": "local",
     "auth": {
       "mode": "token",
@@ -192,6 +192,28 @@ EOF
 
     chmod 600 "$env_file"
     log_info "mcp.env written"
+}
+
+setup_nginx() {
+    log_info "Configuring nginx reverse proxy (18789 → 127.0.0.1:18788)..."
+    # Remove default site to avoid port conflicts
+    rm -f /etc/nginx/sites-enabled/default
+    cat > /etc/nginx/conf.d/openclaw.conf <<'NGINXEOF'
+server {
+    listen 18789;
+    location / {
+        proxy_pass http://127.0.0.1:18788;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+}
+NGINXEOF
+    nginx -t 2>&1 && log_info "nginx config OK" || { log_error "nginx config invalid"; exit 1; }
 }
 
 setup_mcp_routes() {
@@ -283,6 +305,7 @@ main() {
     setup_mcp_config
     setup_systemd_compat
     setup_environment
+    setup_nginx
     setup_mcp_routes
     setup_mcporter_config
     setup_mcp_credentials
