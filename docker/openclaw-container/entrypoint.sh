@@ -122,6 +122,9 @@ setup_openclaw_config() {
     "port": 18788,
     "mode": "local",
     "bind": "loopback",
+    "controlUi": {
+      "allowedOrigins": ["*"]
+    },
     "auth": {
       "mode": "token",
       "token": "${GATEWAY_TOKEN}"

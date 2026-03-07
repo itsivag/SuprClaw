@@ -114,7 +114,7 @@ EXPOSE 18789
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:18789/health || exit 1
+    CMD curl -sf http://localhost:18789/ > /dev/null || exit 1
 
 # Use entrypoint script for runtime configuration
 ENTRYPOINT ["/entrypoint.sh"]
