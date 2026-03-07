@@ -61,8 +61,16 @@ class DockerContainerService(
         ensureImageExists(hostIp)
 
         // Generate container name (sanitize userId for Docker naming rules)
+        // Add random suffix to avoid collisions on retry after failed provisioning
         val sanitizedUserId = userId.lowercase().replace(Regex("[^a-z0-9-]"), "-").take(20)
-        val containerName = "openclaw-$sanitizedUserId-${System.currentTimeMillis()}"
+        val randomSuffix = (100000..999999).random()
+        val containerName = "openclaw-$sanitizedUserId-${System.currentTimeMillis()}-$randomSuffix"
+
+        // Remove any stale containers for this user left from failed provisioning attempts
+        sshCommandExecutor.runSshCommand(
+            hostIp,
+            "docker ps -a --filter 'name=openclaw-$sanitizedUserId-' --format '{{.ID}}' | xargs -r docker rm -f 2>/dev/null || true"
+        )
         
         // Prepare MCP config JSON
         val mcpConfigJson = json.encodeToString(mapOf("tools" to mcpTools))
@@ -108,6 +116,7 @@ class DockerContainerService(
         val status = getContainerStatus(hostIp, containerId)
         if (!status.contains("up", ignoreCase = true)) {
             val logs = getContainerLogs(hostIp, containerId)
+            runCatching { deleteContainer(hostIp, containerId) }
             throw IllegalStateException("Container not running. Status: $status. Logs: $logs")
         }
         
