@@ -7,10 +7,14 @@ import com.suprbeta.digitalocean.DropletConfigurationService
 import com.suprbeta.digitalocean.DropletConfigurationServiceImpl
 import com.suprbeta.digitalocean.DropletMcpServiceImpl
 import com.suprbeta.digitalocean.DropletProvisioningService
-import com.suprbeta.digitalocean.DropletProvisioningServiceImpl
 import com.suprbeta.digitalocean.configureAgentRoutes
 import com.suprbeta.core.SshCommandExecutorImpl
 import com.suprbeta.digitalocean.configureDropletRoutes
+import com.suprbeta.docker.ContainerPortAllocator
+import com.suprbeta.docker.DockerContainerService
+import com.suprbeta.docker.DockerHostProvisioningService
+import com.suprbeta.docker.HostPoolManager
+import com.suprbeta.docker.TraefikManager
 import com.suprbeta.firebase.FirebaseAuthPlugin
 import com.suprbeta.firebase.FirebaseAuthService
 import com.suprbeta.firebase.FirebaseService
@@ -47,6 +51,7 @@ import io.ktor.client.plugins.websocket.*
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
 import io.ktor.server.netty.*
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation as ClientContentNegotiation
@@ -210,42 +215,76 @@ fun Application.configureDigitalOcean(
     firestoreRepository: FirestoreRepository,
     agentRepository: SupabaseAgentRepository,
     schemaRepository: SupabaseSchemaRepository,
-    managementService: SupabaseManagementService,  // interface — hosted or self-hosted
+    managementService: SupabaseManagementService,
     userClientProvider: UserSupabaseClientProvider
 ): DropletConfigurationService {
-    // Select VPS + DNS providers based on VPS_PROVIDER env var (default: digitalocean)
     val dotenv = io.github.cdimascio.dotenv.dotenv { ignoreIfMissing = true; directory = "." }
-    val vpsProviderName = (dotenv["VPS_PROVIDER"] ?: System.getenv("VPS_PROVIDER"))?.lowercase() ?: "digitalocean"
-    val (vpsService, dnsProvider) = createProviders(httpClient, vpsProviderName)
-    log.info("VPS provider: $vpsProviderName")
-
     val sshCommandExecutor = SshCommandExecutorImpl(this)
     val dropletMcpService = DropletMcpServiceImpl(
         managementService = managementService,
         sshCommandExecutor = sshCommandExecutor,
         application = this
     )
-    val provisioningConnector = OpenClawConnector(
-        application = this,
-        httpClient = httpClient,
-        json = Json {
-            ignoreUnknownKeys = true
-            prettyPrint = true
-        }
+
+    val vpsProviderName = (dotenv["VPS_PROVIDER"] ?: System.getenv("VPS_PROVIDER"))?.lowercase() ?: "hetzner"
+    val (vpsService, dnsProvider) = createProviders(httpClient, vpsProviderName)
+    log.info("Provisioning mode: docker (vps provider: $vpsProviderName)")
+
+    val portAllocator = ContainerPortAllocator(
+        startPort = AppConfig.dockerPortMin,
+        endPort = AppConfig.dockerPortMax
     )
-    val provisioningService: DropletProvisioningService = DropletProvisioningServiceImpl(
+    val hostPoolManager = HostPoolManager(vpsService, firestoreRepository, sshCommandExecutor, this)
+    val containerService = DockerContainerService(sshCommandExecutor, portAllocator, this)
+    val traefikManager = TraefikManager(sshCommandExecutor, this)
+
+    val provisioningService: DropletProvisioningService = DockerHostProvisioningService(
         vpsService = vpsService,
+        hostPoolManager = hostPoolManager,
+        containerService = containerService,
+        traefikManager = traefikManager,
+        portAllocator = portAllocator,
         dnsProvider = dnsProvider,
         firestoreRepository = firestoreRepository,
-        agentRepository = agentRepository,
         schemaRepository = schemaRepository,
         managementService = managementService,
+        agentRepository = agentRepository,
         userClientProvider = userClientProvider,
-        openClawConnector = provisioningConnector,
+        openClawConnector = OpenClawConnector(this, httpClient, Json { ignoreUnknownKeys = true }),
         sshCommandExecutor = sshCommandExecutor,
         dropletMcpService = dropletMcpService,
         application = this
     )
+
+    // Recover port allocations on startup to avoid collisions after restart
+    monitor.subscribe(ApplicationStarted) {
+        launch {
+            try {
+                val hosts = hostPoolManager.listActiveHosts()
+                for (host in hosts) {
+                    try {
+                        val portsOutput = sshCommandExecutor.runSshCommand(
+                            host.hostIp,
+                            "docker ps --filter 'name=openclaw-' --format '{{.Ports}}' 2>/dev/null || echo ''"
+                        )
+                        val usedPorts = portsOutput.lines()
+                            .filter { it.isNotBlank() }
+                            .mapNotNull { line ->
+                                Regex("""127\.0\.0\.1:(\d+)->""").find(line)?.groupValues?.get(1)?.toIntOrNull()
+                            }
+                            .toSet()
+                        portAllocator.preallocatePorts(host.hostId, usedPorts)
+                        log.info("Port recovery: host ${host.hostId} → ${usedPorts.size} ports pre-allocated")
+                    } catch (e: Exception) {
+                        log.warn("Port recovery skipped for host ${host.hostId}: ${e.message}")
+                    }
+                }
+            } catch (e: Exception) {
+                log.warn("Port recovery failed: ${e.message}")
+            }
+        }
+    }
+
     val configuringService: DropletConfigurationService = DropletConfigurationServiceImpl(
         firestoreRepository = firestoreRepository,
         agentRepository = agentRepository,
@@ -256,7 +295,6 @@ fun Application.configureDigitalOcean(
     )
     configureDropletRoutes(provisioningService, firestoreRepository)
     configureAgentRoutes(configuringService, firestoreRepository, agentRepository, userClientProvider)
-    log.info("VPS provisioning initialized with SSH and DNS management ($vpsProviderName)")
     return configuringService
 }
 

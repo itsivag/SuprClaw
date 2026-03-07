@@ -9,6 +9,7 @@ import com.google.cloud.firestore.SetOptions
 import com.suprbeta.digitalocean.models.ProvisioningStatus
 import com.suprbeta.digitalocean.models.UserDroplet
 import com.suprbeta.digitalocean.models.UserDropletInternal
+import com.suprbeta.docker.models.HostInfo
 import com.suprbeta.usage.CreditCalculator
 import com.suprbeta.usage.DailyUsageData
 import com.suprbeta.websocket.models.TokenUsageDelta
@@ -36,6 +37,8 @@ class FirestoreRepository(
         private const val USER_USAGE_SUBCOLLECTION = "usage"
         private const val USER_MESSAGE_QUEUE_SUBCOLLECTION = "message_queue"
         private const val PROJECT_REFS_COLLECTION = "supabase_project_refs"
+        private const val HOSTS_COLLECTION = "hosts"
+        private const val USER_HOST_MAPPINGS_COLLECTION = "user_host_mappings"
     }
 
     data class QueuedMessage(val docId: String, val payload: String)
@@ -586,6 +589,153 @@ class FirestoreRepository(
                 e
             )
             throw e
+        }
+    }
+
+    // ==================== Host Management Operations (Docker Multi-Tenant) ====================
+
+    /**
+     * Saves or updates host information for Docker multi-tenant architecture.
+     */
+    suspend fun saveHostInfo(hostInfo: com.suprbeta.docker.models.HostInfo) {
+        try {
+            application.log.info("Saving host info: ${hostInfo.hostId}")
+            firestore.collection(HOSTS_COLLECTION)
+                .document(hostInfo.hostId.toString())
+                .set(hostInfo)
+                .await()
+            application.log.info("✅ Host info saved: ${hostInfo.hostId}")
+        } catch (e: Exception) {
+            application.log.error("Failed to save host info: ${hostInfo.hostId}", e)
+            throw e
+        }
+    }
+
+    /**
+     * Retrieves host information by host ID.
+     */
+    suspend fun getHostInfo(hostId: Long): com.suprbeta.docker.models.HostInfo? {
+        return try {
+            application.log.debug("Fetching host info: $hostId")
+            val snapshot = firestore.collection(HOSTS_COLLECTION)
+                .document(hostId.toString())
+                .get()
+                .await()
+            
+            if (snapshot.exists()) {
+                snapshot.toObject(com.suprbeta.docker.models.HostInfo::class.java)
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            application.log.error("Failed to fetch host info: $hostId", e)
+            null
+        }
+    }
+
+    /**
+     * Lists all hosts.
+     */
+    suspend fun listHosts(): List<com.suprbeta.docker.models.HostInfo> {
+        return try {
+            application.log.debug("Fetching all hosts")
+            val snapshot = firestore.collection(HOSTS_COLLECTION).get().await()
+            snapshot.documents.mapNotNull { 
+                it.toObject(com.suprbeta.docker.models.HostInfo::class.java) 
+            }
+        } catch (e: Exception) {
+            application.log.error("Failed to fetch hosts", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * Atomically increments container count on a host and updates its status.
+     * Uses a Firestore transaction to avoid the read-modify-write race condition.
+     */
+    suspend fun incrementHostContainerCount(hostId: Long, totalCapacity: Int) {
+        try {
+            val docRef = firestore.collection(HOSTS_COLLECTION).document(hostId.toString())
+            firestore.runTransaction { transaction ->
+                val snapshot = transaction.get(docRef).get()
+                val newCount = (snapshot.getLong("currentContainers") ?: 0L) + 1
+                val newStatus = if (newCount >= totalCapacity) HostInfo.STATUS_FULL else HostInfo.STATUS_ACTIVE
+                transaction.update(docRef, mapOf("currentContainers" to newCount, "status" to newStatus))
+            }.await()
+        } catch (e: Exception) {
+            application.log.error("Failed to increment container count for host $hostId", e)
+            throw e
+        }
+    }
+
+    /**
+     * Atomically decrements container count on a host and marks it active.
+     * Uses a Firestore transaction to avoid the read-modify-write race condition.
+     */
+    suspend fun decrementHostContainerCount(hostId: Long) {
+        try {
+            val docRef = firestore.collection(HOSTS_COLLECTION).document(hostId.toString())
+            firestore.runTransaction { transaction ->
+                val snapshot = transaction.get(docRef).get()
+                val newCount = ((snapshot.getLong("currentContainers") ?: 1L) - 1).coerceAtLeast(0)
+                transaction.update(docRef, mapOf("currentContainers" to newCount, "status" to HostInfo.STATUS_ACTIVE))
+            }.await()
+        } catch (e: Exception) {
+            application.log.error("Failed to decrement container count for host $hostId", e)
+            throw e
+        }
+    }
+
+    /**
+     * Saves user-to-host mapping.
+     */
+    suspend fun saveUserHostMapping(userId: String, hostId: Long) {
+        try {
+            application.log.info("Saving user-host mapping: $userId -> $hostId")
+            firestore.collection(USER_HOST_MAPPINGS_COLLECTION)
+                .document(userId)
+                .set(mapOf("hostId" to hostId, "updatedAt" to FieldValue.serverTimestamp()))
+                .await()
+        } catch (e: Exception) {
+            application.log.error("Failed to save user-host mapping: $userId -> $hostId", e)
+            throw e
+        }
+    }
+
+    /**
+     * Retrieves host ID for a user.
+     */
+    suspend fun getUserHostMapping(userId: String): Long? {
+        return try {
+            application.log.debug("Fetching host mapping for user: $userId")
+            val snapshot = firestore.collection(USER_HOST_MAPPINGS_COLLECTION)
+                .document(userId)
+                .get()
+                .await()
+            
+            if (snapshot.exists()) {
+                snapshot.getLong("hostId")
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            application.log.error("Failed to fetch user-host mapping: $userId", e)
+            null
+        }
+    }
+
+    /**
+     * Deletes user-to-host mapping.
+     */
+    suspend fun deleteUserHostMapping(userId: String) {
+        try {
+            application.log.info("Deleting user-host mapping: $userId")
+            firestore.collection(USER_HOST_MAPPINGS_COLLECTION)
+                .document(userId)
+                .delete()
+                .await()
+        } catch (e: Exception) {
+            application.log.error("Failed to delete user-host mapping: $userId", e)
         }
     }
 }

@@ -56,10 +56,10 @@ class HetznerService(
         ?.mapNotNull { it.trim().toLongOrNull() }
         ?.takeIf { it.isNotEmpty() }
 
-    override suspend fun createServer(name: String, password: String): VpsService.ServerCreateResult {
+    override suspend fun createServer(name: String, password: String, userDataOverride: String?): VpsService.ServerCreateResult {
         application.log.info("Creating Hetzner server: $name (type=$serverType, location=$location, image=$image)")
 
-        val userData = UserDataGenerator.generateBootstrapUserData(password)
+        val userData = userDataOverride ?: UserDataGenerator.generateBootstrapUserData(password)
 
         val request = CreateServerRequest(
             name = name,

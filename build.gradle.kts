@@ -53,7 +53,8 @@ dependencies {
     implementation("io.github.jan-tennert.supabase:postgrest-kt")
     implementation("org.postgresql:postgresql:42.7.4")
     testImplementation("io.ktor:ktor-server-test-host")
-    testImplementation("org.jetbrains.kotlin:kotlin-test-junit:$kotlin_version")
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit5:$kotlin_version")
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.0")
     testImplementation("io.mockk:mockk:1.13.12")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.1")
 }
@@ -130,5 +131,14 @@ tasks.register("verifyFatJar") {
         println("   PostgreSQL : org/postgresql/Driver.class ✓")
         println("   Kotlin     : kotlin stdlib ✓")
         println("   sshj       : net/schmizz/sshj/SSHClient.class ✓")
+    }
+}
+
+// JUnit 5 test configuration
+tasks.test {
+    useJUnitPlatform()
+    testLogging {
+        events("passed", "skipped", "failed")
+        showStandardStreams = true
     }
 }

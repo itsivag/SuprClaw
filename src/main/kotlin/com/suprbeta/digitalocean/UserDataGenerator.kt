@@ -30,4 +30,19 @@ object UserDataGenerator {
 
         return template.replace("{{PASSWORD}}", password)
     }
+
+    /**
+     * Generates cloud-init user-data for a Docker host VPS.
+     * This installs Docker, Traefik, creates the openclaw user with the provisioning SSH key,
+     * and writes a sentinel file /var/run/suprclaw-host-ready when setup is complete.
+     */
+    fun generateDockerHostUserData(sshPublicKey: String): String {
+        val template = this::class.java.classLoader
+            .getResourceAsStream("scripts/docker-host.yaml")
+            ?.bufferedReader()
+            ?.use { it.readText() }
+            ?: throw IllegalStateException("docker-host.yaml not found in resources")
+
+        return template.replace("{{SSH_PUBLIC_KEY}}", sshPublicKey)
+    }
 }
