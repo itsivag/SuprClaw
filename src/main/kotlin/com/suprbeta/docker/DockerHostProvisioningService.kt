@@ -616,9 +616,9 @@ class DockerHostProvisioningService(
 
                     sshCommandExecutor.runSshCommand(
                         hostIp,
-                        "docker exec $containerId su - openclaw -s /bin/sh -c 'openclaw devices approve $requestId'"
+                        "docker exec $containerId su - openclaw -s /bin/sh -c 'openclaw devices approve $requestId || test -s /home/openclaw/.openclaw/devices/paired.json'"
                     )
-                    logger.info("Pairing phase: approved requestId=$requestId for droplet $dropletId")
+                    logger.info("Pairing phase: approved requestId=$requestId (or pairing already present) for droplet $dropletId")
                     return
                 }
             }

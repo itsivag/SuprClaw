@@ -15,6 +15,8 @@ set -e
 # - MCP_CONFIG_JSON: JSON string with MCP tool configurations (optional)
 # - USER_ID: The user ID this container belongs to (required)
 # - LEAD_AGENT_ID: Supabase UUID for the lead agent (patched post-provisioning via docker exec)
+# - AUTO_APPROVE_PROXY_PAIRING: auto-approve the first pending remote pairing request (optional, default: true)
+# - AUTO_APPROVE_PROXY_PAIRING_WINDOW_SECONDS: bootstrap auto-approval window in seconds (optional, default: 180)
 
 # Color codes for logging
 RED='\033[0;31m'

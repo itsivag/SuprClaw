@@ -66,6 +66,7 @@ RUN mkdir -p /var/log/supervisor \
 # Copy configuration files (paths relative to project root build context)
 COPY docker/openclaw-container/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY docker/openclaw-container/entrypoint.sh /entrypoint.sh
+COPY docker/openclaw-container/auto-approve-pairing.sh /usr/local/bin/auto-approve-pairing.sh
 # Copy the MCP auth proxy script (pre-built into image; no SSH deploy needed at runtime)
 COPY src/main/resources/mcp-auth-proxy.js /usr/local/bin/mcp-auth-proxy.js
 # Bake static nginx config into image (no env vars — fully static)
@@ -75,6 +76,7 @@ COPY --chown=openclaw:openclaw docker/openclaw-container/workspace/ /home/opencl
 
 # Make entrypoint executable
 RUN chmod +x /entrypoint.sh
+RUN chmod +x /usr/local/bin/auto-approve-pairing.sh
 
 # Create log files with proper permissions
 RUN touch /var/log/openclaw-gateway.log \
