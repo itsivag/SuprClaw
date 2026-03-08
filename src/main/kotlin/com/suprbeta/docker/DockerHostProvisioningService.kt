@@ -559,6 +559,20 @@ class DockerHostProvisioningService(
             ).trim()
         }.getOrDefault("socket diagnostics unavailable")
 
+        val supervisorLogs = runCatching {
+            sshCommandExecutor.runSshCommand(
+                hostIp,
+                "docker exec $containerId sh -lc 'for f in /var/log/supervisor/openclaw-gateway.log /var/log/supervisor/openclaw-gateway.err /var/log/supervisor/nginx.err /var/log/supervisor/pairing-bootstrap.log /var/log/supervisor/pairing-bootstrap.err; do if [ -f \"${'$'}f\" ]; then echo \"===== ${'$'}f =====\"; tail -n 120 \"${'$'}f\"; fi; done' 2>&1 || true"
+            ).trim()
+        }.getOrDefault("supervisor child logs unavailable")
+
+        val runtimeLogs = runCatching {
+            sshCommandExecutor.runSshCommand(
+                hostIp,
+                "docker exec $containerId sh -lc 'if [ -d /tmp/openclaw ]; then ls -lah /tmp/openclaw; for f in /tmp/openclaw/*.log; do [ -e \"${'$'}f\" ] || continue; echo \"===== ${'$'}f =====\"; tail -n 120 \"${'$'}f\"; done; else echo \"/tmp/openclaw missing\"; fi' 2>&1 || true"
+            ).trim()
+        }.getOrDefault("openclaw runtime logs unavailable")
+
         val logs = runCatching {
             sshCommandExecutor.runSshCommand(
                 hostIp,
@@ -569,6 +583,8 @@ class DockerHostProvisioningService(
         logger.error("Gateway readiness timed out for container $containerId on port $port. Inspect: $inspect")
         logger.error("Container supervisor status for $containerId:\n$supervisor")
         logger.error("Container listening sockets for $containerId:\n$sockets")
+        logger.error("Container supervisor child logs for $containerId:\n$supervisorLogs")
+        logger.error("Container OpenClaw runtime logs for $containerId:\n$runtimeLogs")
         logger.error("Container logs for $containerId:\n$logs")
     }
 
