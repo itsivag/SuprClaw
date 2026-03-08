@@ -324,6 +324,8 @@ bootstrap_openclaw_onboarding() {
 
     local config_dir="/home/openclaw/.openclaw"
     local marker_file="$config_dir/.suprclaw-onboarded"
+    local onboard_node_options="${OPENCLAW_ONBOARD_NODE_OPTIONS:---max-old-space-size=768}"
+    local onboard_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
     mkdir -p "$config_dir"
     chown -R openclaw:openclaw "$config_dir"
@@ -333,7 +335,11 @@ bootstrap_openclaw_onboarding() {
         return
     fi
 
-    if ! runuser -u openclaw -- env HOME=/home/openclaw USER=openclaw GATEWAY_TOKEN="$GATEWAY_TOKEN" \
+    # Onboarding does not need the large MCP/Supabase env payload that the
+    # container receives at runtime. Run it with a minimal environment and an
+    # explicit heap budget so the wizard stays within the 1 GiB container limit.
+    if ! runuser -u openclaw -- env -i HOME=/home/openclaw USER=openclaw PATH="$onboard_path" \
+        NODE_OPTIONS="$onboard_node_options" \
         openclaw onboard --non-interactive --mode local --auth-choice skip --gateway-port 18788 \
         --gateway-bind loopback --gateway-auth token --gateway-token "$GATEWAY_TOKEN" --skip-skills \
         --skip-channels --skip-ui --skip-health --skip-daemon --accept-risk; then
