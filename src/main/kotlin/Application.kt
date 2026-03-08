@@ -7,6 +7,7 @@ import com.suprbeta.digitalocean.DropletConfigurationService
 import com.suprbeta.digitalocean.DropletConfigurationServiceImpl
 import com.suprbeta.digitalocean.DropletMcpServiceImpl
 import com.suprbeta.digitalocean.DropletProvisioningService
+import com.suprbeta.digitalocean.AgentWorkspaceServiceImpl
 import com.suprbeta.digitalocean.configureAgentRoutes
 import com.suprbeta.core.SshCommandExecutorImpl
 import com.suprbeta.digitalocean.configureDropletRoutes
@@ -81,15 +82,22 @@ fun Application.module() {
     val managementService: SupabaseManagementService = SelfHostedSupabaseManagementService(httpClient, this)
     log.info("Supabase mode: self-hosted")
     installSupabaseStartupRepair(managementService)
+    val marketplaceService = MarketplaceService(httpClient)
 
     configureWebSockets(httpClient, firebaseAuthService, firestoreRepository, remoteConfigService)
     val configuringService = configureDigitalOcean(
-        httpClient, firestoreRepository, agentRepository, schemaRepository, managementService, userClientProvider
+        httpClient,
+        firestoreRepository,
+        agentRepository,
+        schemaRepository,
+        managementService,
+        userClientProvider,
+        marketplaceService
     )
     configureTaskRoutes(taskRepository, firestoreRepository, userClientProvider)
     configureWebhookRoutes(firestoreRepository, userClientProvider, agentRepository, httpClient, managementService.webhookSecret)
     configureFcmRoutes(firestoreRepository)
-    configureMarketplaceRoutes(configuringService, MarketplaceService(httpClient))
+    configureMarketplaceRoutes(configuringService, marketplaceService)
     configureUsageRoutes(firestoreRepository, remoteConfigService)
     configureRouting()
 }
@@ -231,7 +239,8 @@ fun Application.configureDigitalOcean(
     agentRepository: SupabaseAgentRepository,
     schemaRepository: SupabaseSchemaRepository,
     managementService: SupabaseManagementService,
-    userClientProvider: UserSupabaseClientProvider
+    userClientProvider: UserSupabaseClientProvider,
+    marketplaceService: MarketplaceService
 ): DropletConfigurationService {
     val dotenv = io.github.cdimascio.dotenv.dotenv { ignoreIfMissing = true; directory = "." }
     val sshCommandExecutor = SshCommandExecutorImpl(this)
@@ -308,8 +317,22 @@ fun Application.configureDigitalOcean(
         dropletMcpService = dropletMcpService,
         application = this
     )
+    val workspaceService = AgentWorkspaceServiceImpl(
+        firestoreRepository = firestoreRepository,
+        agentRepository = agentRepository,
+        userClientProvider = userClientProvider,
+        marketplaceService = marketplaceService,
+        sshCommandExecutor = sshCommandExecutor,
+        application = this
+    )
     configureDropletRoutes(provisioningService, firestoreRepository)
-    configureAgentRoutes(configuringService, firestoreRepository, agentRepository, userClientProvider)
+    configureAgentRoutes(
+        configuringService,
+        workspaceService,
+        firestoreRepository,
+        agentRepository,
+        userClientProvider
+    )
     return configuringService
 }
 

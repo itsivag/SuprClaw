@@ -20,3 +20,20 @@ data class AgentMutationResponse(
     val message: String,
     val output: String
 )
+
+@Serializable
+data class AgentFileListResponse(
+    val dropletId: Long,
+    val agentName: String,
+    val workspaceType: String,
+    val files: List<String>
+)
+
+@Serializable
+data class AgentFileContentResponse(
+    val dropletId: Long,
+    val agentName: String,
+    val workspaceType: String,
+    val fileName: String,
+    val content: String
+)
