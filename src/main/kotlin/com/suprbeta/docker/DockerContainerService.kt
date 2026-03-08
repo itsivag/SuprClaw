@@ -212,6 +212,14 @@ class DockerContainerService(
      */
     private suspend fun ensureImageExists(hostIp: String) {
         val image = AppConfig.dockerOpenclawImage
+        val refreshLatestTag = image.substringAfterLast(':', "").equals("latest", ignoreCase = true) && !image.contains("@sha256:")
+
+        if (refreshLatestTag) {
+            logger.info("Refreshing latest OpenClaw image $image on $hostIp")
+            sshCommandExecutor.runSshCommand(hostIp, "docker pull $image")
+            return
+        }
+
         val imageCheck = sshCommandExecutor.runSshCommand(
             hostIp,
             "docker images --format '{{.Repository}}:{{.Tag}}' | grep -F '${image.substringBefore(":")}' || echo 'NOT_FOUND'"
