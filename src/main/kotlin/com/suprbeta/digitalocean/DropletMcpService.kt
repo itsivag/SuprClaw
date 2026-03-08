@@ -1,5 +1,6 @@
 package com.suprbeta.digitalocean
 
+import com.suprbeta.core.ShellEscaping.singleQuote
 import com.suprbeta.core.SshCommandExecutor
 import com.suprbeta.digitalocean.models.UserDropletInternal
 import com.suprbeta.supabase.SupabaseManagementService
@@ -15,12 +16,11 @@ interface DropletMcpService {
     fun validateMcpTools(toolNames: List<String>)
 
     /**
-     * Writes mcp.env, mcp-routes.json, and mcporter.json to the VPS for the given
-     * tool names, then restarts mcporter.
+     * Writes mcp.env, mcp-routes.json, and mcporter.json for the given tool names.
+     * In Docker mode this updates the tenant container; in VPS mode it updates the host VM.
      *
      * This is idempotent: pass the full desired set of tools each time.
-     * During initial provisioning the mcporter restart is a no-op (services
-     * not started yet); the provisioning caller starts them afterward.
+     * During initial provisioning the restart is a no-op if services are not started yet.
      */
     suspend fun configureMcpTools(droplet: UserDropletInternal, toolNames: List<String>)
 }
@@ -61,8 +61,6 @@ open class DropletMcpServiceImpl(
     private fun isMissingEnvVar(key: String): Boolean = env(key).isBlank()
 
     override suspend fun configureMcpTools(droplet: UserDropletInternal, toolNames: List<String>) {
-        val ip = droplet.ipAddress
-
         val toolDefs = toolNames.mapNotNull { name ->
             McpToolRegistry.get(name) ?: run {
                 logger.warn("Unknown MCP tool '$name', skipping")
@@ -70,27 +68,22 @@ open class DropletMcpServiceImpl(
             }
         }
 
-        writeMcpEnv(ip, droplet, toolDefs)
-        writeMcpRoutes(ip, toolDefs)
-        writeMcporterConfig(ip, toolDefs, droplet.supabaseProjectRef)
+        writeMcpEnv(droplet, toolDefs)
+        writeMcpRoutes(droplet, toolDefs)
+        writeMcporterConfig(droplet, toolDefs, droplet.supabaseProjectRef)
 
-        // Restart mcporter if already running; silently skip if not yet started (provisioning).
-        sshCommandExecutor.runSshCommand(ip, "sudo systemctl restart mcporter 2>/dev/null || true")
-
-        // Deploy the latest mcp-auth-proxy.js from resources to VPS.
+        // Refresh the proxy script so runtime updates do not depend on a full image rebuild.
         val proxyJs = javaClass.getResourceAsStream("/mcp-auth-proxy.js")!!
             .bufferedReader().readText()
-        val proxyEncoded = Base64.getEncoder().encodeToString(proxyJs.toByteArray())
-        sshCommandExecutor.runSshCommand(ip, "echo $proxyEncoded | base64 -d | sudo tee /usr/local/bin/mcp-auth-proxy.js > /dev/null")
-        sshCommandExecutor.runSshCommand(ip, "sudo chmod 700 /usr/local/bin/mcp-auth-proxy.js && sudo chown root:root /usr/local/bin/mcp-auth-proxy.js")
-        sshCommandExecutor.runSshCommand(ip, "sudo systemctl restart mcp-auth-proxy")
+        writeProxyScript(droplet, proxyJs)
+        restartMcpRuntime(droplet)
 
         logger.info("MCP tools configured on droplet ${droplet.dropletId}: ${toolNames.joinToString()}")
     }
 
     // ── File writers ─────────────────────────────────────────────────────
 
-    private fun writeMcpEnv(ip: String, droplet: UserDropletInternal, toolDefs: List<McpToolDefinition>) {
+    private fun writeMcpEnv(droplet: UserDropletInternal, toolDefs: List<McpToolDefinition>) {
         val scopedAccessToken = generateScopedJwt(droplet.supabaseProjectRef)
             .ifBlank { managementService.managementToken }
 
@@ -109,13 +102,10 @@ open class DropletMcpServiceImpl(
                 lines += "${tool.authEnvVar}=${env(tool.authEnvVar)}"
             }
         }
-        val encoded = Base64.getEncoder().encodeToString(lines.joinToString("\n").toByteArray())
-        sshCommandExecutor.runSshCommand(ip, "echo $encoded | base64 -d | sudo tee /etc/suprclaw/mcp.env > /dev/null")
-        sshCommandExecutor.runSshCommand(ip, "sudo chmod 600 /etc/suprclaw/mcp.env")
-        sshCommandExecutor.runSshCommand(ip, "sudo chown root:root /etc/suprclaw/mcp.env")
+        writeProtectedFile(droplet, "/etc/suprclaw/mcp.env", lines.joinToString("\n"))
     }
 
-    private fun writeMcpRoutes(ip: String, toolDefs: List<McpToolDefinition>) {
+    private fun writeMcpRoutes(droplet: UserDropletInternal, toolDefs: List<McpToolDefinition>) {
         val routes = toolDefs.joinToString(",") { tool ->
             val auth = when (tool.authType) {
                 "bearer" -> """{"type":"bearer","envVar":"${tool.authEnvVar}"}"""
@@ -125,11 +115,7 @@ open class DropletMcpServiceImpl(
             val upstream = if (tool.name == "supabase") env("SUPABASE_MCP_URL").ifBlank { tool.upstream } else tool.upstream
             """"${tool.name}":{"upstream":"$upstream","auth":$auth}"""
         }
-        val json = "{$routes}"
-        val encoded = Base64.getEncoder().encodeToString(json.toByteArray())
-        sshCommandExecutor.runSshCommand(ip, "echo $encoded | base64 -d | sudo tee /etc/suprclaw/mcp-routes.json > /dev/null")
-        sshCommandExecutor.runSshCommand(ip, "sudo chmod 600 /etc/suprclaw/mcp-routes.json")
-        sshCommandExecutor.runSshCommand(ip, "sudo chown root:root /etc/suprclaw/mcp-routes.json")
+        writeProtectedFile(droplet, "/etc/suprclaw/mcp-routes.json", "{$routes}")
     }
 
     internal fun generateScopedJwt(schemaName: String): String {
@@ -147,14 +133,97 @@ open class DropletMcpServiceImpl(
         return "$header.$payload.$sig"
     }
 
-    private fun writeMcporterConfig(ip: String, toolDefs: List<McpToolDefinition>, projectRef: String) {
+    private fun writeMcporterConfig(droplet: UserDropletInternal, toolDefs: List<McpToolDefinition>, projectRef: String) {
         val servers = toolDefs.joinToString(",") { tool ->
             val url = tool.mcporterUrlTemplate.replace("{projectRef}", projectRef)
             """"${tool.name}":{"url":"$url","lifecycle":"keep-alive"}"""
         }
         val json = """{"mcpServers":{$servers}}"""
-        val encoded = Base64.getEncoder().encodeToString(json.toByteArray())
-        sshCommandExecutor.runSshCommand(ip, "echo $encoded | base64 -d > /home/openclaw/.mcporter/mcporter.json")
-        sshCommandExecutor.runSshCommand(ip, "echo $encoded | base64 -d > /home/openclaw/config/mcporter.json")
+        writeOpenClawFile(droplet, "/home/openclaw/.mcporter/mcporter.json", json)
+        writeOpenClawFile(droplet, "/home/openclaw/config/mcporter.json", json)
+    }
+
+    private fun writeProxyScript(droplet: UserDropletInternal, proxyJs: String) {
+        if (droplet.isDockerDeployment()) {
+            writeProtectedFile(droplet, "/usr/local/bin/mcp-auth-proxy.js", proxyJs, mode = "700")
+            return
+        }
+
+        val proxyEncoded = Base64.getEncoder().encodeToString(proxyJs.toByteArray())
+        sshCommandExecutor.runSshCommand(
+            droplet.ipAddress,
+            "echo $proxyEncoded | base64 -d | sudo tee /usr/local/bin/mcp-auth-proxy.js > /dev/null"
+        )
+        sshCommandExecutor.runSshCommand(
+            droplet.ipAddress,
+            "sudo chmod 700 /usr/local/bin/mcp-auth-proxy.js && sudo chown root:root /usr/local/bin/mcp-auth-proxy.js"
+        )
+    }
+
+    private fun restartMcpRuntime(droplet: UserDropletInternal) {
+        if (droplet.isDockerDeployment()) {
+            runRemoteCommand(droplet, "supervisorctl restart mcp-auth-proxy >/dev/null 2>&1 || true")
+            return
+        }
+
+        // Restart mcporter if already running; silently skip if not yet started (provisioning).
+        sshCommandExecutor.runSshCommand(droplet.ipAddress, "sudo systemctl restart mcporter 2>/dev/null || true")
+        sshCommandExecutor.runSshCommand(droplet.ipAddress, "sudo systemctl restart mcp-auth-proxy")
+    }
+
+    private fun writeProtectedFile(
+        droplet: UserDropletInternal,
+        path: String,
+        content: String,
+        mode: String = "600"
+    ) {
+        val encoded = Base64.getEncoder().encodeToString(content.toByteArray())
+        if (droplet.isDockerDeployment()) {
+            val parent = path.substringBeforeLast('/')
+            runRemoteCommand(
+                droplet,
+                "mkdir -p ${singleQuote(parent)} && " +
+                    "echo $encoded | base64 -d > ${singleQuote(path)} && " +
+                    "chmod $mode ${singleQuote(path)} && " +
+                    "chown root:root ${singleQuote(path)}"
+            )
+            return
+        }
+
+        sshCommandExecutor.runSshCommand(
+            droplet.ipAddress,
+            "echo $encoded | base64 -d | sudo tee ${singleQuote(path)} > /dev/null"
+        )
+        sshCommandExecutor.runSshCommand(droplet.ipAddress, "sudo chmod $mode ${singleQuote(path)}")
+        sshCommandExecutor.runSshCommand(droplet.ipAddress, "sudo chown root:root ${singleQuote(path)}")
+    }
+
+    private fun writeOpenClawFile(droplet: UserDropletInternal, path: String, content: String) {
+        val encoded = Base64.getEncoder().encodeToString(content.toByteArray())
+        val parent = path.substringBeforeLast('/')
+        if (droplet.isDockerDeployment()) {
+            runRemoteCommand(
+                droplet,
+                "mkdir -p ${singleQuote(parent)} && " +
+                    "echo $encoded | base64 -d > ${singleQuote(path)} && " +
+                    "chown openclaw:openclaw ${singleQuote(path)} && " +
+                    "chmod 644 ${singleQuote(path)}"
+            )
+            return
+        }
+
+        sshCommandExecutor.runSshCommand(droplet.ipAddress, "mkdir -p ${singleQuote(parent)}")
+        sshCommandExecutor.runSshCommand(droplet.ipAddress, "echo $encoded | base64 -d > ${singleQuote(path)}")
+    }
+
+    private fun runRemoteCommand(droplet: UserDropletInternal, command: String): String {
+        val remoteCommand = if (droplet.isDockerDeployment()) {
+            val containerId = droplet.containerIdOrNull()
+                ?: throw IllegalStateException("Missing container ID for docker deployment")
+            "docker exec ${singleQuote(containerId)} sh -lc ${singleQuote(command)}"
+        } else {
+            command
+        }
+        return sshCommandExecutor.runSshCommand(droplet.ipAddress, remoteCommand)
     }
 }
