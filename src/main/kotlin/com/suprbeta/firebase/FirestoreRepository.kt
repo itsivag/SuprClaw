@@ -6,6 +6,7 @@ import com.google.cloud.firestore.DocumentSnapshot
 import com.google.cloud.firestore.FieldValue
 import com.google.cloud.firestore.QuerySnapshot
 import com.google.cloud.firestore.SetOptions
+import com.suprbeta.core.CryptoOperationException
 import com.suprbeta.digitalocean.models.ProvisioningStatus
 import com.suprbeta.digitalocean.models.UserDroplet
 import com.suprbeta.digitalocean.models.UserDropletInternal
@@ -276,6 +277,9 @@ class FirestoreRepository(
                 application.log.debug("No droplet found for user: $userId")
                 null
             }
+        } catch (e: CryptoOperationException) {
+            application.log.error("Failed to decrypt user droplet for user $userId", e)
+            throw e
         } catch (e: Exception) {
             application.log.error("Failed to fetch user droplet for user $userId", e)
             null
@@ -447,6 +451,9 @@ class FirestoreRepository(
                 .await()
             val userId = doc.getString("userId") ?: return null
             getUserDropletInternal(userId)
+        } catch (e: CryptoOperationException) {
+            application.log.error("Failed to decrypt project ref mapping for $projectRef", e)
+            throw e
         } catch (e: Exception) {
             application.log.error("Failed to look up droplet for projectRef $projectRef", e)
             null

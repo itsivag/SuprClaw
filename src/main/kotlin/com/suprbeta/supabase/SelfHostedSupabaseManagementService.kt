@@ -1,12 +1,13 @@
 package com.suprbeta.supabase
 
+import com.suprbeta.core.SshHostKeyVerifierFactory
 import io.github.cdimascio.dotenv.dotenv
 import io.ktor.client.*
 import io.ktor.server.application.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import net.schmizz.sshj.SSHClient
-import net.schmizz.sshj.transport.verification.PromiscuousVerifier
+import net.schmizz.sshj.transport.verification.HostKeyVerifier
 import java.io.File
 import java.util.Base64
 import java.util.concurrent.TimeUnit
@@ -41,6 +42,7 @@ class SelfHostedSupabaseManagementService(
     private val sshUser: String = env("SUPABASE_SELF_HOSTED_SSH_USER").ifBlank { "root" }
 
     private val dockerDir: String = env("SUPABASE_SELF_HOSTED_DOCKER_DIR").ifBlank { "/opt/supabase/docker" }
+    private val sshHostKeyVerifier: HostKeyVerifier by lazy { SshHostKeyVerifierFactory.createSelfHostedVerifier(application) }
 
     private val privateKeyPem: String by lazy {
         val b64 = dotenv["PROVISIONING_SSH_PRIVATE_KEY_B64"]
@@ -414,7 +416,7 @@ class SelfHostedSupabaseManagementService(
 
             val ssh = SSHClient()
             try {
-                ssh.addHostKeyVerifier(PromiscuousVerifier())
+                ssh.addHostKeyVerifier(sshHostKeyVerifier)
                 ssh.connectTimeout = 10_000
                 ssh.connect(host, 22)
                 ssh.authPublickey(user, ssh.loadKeys(tempKey.absolutePath))

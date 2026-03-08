@@ -31,7 +31,7 @@ class FcmNotificationService(private val application: Application) {
                 val messageId = FirebaseMessaging.getInstance().send(message)
                 application.log.info("FCM notification sent: $messageId title=$title")
             } catch (e: Exception) {
-                application.log.error("Failed to send FCM notification title=$title token=${fcmToken.take(20)}...", e)
+                application.log.error("Failed to send FCM notification title=$title", e)
             }
         }
     }

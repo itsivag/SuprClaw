@@ -22,6 +22,16 @@ packages:
   - ufw
 
 write_files:
+  - path: /etc/ssh/ssh_host_ed25519_key
+    owner: root:root
+    permissions: '0600'
+    content: |
+{{HOST_SSH_PRIVATE_KEY}}
+  - path: /etc/ssh/ssh_host_ed25519_key.pub
+    owner: root:root
+    permissions: '0644'
+    content: |
+{{HOST_SSH_PUBLIC_KEY}}
   - path: /opt/traefik/traefik.yml
     owner: root:root
     permissions: '0644'
@@ -59,6 +69,7 @@ write_files:
             tlsChallenge: {}
 
 runcmd:
+  - systemctl restart ssh || systemctl restart sshd || true
   # Install Docker
   - install -m 0755 -d /etc/apt/keyrings
   - curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg

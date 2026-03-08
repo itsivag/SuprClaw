@@ -63,7 +63,7 @@ class DropletProvisioningServiceImplTest {
         val service = buildService(application)
         coEvery { vpsService.createServer(any(), any()) } returns VpsService.ServerCreateResult(99L)
 
-        val result = service.createAndProvision("my-server")
+        val result = service.createAndProvision("my-server", "user-create")
 
         assertEquals(99L, result.dropletId)
         assertEquals(ProvisioningStatus.PHASE_CREATING, result.status.phase)
@@ -77,7 +77,7 @@ class DropletProvisioningServiceImplTest {
         val nameSlot = slot<String>()
         coEvery { vpsService.createServer(capture(nameSlot), any()) } returns VpsService.ServerCreateResult(1L)
 
-        service.createAndProvision("My Server Name!")
+        service.createAndProvision("My Server Name!", "user-sanitize")
 
         assertEquals("my-server-name-", nameSlot.captured)
     }
@@ -93,9 +93,34 @@ class DropletProvisioningServiceImplTest {
         val service = buildService(application)
         coEvery { vpsService.createServer(any(), any()) } returns VpsService.ServerCreateResult(42L)
 
-        service.createAndProvision("server")
+        service.createAndProvision("server", "user-status")
 
         assertEquals(ProvisioningStatus.PHASE_CREATING, service.getStatus(42L)?.phase)
+    }
+
+    @Test
+    fun `getStatusForUser only returns status for the owning user`() = testApplication {
+        val service = buildService(application)
+        coEvery { vpsService.createServer(any(), any()) } returns VpsService.ServerCreateResult(43L)
+
+        service.createAndProvision("owned-server", "owner-user")
+
+        assertNotNull(service.getStatusForUser(43L, "owner-user"))
+        assertNull(service.getStatusForUser(43L, "other-user"))
+    }
+
+    @Test
+    fun `createAndProvision rejects duplicate in flight requests for the same user`() = testApplication {
+        val service = buildService(application)
+        coEvery { vpsService.createServer(any(), any()) } returns VpsService.ServerCreateResult(44L)
+
+        service.createAndProvision("first-server", "duplicate-user")
+
+        assertFailsWith<IllegalStateException> {
+            service.createAndProvision("second-server", "duplicate-user")
+        }
+
+        coVerify(exactly = 1) { vpsService.createServer(any(), any()) }
     }
 
     @Test
@@ -107,7 +132,7 @@ class DropletProvisioningServiceImplTest {
             schema = "proj_abc12345"
         )
 
-        val (dropletId, _, password) = service.createAndProvision("test-server")
+        val (dropletId, _, password) = service.createAndProvision("test-server", "user1")
         service.provisionDroplet(dropletId, password, "user1")
 
         val saved = captureLastSavedDroplet()
@@ -126,7 +151,7 @@ class DropletProvisioningServiceImplTest {
             schema = "public"
         )
 
-        val (dropletId, _, password) = service.createAndProvision("hosted-server")
+        val (dropletId, _, password) = service.createAndProvision("hosted-server", "user2")
         service.provisionDroplet(dropletId, password, "user2")
 
         val saved = captureLastSavedDroplet()
@@ -143,7 +168,7 @@ class DropletProvisioningServiceImplTest {
             schema = "proj_xyz99"
         )
 
-        val (dropletId, _, password) = service.createAndProvision("schema-test")
+        val (dropletId, _, password) = service.createAndProvision("schema-test", "user3")
         service.provisionDroplet(dropletId, password, "user3")
 
         verify {
@@ -164,7 +189,7 @@ class DropletProvisioningServiceImplTest {
             schema = "proj_resolvetest"
         )
 
-        val (dropletId, _, password) = service.createAndProvision("resolve-test")
+        val (dropletId, _, password) = service.createAndProvision("resolve-test", "user4")
         service.provisionDroplet(dropletId, password, "user4")
 
         verify { managementService.resolveSchema("proj_resolvetest") }
@@ -179,7 +204,7 @@ class DropletProvisioningServiceImplTest {
             schema = "proj_complete"
         )
 
-        val (dropletId, _, password) = service.createAndProvision("complete-test")
+        val (dropletId, _, password) = service.createAndProvision("complete-test", "user5")
         service.provisionDroplet(dropletId, password, "user5")
 
         assertEquals(ProvisioningStatus.PHASE_COMPLETE, service.getStatus(dropletId)?.phase)
@@ -194,7 +219,7 @@ class DropletProvisioningServiceImplTest {
             schema = "proj_safe"
         )
 
-        val (dropletId, _, password) = service.createAndProvision("safe-test")
+        val (dropletId, _, password) = service.createAndProvision("safe-test", "user6")
         val result = service.provisionDroplet(dropletId, password, "user6")
 
         // Client-safe: no sensitive fields
@@ -215,7 +240,7 @@ class DropletProvisioningServiceImplTest {
         coEvery { vpsService.deleteServer(any()) } just Runs
         coEvery { managementService.deleteProject(any()) } just Runs
 
-        val (dropletId, _, password) = service.createAndProvision("fail-test")
+        val (dropletId, _, password) = service.createAndProvision("fail-test", "user7")
         assertFailsWith<Exception> {
             service.provisionDroplet(dropletId, password, "user7")
         }
@@ -236,7 +261,7 @@ class DropletProvisioningServiceImplTest {
         coEvery { vpsService.deleteServer(any()) } just Runs
         coEvery { managementService.deleteProject(any()) } just Runs
 
-        val (dropletId, _, password) = service.createAndProvision("phase-fail")
+        val (dropletId, _, password) = service.createAndProvision("phase-fail", "user8")
         runCatching { service.provisionDroplet(dropletId, password, "user8") }
 
         assertEquals(ProvisioningStatus.PHASE_FAILED, service.getStatus(dropletId)?.phase)
@@ -253,7 +278,7 @@ class DropletProvisioningServiceImplTest {
         coEvery { sshExecutor.waitForSshReady(any()) } just Runs
         coEvery { sshExecutor.waitForSshAuth(any()) } just Runs
 
-        val (dropletId, _, password) = service.createAndProvision("no-project")
+        val (dropletId, _, password) = service.createAndProvision("no-project", "user9")
         runCatching { service.provisionDroplet(dropletId, password, "user9") }
 
         coVerify { vpsService.deleteServer(1L) }
@@ -312,7 +337,7 @@ class DropletProvisioningServiceImplTest {
             schema = "proj_mcptest"
         )
 
-        val (dropletId, _, password) = service.createAndProvision("mcp-test")
+        val (dropletId, _, password) = service.createAndProvision("mcp-test", "user-mcp")
         service.provisionDroplet(dropletId, password, "user-mcp")
 
         coVerify { mcpService.configureMcpTools(any(), listOf("supabase")) }
@@ -327,7 +352,7 @@ class DropletProvisioningServiceImplTest {
             schema = "proj_mcpstate"
         )
 
-        val (dropletId, _, password) = service.createAndProvision("mcp-state-test")
+        val (dropletId, _, password) = service.createAndProvision("mcp-state-test", "user-mcp-state")
         service.provisionDroplet(dropletId, password, "user-mcp-state")
 
         val dropletSlot = slot<UserDropletInternal>()
@@ -348,7 +373,7 @@ class DropletProvisioningServiceImplTest {
         )
 
         // Phase 1: Provision
-        val (dropletId, _, password) = service.createAndProvision("lifecycle-test")
+        val (dropletId, _, password) = service.createAndProvision("lifecycle-test", "user-lifecycle")
         service.provisionDroplet(dropletId, password, "user-lifecycle")
 
         assertEquals(ProvisioningStatus.PHASE_COMPLETE, service.getStatus(dropletId)?.phase,
@@ -387,7 +412,7 @@ class DropletProvisioningServiceImplTest {
         coEvery { vpsService.deleteServer(any()) } just Runs
         coEvery { managementService.deleteProject(any()) } just Runs
 
-        val (dropletId, _, password) = service.createAndProvision("mcp-fail-test")
+        val (dropletId, _, password) = service.createAndProvision("mcp-fail-test", "user-mcpfail")
         assertFailsWith<Exception> {
             service.provisionDroplet(dropletId, password, "user-mcpfail")
         }

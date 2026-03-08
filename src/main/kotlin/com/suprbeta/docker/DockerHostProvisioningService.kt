@@ -67,9 +67,12 @@ class DockerHostProvisioningService(
     private val logger = application.log
     private val json = Json { ignoreUnknownKeys = true }
     private val dotenv = dotenv { ignoreIfMissing = true; directory = "." }
+    private val secureRandom = SecureRandom()
     
     /** In-memory status map keyed by container ID (used as droplet ID). */
     val statuses = ConcurrentHashMap<Long, ProvisioningStatus>()
+    private val statusOwners = ConcurrentHashMap<Long, String>()
+    private val provisioningIdsByUser = ConcurrentHashMap<String, Long>()
     
     companion object {
         private const val GATEWAY_PORT = 18789
@@ -92,7 +95,23 @@ class DockerHostProvisioningService(
         )
     }
 
-    override suspend fun createAndProvision(name: String): com.suprbeta.digitalocean.DropletProvisioningService.CreateResult {
+    override suspend fun createAndProvision(name: String, userId: String): com.suprbeta.digitalocean.DropletProvisioningService.CreateResult {
+        val existingDroplet = firestoreRepository.getUserDropletInternal(userId)
+        if (existingDroplet != null && existingDroplet.userId.isNotBlank()) {
+            throw IllegalStateException("User already has a droplet")
+        }
+
+        val existingProvisioningId = provisioningIdsByUser[userId]
+        if (existingProvisioningId != null) {
+            val existingStatus = statuses[existingProvisioningId]
+            if (existingStatus != null &&
+                existingStatus.phase != ProvisioningStatus.PHASE_COMPLETE &&
+                existingStatus.phase != ProvisioningStatus.PHASE_FAILED
+            ) {
+                throw IllegalStateException("Provisioning already in progress for user")
+            }
+        }
+
         val password = generatePassword()
 
         // Use a collision-free unique ID for this provisioning session
@@ -107,6 +126,8 @@ class DockerHostProvisioningService(
             started_at = Instant.now().toString()
         )
         statuses[containerDropletId] = status
+        statusOwners[containerDropletId] = userId
+        provisioningIdsByUser[userId] = containerDropletId
         
         return com.suprbeta.digitalocean.DropletProvisioningService.CreateResult(
             dropletId = containerDropletId,
@@ -364,6 +385,9 @@ class DockerHostProvisioningService(
 
     override fun getStatus(dropletId: Long): ProvisioningStatus? = statuses[dropletId]
 
+    override fun getStatusForUser(dropletId: Long, userId: String): ProvisioningStatus? =
+        statuses[dropletId]?.takeIf { statusOwners[dropletId] == userId }
+
     override suspend fun teardown(userId: String) {
         logger.info("Tearing down container environment for user $userId")
 
@@ -470,6 +494,11 @@ class DockerHostProvisioningService(
 
         if (errors.isNotEmpty()) {
             throw IllegalStateException("Teardown partially failed: ${errors.joinToString("; ")}")
+        }
+
+        provisioningIdsByUser.remove(userId)?.let { provisioningId ->
+            statuses.remove(provisioningId)
+            statusOwners.remove(provisioningId)
         }
 
         logger.info("✅ Teardown complete for user $userId")
@@ -762,13 +791,18 @@ class DockerHostProvisioningService(
     }
 
     private fun generateGatewayToken(): String {
-        val chars = "abcdef0123456789"
-        return (1..48).map { chars.random() }.joinToString("")
+        val bytes = ByteArray(24)
+        secureRandom.nextBytes(bytes)
+        return bytes.joinToString("") { "%02x".format(it) }
     }
 
     private fun generatePassword(): String {
         val chars = (('a'..'z') + ('A'..'Z') + ('0'..'9')).toCharArray()
-        return (1..20).map { chars.random() }.joinToString("")
+        return buildString {
+            repeat(20) {
+                append(chars[secureRandom.nextInt(chars.size)])
+            }
+        }
     }
 
     private fun generateSubdomain(userId: String): String {
@@ -801,7 +835,8 @@ class DockerHostProvisioningService(
             supabaseServiceKey = droplet.supabaseServiceKey,
             supabaseUrl = droplet.supabaseUrl,
             supabaseSchema = droplet.supabaseSchema,
-            configuredMcpTools = droplet.configuredMcpTools
+            configuredMcpTools = droplet.configuredMcpTools,
+            deploymentMode = "docker"
         )
 
         firestoreRepository.saveUserDroplet(internalDroplet)

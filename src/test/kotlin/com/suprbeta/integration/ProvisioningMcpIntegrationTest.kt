@@ -70,6 +70,7 @@ class ProvisioningMcpIntegrationTest {
         val ip = env("INTG_MCP_IP")
         val schema = env("INTG_MCP_SCHEMA")
         assumeTrue(ip.isNotBlank() && schema.isNotBlank()) { "Set INTG_MCP_IP and INTG_MCP_SCHEMA to run this test" }
+        assumeSshTrustConfigured(::env)
 
         val gatewayToken = env("INTG_MCP_GATEWAY_TOKEN").ifBlank { "intg-test-gateway-token" }
         val dropletId = env("INTG_MCP_DROPLET_ID").toLongOrNull() ?: 0L
@@ -101,6 +102,8 @@ class ProvisioningMcpIntegrationTest {
         assumeTrue(System.getenv("INTEGRATION_TEST") == "true" || dotenv["INTEGRATION_TEST"] == "true") {
             "Set INTEGRATION_TEST=true to run this test"
         }
+        fun env(k: String) = System.getenv(k) ?: dotenv[k] ?: ""
+        assumeSshTrustConfigured(::env)
 
         val app = mockk<Application>(relaxed = true)
         val httpClient = HttpClient(CIO) {
@@ -365,5 +368,22 @@ class ProvisioningMcpIntegrationTest {
         log.info("[INTG] 7h PASS")
 
         log.info("[INTG] ✅ All MCP assertions passed")
+    }
+
+    private fun assumeSshTrustConfigured(env: (String) -> String) {
+        val hasProvisioningHostKey = env("PROVISIONING_SSH_HOST_PRIVATE_KEY_B64").isNotBlank() &&
+            env("PROVISIONING_SSH_HOST_PUBLIC_KEY").isNotBlank()
+        val hasProvisioningVerifier = env("PROVISIONING_SSH_HOST_FINGERPRINT").isNotBlank() ||
+            env("PROVISIONING_SSH_KNOWN_HOSTS").isNotBlank() ||
+            env("PROVISIONING_SSH_KNOWN_HOSTS_B64").isNotBlank()
+        val hasSelfHostedVerifier = env("SUPABASE_SELF_HOSTED_SSH_HOST_FINGERPRINT").isNotBlank() ||
+            env("SUPABASE_SELF_HOSTED_SSH_KNOWN_HOSTS").isNotBlank() ||
+            env("SUPABASE_SELF_HOSTED_SSH_KNOWN_HOSTS_B64").isNotBlank()
+
+        assumeTrue(
+            hasProvisioningHostKey && hasProvisioningVerifier && hasSelfHostedVerifier
+        ) {
+            "Set pinned provisioning host key env vars and self-hosted SSH verifier trust env vars before running this test"
+        }
     }
 }

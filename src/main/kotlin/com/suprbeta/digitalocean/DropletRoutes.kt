@@ -32,7 +32,7 @@ fun Application.configureDropletRoutes(
                         val request = call.receive<CreateDropletNameRequest>()
 
                         // Phase 1 — Create droplet
-                        val result = provisioningService.createAndProvision(request.name)
+                        val result = provisioningService.createAndProvision(request.name, user.uid)
 
                         // Launch provisioning in background (phases 2-8)
                         launch {
@@ -57,6 +57,11 @@ fun Application.configureDropletRoutes(
                         )
 
                         call.respond(HttpStatusCode.Accepted, userDroplet)
+                    } catch (e: IllegalStateException) {
+                        call.respond(
+                            HttpStatusCode.Conflict,
+                            mapOf("error" to (e.message ?: "Provisioning request rejected"))
+                        )
                     } catch (e: Exception) {
                         log.error("Error creating droplet", e)
                         call.respond(
@@ -137,7 +142,7 @@ fun Application.configureDropletRoutes(
                             return@get
                         }
 
-                        val status = provisioningService.getStatus(dropletId)
+                        val status = provisioningService.getStatusForUser(dropletId, user.uid)
                         if (status == null) {
                             call.respond(
                                 HttpStatusCode.NotFound,

@@ -39,7 +39,7 @@ fun Application.configureWebSocketRoutes(
             }
 
             val platform = call.request.queryParameters["platform"]
-            val userTier = call.request.headers["X-User-Tier"]?.lowercase() ?: "free"
+            val userTier = (user.customClaims["tier"] as? String)?.lowercase() ?: "free"
             val userId = user.uid
 
             logger.info("New WebSocket connection request for user: $userId (Tier: $userTier)")
@@ -88,30 +88,7 @@ fun Application.configureWebSocketRoutes(
 
         // Health check endpoint
         get("/ws/health") {
-            val activeSessionCount = sessionManager.getSessionCount()
-            val activeSessions = sessionManager.getActiveSessions()
-
-            val healthInfo = buildString {
-                appendLine("WebSocket Proxy Health")
-                appendLine("Active Sessions: $activeSessionCount")
-                appendLine()
-
-                if (activeSessions.isNotEmpty()) {
-                    appendLine("Session Details:")
-                    activeSessions.forEach { (userId, session) ->
-                        appendLine("  - User: $userId")
-                        appendLine("    Session ID: ${session.sessionId}")
-                        appendLine("    Status: ${if (session.isOffline) "OFFLINE (Grace Period)" else "ONLINE"}")
-                        appendLine("    OpenClaw Connected: ${session.isOpenClawConnected}")
-                        appendLine("    Queued Messages (RAM): ${session.offlineQueue.size}")
-                        appendLine("    Messages Sent: ${session.metadata.getSentCount()}")
-                        appendLine("    Messages Received: ${session.metadata.getReceivedCount()}")
-                        appendLine("    Connected At: ${session.metadata.connectedAt}")
-                    }
-                }
-            }
-
-            call.respondText(healthInfo, ContentType.Text.Plain, HttpStatusCode.OK)
+            call.respondText("OK", ContentType.Text.Plain, HttpStatusCode.OK)
         }
     }
 }

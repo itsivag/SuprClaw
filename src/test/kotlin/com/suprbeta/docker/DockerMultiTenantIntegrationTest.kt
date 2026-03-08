@@ -52,6 +52,9 @@ import java.util.concurrent.TimeUnit
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @TestMethodOrder(MethodOrderer.OrderAnnotation::class)
 class DockerMultiTenantIntegrationTest {
+    private val encryptionKeyset: String by lazy {
+        loadEnv("FIRESTORE_ENCRYPTION_KEYSET") ?: CryptoService.generateNewKeyset()
+    }
 
     // ── Unit test state ────────────────────────────────────────────────────
 
@@ -674,6 +677,7 @@ class DockerMultiTenantIntegrationTest {
     fun `PHASE 5-1 full provisioning via DockerHostProvisioningService`() {
         assumeTrue(hetznerToken != null, "HETZNER_API_TOKEN not set — skipping Phase 5")
         assumeTrue(dockerReady, "Phase 1.2 (Docker host setup) did not complete — skipping Phase 5")
+        assumeProvisioningHostTrustConfigured()
         val firebaseCredPath = loadEnv("FIREBASE_CREDENTIALS_PATH")
         val firebaseProjectId = loadEnv("FIREBASE_PROJECT_ID")
         assumeTrue(firebaseCredPath != null, "FIREBASE_CREDENTIALS_PATH not set — skipping Phase 5")
@@ -688,7 +692,7 @@ class DockerMultiTenantIntegrationTest {
         // Firebase / Firestore
         val firebaseService = FirebaseService(app)
         e2eFirebaseService = firebaseService
-        val cryptoService = CryptoService(app)
+        val cryptoService = CryptoService(app, encryptionKeyset)
         val firestoreRepository = FirestoreRepository(firebaseService.firestore, app, cryptoService)
 
         // Hetzner VPS + DNS
@@ -756,7 +760,7 @@ class DockerMultiTenantIntegrationTest {
         }
         println("  Registered Phase 1 host $serverId ($hostIp) in Firestore")
 
-        val createResult = runBlocking { dockerService.createAndProvision("test-docker-e2e") }
+        val createResult = runBlocking { dockerService.createAndProvision("test-docker-e2e", e2eUserId) }
         println("  createAndProvision → dropletId=${createResult.dropletId}")
 
         // provisionDroplet drives the full flow (suspend, returns when complete)
@@ -806,7 +810,7 @@ class DockerMultiTenantIntegrationTest {
         // Verify Firestore record is gone — getUserDropletInternal should return null
         // (accessed via the same FirestoreRepository used in 5.1)
         val app = mockk<Application>(relaxed = true)
-        val cryptoService = CryptoService(app)
+        val cryptoService = CryptoService(app, encryptionKeyset)
         val firestoreRepository = FirestoreRepository(
             e2eFirebaseService!!.firestore, app, cryptoService
         )
@@ -830,6 +834,19 @@ class DockerMultiTenantIntegrationTest {
                 ?.let { return it[1].trim() }
         }
         return System.getenv(key)
+    }
+
+    private fun assumeProvisioningHostTrustConfigured() {
+        val hasPinnedHostKey = !loadEnv("PROVISIONING_SSH_HOST_PRIVATE_KEY_B64").isNullOrBlank() &&
+            !loadEnv("PROVISIONING_SSH_HOST_PUBLIC_KEY").isNullOrBlank()
+        val hasVerifierTrust = !loadEnv("PROVISIONING_SSH_HOST_FINGERPRINT").isNullOrBlank() ||
+            !loadEnv("PROVISIONING_SSH_KNOWN_HOSTS").isNullOrBlank() ||
+            !loadEnv("PROVISIONING_SSH_KNOWN_HOSTS_B64").isNullOrBlank()
+
+        assumeTrue(
+            hasPinnedHostKey && hasVerifierTrust,
+            "Set pinned provisioning host key material and verifier trust env vars before running Phase 5"
+        )
     }
 
     /** Hetzner Cloud API call using curl (avoids needing Ktor HttpClient configured with DI). */
