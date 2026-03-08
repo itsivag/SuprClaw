@@ -10,6 +10,8 @@ import io.ktor.server.application.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -20,9 +22,19 @@ import java.io.File
 import java.util.Base64
 import java.util.concurrent.TimeUnit
 
+internal val BASE_POSTGREST_SCHEMAS = listOf("public", "storage", "graphql_public")
+
 private const val SCHEMA_CACHE_READY_ATTEMPTS = 30
 private const val SCHEMA_CACHE_READY_DELAY_MS = 2_000L
 private const val SCHEMA_CACHE_READY_BODY_SNIPPET_LENGTH = 200
+private val POSTGREST_CONFIG_MUTEX = Mutex()
+
+internal data class PostgrestSchemaReconciliation(
+    val currentSchemas: List<String>,
+    val desiredSchemas: List<String>,
+    val staleSchemas: List<String>,
+    val restartRequired: Boolean
+)
 
 internal fun extractPostgrestErrorCode(responseBody: String): String? = runCatching {
     Json.parseToJsonElement(responseBody)
@@ -78,7 +90,10 @@ internal suspend fun waitForPostgrestSchemaCacheReady(
 
 class SelfHostedSupabaseManagementService(
     @Suppress("unused") private val httpClient: HttpClient,
-    private val application: Application
+    private val application: Application,
+    private val jdbcStatementExecutor: ((String) -> Unit)? = null,
+    private val jdbcQueryExecutor: ((String) -> List<String>)? = null,
+    private val sshCommandRunner: ((String, String, String) -> String)? = null
 ) : SupabaseManagementService {
 
     private val logger = application.log
@@ -146,7 +161,7 @@ class SelfHostedSupabaseManagementService(
             }
         }
 
-        addSchemaToPostgrest(schemaName)
+        reconcilePostgrestConfiguration("createProject($schemaName)")
 
         logger.info("✅ Self-hosted schema created: $schemaName endpoint=$selfHostedUrl")
         return ProjectResult(projectRef = schemaName, endpoint = selfHostedUrl)
@@ -157,11 +172,14 @@ class SelfHostedSupabaseManagementService(
         logger.info("Self-hosted mode: schema $projectRef is already active (no wait needed)")
     }
 
+    override suspend fun reconcileConfiguration() {
+        reconcilePostgrestConfiguration("startup")
+    }
+
     override suspend fun reloadSchemaCache(projectRef: String) {
         logger.info("Requesting PostgREST schema cache reload for schema $projectRef")
         withContext(Dispatchers.IO) {
             executeJdbc("NOTIFY pgrst, 'reload schema'")
-            runSshCommand(sshHost, sshUser, buildSchemaCacheReloadCommand(dockerDir))
         }
         logger.info("Requested PostgREST schema cache reload for schema $projectRef")
         waitForPostgrestSchemaCacheReady(
@@ -203,6 +221,33 @@ class SelfHostedSupabaseManagementService(
         internal fun adaptSqlForSchema(sql: String, schema: String): String =
             sql.replace("public.", "$schema.")
 
+        internal fun parseConfiguredPostgrestSchemas(rawSchemas: String): List<String> =
+            rawSchemas
+                .split(',')
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .distinct()
+
+        internal fun desiredPostgrestSchemas(tenantSchemas: List<String>): List<String> =
+            BASE_POSTGREST_SCHEMAS + tenantSchemas
+                .filter { it.startsWith("proj_") }
+                .distinct()
+                .sorted()
+
+        internal fun planPostgrestSchemaReconciliation(
+            currentConfiguredSchemas: List<String>,
+            tenantSchemasFromDb: List<String>
+        ): PostgrestSchemaReconciliation {
+            val desiredSchemas = desiredPostgrestSchemas(tenantSchemasFromDb)
+            val staleSchemas = currentConfiguredSchemas.filter { it !in desiredSchemas }
+            return PostgrestSchemaReconciliation(
+                currentSchemas = currentConfiguredSchemas,
+                desiredSchemas = desiredSchemas,
+                staleSchemas = staleSchemas,
+                restartRequired = currentConfiguredSchemas != desiredSchemas
+            )
+        }
+
         /** Returns the ordered list of SQL statements that create the schema-scoped MCP role. */
         internal fun roleCreationStatements(schemaName: String): List<String> = listOf(
             "CREATE ROLE ${schemaName}_rpc NOLOGIN",
@@ -234,10 +279,27 @@ class SelfHostedSupabaseManagementService(
         internal fun roleDropStatement(schemaName: String): String =
             "DROP ROLE IF EXISTS ${schemaName}_rpc"
 
-        internal fun buildSchemaCacheReloadCommand(dockerDir: String): String = """
+        internal fun buildReadConfiguredSchemasCommand(dockerDir: String): String = """
             cd $dockerDir && \
-            (docker compose kill -s SIGUSR1 rest || docker kill -s SIGUSR1 supabase-rest)
+            (grep '^PGRST_DB_SCHEMAS=' .env | head -n 1 | cut -d= -f2- || true)
         """.trimIndent()
+
+        internal fun buildUpdateConfiguredSchemasCommand(dockerDir: String, schemas: List<String>): String {
+            val schemaValue = schemas.joinToString(",")
+            val appendedLine = shellSingleQuote("PGRST_DB_SCHEMAS=$schemaValue")
+            return """
+                cd $dockerDir && \
+                if grep -q '^PGRST_DB_SCHEMAS=' .env; then \
+                    sed -i "s|^PGRST_DB_SCHEMAS=.*|PGRST_DB_SCHEMAS=$schemaValue|" .env; \
+                else \
+                    printf '%s\n' $appendedLine >> .env; \
+                fi && \
+                docker compose up -d --force-recreate rest
+            """.trimIndent()
+        }
+
+        private fun shellSingleQuote(value: String): String =
+            "'" + value.replace("'", "'\"'\"'") + "'"
 
         /**
          * Normalises any supported DB URL variant to `jdbc:postgresql://…`.
@@ -398,7 +460,7 @@ class SelfHostedSupabaseManagementService(
             executeJdbc(roleDropStatement(projectRef))
             executeJdbc("DROP SCHEMA IF EXISTS $projectRef CASCADE")
         }
-        removeSchemaFromPostgrest(projectRef)
+        reconcilePostgrestConfiguration("deleteProject($projectRef)")
         logger.info("🗑️ Self-hosted schema $projectRef dropped")
     }
 
@@ -407,46 +469,74 @@ class SelfHostedSupabaseManagementService(
 
     // ── PostgREST .env management via SSH ─────────────────────────────────
 
-    private fun addSchemaToPostgrest(schemaName: String) {
-        val d = "\$"  // literal $ for use inside triple-quoted shell commands
-        val command = """
-            cd $dockerDir && \
-            CURRENT=${d}(grep '^PGRST_DB_SCHEMAS=' .env | cut -d= -f2) && \
-            CURRENT=${d}{CURRENT:-public,storage,graphql_public} && \
-            if grep -q '^PGRST_DB_SCHEMAS=' .env; then \
-                sed -i "s|^PGRST_DB_SCHEMAS=.*|PGRST_DB_SCHEMAS=${d}{CURRENT},$schemaName|" .env; \
-            else \
-                echo "PGRST_DB_SCHEMAS=${d}{CURRENT},$schemaName" >> .env; \
-            fi && \
-            docker compose up -d --force-recreate rest
-        """.trimIndent()
-        logger.info("Adding schema $schemaName to PostgREST and restarting rest")
-        runSshCommand(sshHost, sshUser, command)
-        logger.info("✅ PostgREST restarted with schema $schemaName")
+    private suspend fun reconcilePostgrestConfiguration(reason: String) {
+        POSTGREST_CONFIG_MUTEX.withLock {
+            val currentConfiguredSchemas = parseConfiguredPostgrestSchemas(
+                runSshCommand(sshHost, sshUser, buildReadConfiguredSchemasCommand(dockerDir)).trim()
+            )
+            val tenantSchemasFromDb = withContext(Dispatchers.IO) { queryTenantSchemas() }
+            val plan = planPostgrestSchemaReconciliation(currentConfiguredSchemas, tenantSchemasFromDb)
+
+            logger.info(
+                "Reconciling PostgREST schemas for $reason: " +
+                    "current_env=${formatSchemaList(plan.currentSchemas)}, " +
+                    "computed_db=${formatSchemaList(plan.desiredSchemas)}, " +
+                    "stale_removed=${formatSchemaList(plan.staleSchemas)}, " +
+                    "restart_required=${plan.restartRequired}"
+            )
+
+            if (!plan.restartRequired) {
+                logger.info("PostgREST schema configuration already matches database state; no restart needed")
+                return
+            }
+
+            runSshCommand(
+                sshHost,
+                sshUser,
+                buildUpdateConfiguredSchemasCommand(dockerDir, plan.desiredSchemas)
+            )
+            logger.info("✅ PostgREST restarted with reconciled schemas ${formatSchemaList(plan.desiredSchemas)}")
+        }
     }
 
-    private fun removeSchemaFromPostgrest(schemaName: String) {
-        val d = "\$"  // literal $ for use inside triple-quoted shell commands
-        val command = """
-            cd $dockerDir && \
-            CURRENT=${d}(grep '^PGRST_DB_SCHEMAS=' .env | cut -d= -f2) && \
-            CURRENT=${d}{CURRENT:-public,storage,graphql_public} && \
-            NEW=${d}(echo "${d}CURRENT" | tr ',' '\n' | grep -v "^$schemaName${d}" | tr '\n' ',' | sed 's/,${d}//') && \
-            if grep -q '^PGRST_DB_SCHEMAS=' .env; then \
-                sed -i "s|^PGRST_DB_SCHEMAS=.*|PGRST_DB_SCHEMAS=${d}NEW|" .env; \
-            else \
-                echo "PGRST_DB_SCHEMAS=${d}NEW" >> .env; \
-            fi && \
-            docker compose up -d --force-recreate rest
+    private fun formatSchemaList(schemas: List<String>): String =
+        schemas.ifEmpty { listOf("<none>") }.joinToString(",")
+
+    private fun queryTenantSchemas(): List<String> {
+        val sql = """
+            SELECT schema_name
+            FROM information_schema.schemata
+            WHERE schema_name LIKE 'proj!_%' ESCAPE '!'
+            ORDER BY schema_name
         """.trimIndent()
-        logger.info("Removing schema $schemaName from PostgREST and restarting rest")
-        runSshCommand(sshHost, sshUser, command)
-        logger.info("✅ PostgREST restarted after removing schema $schemaName")
+
+        return queryJdbc(sql)
     }
 
     // ── JDBC helper ────────────────────────────────────────────────────────
 
     private fun executeJdbc(sql: String) {
+        jdbcStatementExecutor?.invoke(sql) ?: withJdbcConnection { conn ->
+            conn.createStatement().use { stmt ->
+                stmt.execute(sql)
+            }
+        }
+    }
+
+    private fun queryJdbc(sql: String): List<String> =
+        jdbcQueryExecutor?.invoke(sql) ?: withJdbcConnection { conn ->
+            conn.createStatement().use { stmt ->
+                stmt.executeQuery(sql).use { rs ->
+                    buildList {
+                        while (rs.next()) {
+                            add(rs.getString(1))
+                        }
+                    }
+                }
+            }
+        }
+
+    private fun <T> withJdbcConnection(block: (java.sql.Connection) -> T): T {
         // Normalise to jdbc:postgresql:// regardless of how the env var was set.
         // Supported input formats: postgresql://, postgres://, jdbc:postgresql://, jdbc:postgres://
         val normalised = normaliseJdbcUrl(dbUrl)
@@ -462,11 +552,7 @@ class SelfHostedSupabaseManagementService(
         val driver = org.postgresql.Driver()
         val conn = driver.connect(jdbcUrl, props)
             ?: throw java.sql.SQLException("PostgreSQL driver returned null for URL: $jdbcUrl")
-        conn.use {
-            it.createStatement().use { stmt ->
-                stmt.execute(sql)
-            }
-        }
+        return conn.use(block)
     }
 
     /**
@@ -501,6 +587,8 @@ class SelfHostedSupabaseManagementService(
     // ── SSH key-auth helper ────────────────────────────────────────────────
 
     private fun runSshCommand(host: String, user: String, command: String): String {
+        sshCommandRunner?.let { return it(host, user, command) }
+
         val tempKey = File.createTempFile("suprclaw_supabase_key_", ".pem")
         return try {
             tempKey.writeText(privateKeyPem)

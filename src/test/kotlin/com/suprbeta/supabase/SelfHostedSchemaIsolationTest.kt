@@ -145,11 +145,14 @@ class SelfHostedSchemaIsolationTest {
     }
 
     @Test
-    fun `buildSchemaCacheReloadCommand signals PostgREST via docker compose with container fallback`() {
-        val command = SelfHostedSupabaseManagementService.buildSchemaCacheReloadCommand("/opt/supabase/docker")
+    fun `buildUpdateConfiguredSchemasCommand recreates rest with reconciled schema list`() {
+        val command = SelfHostedSupabaseManagementService.buildUpdateConfiguredSchemasCommand(
+            "/opt/supabase/docker",
+            listOf("public", "storage", "graphql_public", "proj_abc")
+        )
 
         assertTrue(command.contains("cd /opt/supabase/docker"))
-        assertTrue(command.contains("docker compose kill -s SIGUSR1 rest"))
-        assertTrue(command.contains("docker kill -s SIGUSR1 supabase-rest"))
+        assertTrue(command.contains("PGRST_DB_SCHEMAS=public,storage,graphql_public,proj_abc"))
+        assertTrue(command.contains("docker compose up -d --force-recreate rest"))
     }
 }

@@ -13,6 +13,7 @@ interface SupabaseManagementService {
     val managementToken: String
     val webhookBaseUrl: String
     val webhookSecret: String
+    suspend fun reconcileConfiguration() {}
     suspend fun createProject(name: String): ProjectResult
     suspend fun waitForProjectActive(projectRef: String)
     suspend fun getServiceKey(projectRef: String): String

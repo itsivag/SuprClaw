@@ -80,6 +80,7 @@ fun Application.module() {
 
     val managementService: SupabaseManagementService = SelfHostedSupabaseManagementService(httpClient, this)
     log.info("Supabase mode: self-hosted")
+    installSupabaseStartupRepair(managementService)
 
     configureWebSockets(httpClient, firebaseAuthService, firestoreRepository, remoteConfigService)
     val configuringService = configureDigitalOcean(
@@ -91,6 +92,18 @@ fun Application.module() {
     configureMarketplaceRoutes(configuringService, MarketplaceService(httpClient))
     configureUsageRoutes(firestoreRepository, remoteConfigService)
     configureRouting()
+}
+
+internal fun Application.installSupabaseStartupRepair(managementService: SupabaseManagementService) {
+    monitor.subscribe(ApplicationStarted) {
+        launch {
+            try {
+                managementService.reconcileConfiguration()
+            } catch (e: Exception) {
+                log.error("Self-hosted Supabase startup reconciliation failed", e)
+            }
+        }
+    }
 }
 
 fun Application.configureSerialization() {
