@@ -1,5 +1,6 @@
 package com.suprbeta.docker
 
+import com.suprbeta.config.AppConfig
 import com.suprbeta.core.SshCommandExecutor
 import com.suprbeta.digitalocean.DropletMcpService
 import com.suprbeta.digitalocean.McpToolRegistry
@@ -72,7 +73,6 @@ class DockerHostProvisioningService(
         private const val GATEWAY_PORT = 18789
         private const val POLL_INTERVAL_MS = 5_000L
         private const val MAX_POLL_WAIT_MS = 300_000L
-        private const val GATEWAY_VERIFY_TIMEOUT_S = 240
         private const val DNS_PROPAGATION_TIMEOUT_MS = 120_000L
         
         // Progress values for each phase (0.0 to 1.0)
@@ -494,7 +494,8 @@ class DockerHostProvisioningService(
     }
 
     private suspend fun verifyGateway(hostIp: String, port: Int, containerId: String) {
-        val deadline = System.currentTimeMillis() + (GATEWAY_VERIFY_TIMEOUT_S * 1000L)
+        val maxWaitSeconds = AppConfig.dockerGatewayReadyTimeoutSeconds
+        val deadline = System.currentTimeMillis() + (maxWaitSeconds * 1000L)
         var attempt = 0
 
         while (System.currentTimeMillis() < deadline) {
@@ -533,7 +534,7 @@ class DockerHostProvisioningService(
         }
 
         logGatewayDiagnostics(hostIp, containerId, port)
-        throw IllegalStateException("Gateway did not become ready within ${GATEWAY_VERIFY_TIMEOUT_S}s")
+        throw IllegalStateException("Gateway did not become ready within ${maxWaitSeconds}s")
     }
 
     private suspend fun logGatewayDiagnostics(hostIp: String, containerId: String, port: Int) {

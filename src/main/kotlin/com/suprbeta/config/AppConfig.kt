@@ -22,6 +22,10 @@ object AppConfig {
         dotenv["DOCKER_CONTAINER_MEMORY"] ?: System.getenv("DOCKER_CONTAINER_MEMORY") ?: "1g"
     val dockerContainerCpu: String =
         dotenv["DOCKER_CONTAINER_CPU"] ?: System.getenv("DOCKER_CONTAINER_CPU") ?: "0.5"
+    val dockerGatewayReadyTimeoutSeconds: Long =
+        (dotenv["DOCKER_GATEWAY_READY_TIMEOUT_SECONDS"]
+            ?: System.getenv("DOCKER_GATEWAY_READY_TIMEOUT_SECONDS")
+            ?: "300").toLongOrNull() ?: 300L
     val dockerPortMin: Int =
         (dotenv["DOCKER_PORT_MIN"] ?: System.getenv("DOCKER_PORT_MIN") ?: "18001").toIntOrNull() ?: 18001
     val dockerPortMax: Int =

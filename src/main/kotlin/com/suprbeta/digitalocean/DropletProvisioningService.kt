@@ -83,7 +83,6 @@ class DropletProvisioningServiceImpl(
         private const val GATEWAY_PORT = 18789
         private const val POLL_INTERVAL_MS = 5_000L
         private const val MAX_POLL_WAIT_MS = 300_000L       // 5 minutes for droplet to become active
-        private const val GATEWAY_VERIFY_TIMEOUT_S = 30
         private const val DNS_PROPAGATION_TIMEOUT_MS = 120_000L
 
         // Progress values for each phase (0.0 to 1.0)
@@ -421,7 +420,8 @@ class DropletProvisioningServiceImpl(
     // ── Phase 5 — Gateway verification ──────────────────────────────────
 
     private suspend fun verifyGateway(ipAddress: String) {
-        val deadline = System.currentTimeMillis() + (GATEWAY_VERIFY_TIMEOUT_S * 1000L)
+        val maxWaitSeconds = AppConfig.dockerGatewayReadyTimeoutSeconds
+        val deadline = System.currentTimeMillis() + (maxWaitSeconds * 1000L)
 
         while (System.currentTimeMillis() < deadline) {
             try {
@@ -434,7 +434,7 @@ class DropletProvisioningServiceImpl(
             }
         }
 
-        throw IllegalStateException("Gateway did not become ready within ${GATEWAY_VERIFY_TIMEOUT_S}s")
+        throw IllegalStateException("Gateway did not become ready within ${maxWaitSeconds}s")
     }
 
     private suspend fun waitForDnsResolution(hostname: String, expectedIp: String) {
