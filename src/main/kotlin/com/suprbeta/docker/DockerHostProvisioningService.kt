@@ -72,7 +72,7 @@ class DockerHostProvisioningService(
         private const val GATEWAY_PORT = 18789
         private const val POLL_INTERVAL_MS = 5_000L
         private const val MAX_POLL_WAIT_MS = 300_000L
-        private const val GATEWAY_VERIFY_TIMEOUT_S = 30
+        private const val GATEWAY_VERIFY_TIMEOUT_S = 90
         private const val DNS_PROPAGATION_TIMEOUT_MS = 120_000L
         
         // Progress values for each phase (0.0 to 1.0)
@@ -260,7 +260,7 @@ class DockerHostProvisioningService(
 
             // Phase 8: Verify gateway
             updateStatus(dropletId, ProvisioningStatus.PHASE_VERIFYING, "Verifying gateway status...")
-            verifyGateway(hostIp, allocatedPort, gatewayToken)
+            verifyGateway(hostIp, allocatedPort, containerInfo.containerId)
 
             // Phase 9: Initialize user project tables
             updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Initializing user database...")
@@ -493,28 +493,76 @@ class DockerHostProvisioningService(
         )
     }
 
-    private suspend fun verifyGateway(hostIp: String, port: Int, token: String) {
+    private suspend fun verifyGateway(hostIp: String, port: Int, containerId: String) {
         val deadline = System.currentTimeMillis() + (GATEWAY_VERIFY_TIMEOUT_S * 1000L)
-        
+        var attempt = 0
+
         while (System.currentTimeMillis() < deadline) {
+            attempt += 1
             try {
                 // Require a successful HTTP response from the container ingress, not just any body.
                 val output = sshCommandExecutor.runSshCommand(
                     hostIp,
-                    "curl -fsS -o /dev/null --connect-timeout 5 http://localhost:$port/ && echo 'READY' || echo 'NOT_READY'"
+                    "curl -fsS -o /dev/null --connect-timeout 5 http://127.0.0.1:$port/ && echo 'READY' || echo 'NOT_READY'"
                 )
-                
+
                 if (output.trim() == "READY") {
                     logger.info("Gateway verified on port $port")
                     return
+                }
+
+                if (attempt % 5 == 0) {
+                    val health = runCatching {
+                        sshCommandExecutor.runSshCommand(
+                            hostIp,
+                            "docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' $containerId 2>/dev/null || echo unknown"
+                        ).trim()
+                    }.getOrDefault("unknown")
+                    logger.info("Gateway on port $port not ready yet (container health: $health)")
                 }
             } catch (e: Exception) {
                 logger.debug("Gateway not ready yet: ${e.message}")
             }
             delay(2000)
         }
-        
+
+        logGatewayDiagnostics(hostIp, containerId, port)
         throw IllegalStateException("Gateway did not become ready within ${GATEWAY_VERIFY_TIMEOUT_S}s")
+    }
+
+    private suspend fun logGatewayDiagnostics(hostIp: String, containerId: String, port: Int) {
+        val inspect = runCatching {
+            sshCommandExecutor.runSshCommand(
+                hostIp,
+                "docker inspect --format 'status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} started={{.State.StartedAt}}' $containerId 2>&1 || true"
+            ).trim()
+        }.getOrDefault("inspect unavailable")
+
+        val supervisor = runCatching {
+            sshCommandExecutor.runSshCommand(
+                hostIp,
+                "docker exec $containerId supervisorctl status 2>&1 || true"
+            ).trim()
+        }.getOrDefault("supervisor status unavailable")
+
+        val sockets = runCatching {
+            sshCommandExecutor.runSshCommand(
+                hostIp,
+                "docker exec $containerId sh -lc 'ss -ltnp || netstat -ltnp' 2>&1 || true"
+            ).trim()
+        }.getOrDefault("socket diagnostics unavailable")
+
+        val logs = runCatching {
+            sshCommandExecutor.runSshCommand(
+                hostIp,
+                "docker logs --tail 120 $containerId 2>&1 || true"
+            ).trim()
+        }.getOrDefault("container logs unavailable")
+
+        logger.error("Gateway readiness timed out for container $containerId on port $port. Inspect: $inspect")
+        logger.error("Container supervisor status for $containerId:\n$supervisor")
+        logger.error("Container listening sockets for $containerId:\n$sockets")
+        logger.error("Container logs for $containerId:\n$logs")
     }
 
     private suspend fun waitForDnsResolution(hostname: String, expectedIp: String) {
@@ -562,6 +610,20 @@ class DockerHostProvisioningService(
                 logger.info("Cleaned up container $containerId")
             } catch (e: Exception) {
                 logger.error("Failed to cleanup container", e)
+            }
+        }
+
+        // Remove devices volume so repeated provisioning retries start with a clean device state.
+        if (hostIp != null) {
+            try {
+                val sanitizedUserId = userId.lowercase().replace(Regex("[^a-z0-9-]"), "-").take(20)
+                sshCommandExecutor.runSshCommand(
+                    hostIp,
+                    "docker volume rm openclaw-devices-$sanitizedUserId 2>/dev/null || true"
+                )
+                logger.info("Removed devices volume for user $userId")
+            } catch (e: Exception) {
+                logger.warn("Failed to remove devices volume during cleanup (non-fatal): ${e.message}")
             }
         }
         
