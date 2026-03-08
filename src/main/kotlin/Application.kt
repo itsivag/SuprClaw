@@ -183,6 +183,7 @@ fun Application.configureWebSockets(
         httpClient = httpClient,
         json = json
     )
+    val sshCommandExecutor = SshCommandExecutorImpl(this)
 
     // Initialize session manager with Firestore for VPS routing
     val sessionManager = ProxySessionManager(
@@ -191,7 +192,8 @@ fun Application.configureWebSockets(
         messagePipeline = messagePipeline,
         usageInterceptor = usageInterceptor,
         json = json,
-        firestoreRepository = firestoreRepository
+        firestoreRepository = firestoreRepository,
+        sshCommandExecutor = sshCommandExecutor
     )
 
     // Configure WebSocket routes

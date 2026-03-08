@@ -24,11 +24,15 @@ import io.ktor.websocket.readText
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.net.InetAddress
+import java.net.UnknownHostException
 import java.security.SecureRandom
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
@@ -69,6 +73,7 @@ class DockerHostProvisioningService(
         private const val POLL_INTERVAL_MS = 5_000L
         private const val MAX_POLL_WAIT_MS = 300_000L
         private const val GATEWAY_VERIFY_TIMEOUT_S = 30
+        private const val DNS_PROPAGATION_TIMEOUT_MS = 120_000L
         
         // Progress values for each phase (0.0 to 1.0)
         private val PHASE_PROGRESS = mapOf(
@@ -251,6 +256,7 @@ class DockerHostProvisioningService(
             val dnsLabel = subdomain.removeSuffix(".suprclaw.com")
             val createdSubdomain = dnsProvider.createDnsRecord(dnsLabel, hostIp)
             logger.info("DNS record created: $createdSubdomain -> $hostIp")
+            waitForDnsResolution(createdSubdomain, hostIp)
 
             // Phase 8: Verify gateway
             updateStatus(dropletId, ProvisioningStatus.PHASE_VERIFYING, "Verifying gateway status...")
@@ -509,6 +515,33 @@ class DockerHostProvisioningService(
         }
         
         throw IllegalStateException("Gateway did not become ready within ${GATEWAY_VERIFY_TIMEOUT_S}s")
+    }
+
+    private suspend fun waitForDnsResolution(hostname: String, expectedIp: String) {
+        val deadline = System.currentTimeMillis() + DNS_PROPAGATION_TIMEOUT_MS
+
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                val addresses = withContext(Dispatchers.IO) {
+                    InetAddress.getAllByName(hostname)
+                        .map { it.hostAddress }
+                        .distinct()
+                }
+
+                if (addresses.contains(expectedIp)) {
+                    logger.info("DNS propagated for $hostname -> ${addresses.joinToString(", ")}")
+                    return
+                }
+
+                logger.info("DNS for $hostname currently resolves to ${addresses.joinToString(", ")}; waiting for $expectedIp")
+            } catch (_: UnknownHostException) {
+                logger.info("DNS for $hostname is not resolvable yet; waiting...")
+            }
+
+            delay(2_000L)
+        }
+
+        throw IllegalStateException("DNS record $hostname did not resolve to $expectedIp within ${DNS_PROPAGATION_TIMEOUT_MS / 1000}s")
     }
 
     private suspend fun cleanupOnFailure(

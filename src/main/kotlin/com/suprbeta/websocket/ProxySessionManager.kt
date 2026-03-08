@@ -1,5 +1,7 @@
 package com.suprbeta.websocket
 
+import com.suprbeta.core.SshCommandExecutor
+import com.suprbeta.digitalocean.models.UserDropletInternal
 import com.suprbeta.websocket.models.ProxySession
 import com.suprbeta.websocket.models.SessionMetadata
 import com.suprbeta.websocket.models.WebSocketFrame
@@ -21,11 +23,13 @@ class ProxySessionManager(
     private val messagePipeline: MessagePipeline,
     private val usageInterceptor: UsageInterceptor,
     private val json: Json,
-    private val firestoreRepository: com.suprbeta.firebase.FirestoreRepository
+    private val firestoreRepository: com.suprbeta.firebase.FirestoreRepository,
+    private val sshCommandExecutor: SshCommandExecutor
 ) {
     private val logger = application.log
     // Map of userId -> ProxySession
     private val sessions = ConcurrentHashMap<String, ProxySession>()
+    private val pairingApprovals = ConcurrentHashMap<String, Long>()
 
     /**
      * Create or resume a proxy session for a mobile client
@@ -228,6 +232,10 @@ class ProxySessionManager(
                 return
             }
 
+            if (tryApprovePairing(session, frame)) {
+                return
+            }
+
             when (val result = messagePipeline.processOutbound(frame, session)) {
                 is InterceptorResult.Continue -> {
                     val processedJson = json.encodeToString(result.frame)
@@ -252,6 +260,66 @@ class ProxySessionManager(
         } catch (e: Exception) {
             logger.error("Failed to process outbound message for user ${session.metadata.userId}: ${e.message}")
         }
+    }
+
+    private suspend fun tryApprovePairing(session: ProxySession, frame: WebSocketFrame): Boolean {
+        val errorObj = frame.error?.jsonObject ?: return false
+        val message = errorObj["message"]?.jsonPrimitive?.contentOrNull ?: return false
+        if (message != "pairing required") return false
+
+        val requestId = runCatching {
+            errorObj["details"]?.jsonObject?.get("requestId")?.jsonPrimitive?.contentOrNull
+        }.getOrNull()
+
+        if (requestId.isNullOrBlank()) {
+            logger.warn("Pairing required for user ${session.metadata.userId} but requestId is missing")
+            return false
+        }
+
+        val now = System.currentTimeMillis()
+        val previous = pairingApprovals.put(requestId, now)
+        if (previous != null && now - previous < 60_000L) {
+            logger.info("Pairing request $requestId is already being handled for user ${session.metadata.userId}")
+            return true
+        }
+
+        val userDroplet = firestoreRepository.getUserDropletInternal(session.metadata.userId)
+        if (userDroplet == null) {
+            logger.warn("Cannot approve pairing for user ${session.metadata.userId}: no droplet found")
+            pairingApprovals.remove(requestId)
+            return false
+        }
+
+        return try {
+            approvePairingRequest(userDroplet, requestId)
+            logger.info("Approved runtime pairing requestId=$requestId for user ${session.metadata.userId}")
+            runCatching {
+                session.openclawSession?.close(
+                    CloseReason(CloseReason.Codes.NORMAL, "pairing approved, reconnecting")
+                )
+            }
+            true
+        } catch (e: Exception) {
+            pairingApprovals.remove(requestId)
+            logger.error("Failed to approve runtime pairing for user ${session.metadata.userId}: ${e.message}")
+            false
+        }
+    }
+
+    private fun approvePairingRequest(userDroplet: UserDropletInternal, requestId: String) {
+        val hostIp = userDroplet.ipAddress
+        require(hostIp.isNotBlank()) { "Droplet IP address is missing" }
+
+        val containerId = userDroplet.dropletName.trim()
+        val isDockerContainerId = Regex("^[a-f0-9]{12,64}$").matches(containerId)
+
+        val command = if (isDockerContainerId) {
+            "docker exec $containerId su - openclaw -s /bin/sh -c 'openclaw devices approve $requestId || test -s /home/openclaw/.openclaw/devices/paired.json'"
+        } else {
+            "openclaw devices approve $requestId"
+        }
+
+        sshCommandExecutor.runSshCommand(hostIp, command)
     }
 
     private suspend fun drainMessageQueues(session: ProxySession) {
