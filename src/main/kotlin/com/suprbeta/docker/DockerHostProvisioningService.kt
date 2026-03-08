@@ -72,7 +72,7 @@ class DockerHostProvisioningService(
         private const val GATEWAY_PORT = 18789
         private const val POLL_INTERVAL_MS = 5_000L
         private const val MAX_POLL_WAIT_MS = 300_000L
-        private const val GATEWAY_VERIFY_TIMEOUT_S = 90
+        private const val GATEWAY_VERIFY_TIMEOUT_S = 240
         private const val DNS_PROPAGATION_TIMEOUT_MS = 120_000L
         
         // Progress values for each phase (0.0 to 1.0)
@@ -500,6 +500,18 @@ class DockerHostProvisioningService(
         while (System.currentTimeMillis() < deadline) {
             attempt += 1
             try {
+                val health = runCatching {
+                    sshCommandExecutor.runSshCommand(
+                        hostIp,
+                        "docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' $containerId 2>/dev/null || echo unknown"
+                    ).trim()
+                }.getOrDefault("unknown")
+
+                if (health == "healthy") {
+                    logger.info("Gateway verified on port $port via container health")
+                    return
+                }
+
                 // Require a successful HTTP response from the container ingress, not just any body.
                 val output = sshCommandExecutor.runSshCommand(
                     hostIp,
@@ -512,12 +524,6 @@ class DockerHostProvisioningService(
                 }
 
                 if (attempt % 5 == 0) {
-                    val health = runCatching {
-                        sshCommandExecutor.runSshCommand(
-                            hostIp,
-                            "docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' $containerId 2>/dev/null || echo unknown"
-                        ).trim()
-                    }.getOrDefault("unknown")
                     logger.info("Gateway on port $port not ready yet (container health: $health)")
                 }
             } catch (e: Exception) {
