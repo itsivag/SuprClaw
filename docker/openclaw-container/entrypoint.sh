@@ -324,7 +324,6 @@ bootstrap_openclaw_onboarding() {
 
     local config_dir="/home/openclaw/.openclaw"
     local marker_file="$config_dir/.suprclaw-onboarded"
-    local escaped_gateway_token
 
     mkdir -p "$config_dir"
     chown -R openclaw:openclaw "$config_dir"
@@ -334,9 +333,10 @@ bootstrap_openclaw_onboarding() {
         return
     fi
 
-    printf -v escaped_gateway_token '%q' "$GATEWAY_TOKEN"
-
-    if ! su - openclaw -s /bin/bash -c "export HOME=/home/openclaw USER=openclaw OPENCLAW_GATEWAY_TOKEN=$escaped_gateway_token; openclaw onboard --non-interactive --mode local --auth-choice skip --gateway-port 18788 --gateway-bind loopback --gateway-auth token --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN --skip-skills --accept-risk"; then
+    if ! runuser -u openclaw -- env HOME=/home/openclaw USER=openclaw GATEWAY_TOKEN="$GATEWAY_TOKEN" \
+        openclaw onboard --non-interactive --mode local --auth-choice skip --gateway-port 18788 \
+        --gateway-bind loopback --gateway-auth token --gateway-token "$GATEWAY_TOKEN" --skip-skills \
+        --skip-channels --skip-ui --skip-health --skip-daemon --accept-risk; then
         log_error "OpenClaw onboarding failed"
         exit 1
     fi

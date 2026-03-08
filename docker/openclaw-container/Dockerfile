@@ -33,7 +33,7 @@ RUN apt-get update && apt-get install -y \
     nginx \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Node.js 20.x
+# Install Node.js 22.x
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
@@ -47,10 +47,9 @@ RUN useradd -m -s /bin/bash openclaw \
     && mkdir -p /home/openclaw/.config/systemd/user \
     && chown -R openclaw:openclaw /home/openclaw
 
-# Install OpenClaw globally
-# Note: Using npm install -g for simplicity. 
-# In production, you might want to pin a specific version
-RUN npm install -g openclaw@latest \
+# Install the OpenClaw CLI version validated against this image bootstrap flow.
+ARG OPENCLAW_VERSION=2026.3.2
+RUN npm install -g openclaw@${OPENCLAW_VERSION} \
     && npm cache clean --force
 
 # Install additional global tools that OpenClaw might need
