@@ -39,7 +39,7 @@ log_step() { echo -e "${BLUE}[STEP]${NC} $1"; }
 SERVER_NAME="${1:-suprclaw-host-$(date +%s)}"
 SERVER_TYPE="${2:-cpx31}"  # 4 vCPU, 8 GB RAM - good for ~20 containers
 LOCATION="${HETZNER_LOCATION:-nbg1}"
-IMAGE="${HETZNER_IMAGE:-ubuntu-22.04}"
+IMAGE="ubuntu-22.04"
 
 # Check prerequisites
 check_prerequisites() {

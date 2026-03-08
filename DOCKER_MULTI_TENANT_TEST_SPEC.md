@@ -348,7 +348,6 @@ Attempt 6: complete (100%)
 ```bash
 export HETZNER_API_TOKEN="your_hetzner_token"
 export HETZNER_SSH_KEY_IDS="12345678"
-export HETZNER_IMAGE="docker-host-snapshot-id"  # Ubuntu + Docker + Traefik
 export SUPABASE_MANAGEMENT_TOKEN="your_token"
 export FIREBASE_CREDENTIALS_PATH="/path/to/serviceAccountKey.json"
 ```

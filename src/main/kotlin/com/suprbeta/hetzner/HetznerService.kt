@@ -20,7 +20,6 @@ import io.ktor.server.application.*
  *   HETZNER_API_TOKEN       — Hetzner Cloud API token
  *
  * Optional environment variables:
- *   HETZNER_IMAGE           — Server image name or snapshot ID (default: ubuntu-22.04)
  *   HETZNER_SERVER_TYPE     — Server type slug (default: cx22 ≈ 2 vCPU / 4 GB RAM)
  *   HETZNER_LOCATION        — Datacenter location code (default: ash = Ashburn, US)
  *   HETZNER_SSH_KEY_IDS     — Comma-separated numeric SSH key IDs registered in Hetzner
@@ -45,7 +44,6 @@ class HetznerService(
     private val apiToken: String = dotenv["HETZNER_API_TOKEN"]
         ?: throw IllegalStateException("HETZNER_API_TOKEN not found in environment")
 
-    private val image: String = dotenv["HETZNER_IMAGE"] ?: DEFAULT_IMAGE
     private val serverType: String = dotenv["HETZNER_SERVER_TYPE"] ?: DEFAULT_SERVER_TYPE
     private val location: String = dotenv["HETZNER_LOCATION"] ?: DEFAULT_LOCATION
 
@@ -57,14 +55,14 @@ class HetznerService(
         ?.takeIf { it.isNotEmpty() }
 
     override suspend fun createServer(name: String, password: String, userDataOverride: String?): VpsService.ServerCreateResult {
-        application.log.info("Creating Hetzner server: $name (type=$serverType, location=$location, image=$image)")
+        application.log.info("Creating Hetzner server: $name (type=$serverType, location=$location, image=$DEFAULT_IMAGE)")
 
         val userData = userDataOverride ?: UserDataGenerator.generateBootstrapUserData(password)
 
         val request = CreateServerRequest(
             name = name,
             server_type = serverType,
-            image = image,
+            image = DEFAULT_IMAGE,
             location = location,
             user_data = userData,
             ssh_keys = sshKeys,
