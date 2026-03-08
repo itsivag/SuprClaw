@@ -498,13 +498,13 @@ class DockerHostProvisioningService(
         
         while (System.currentTimeMillis() < deadline) {
             try {
-                // Check if gateway responds via the container port
+                // Require a successful HTTP response from the container ingress, not just any body.
                 val output = sshCommandExecutor.runSshCommand(
                     hostIp,
-                    "curl -s --connect-timeout 5 http://localhost:$port/health 2>/dev/null || echo 'NOT_READY'"
+                    "curl -fsS -o /dev/null --connect-timeout 5 http://localhost:$port/ && echo 'READY' || echo 'NOT_READY'"
                 )
                 
-                if (output != "NOT_READY" && output.isNotBlank()) {
+                if (output.trim() == "READY") {
                     logger.info("Gateway verified on port $port")
                     return
                 }
