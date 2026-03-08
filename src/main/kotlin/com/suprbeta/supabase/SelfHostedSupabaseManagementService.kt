@@ -97,6 +97,7 @@ class SelfHostedSupabaseManagementService(
         logger.info("Requesting PostgREST schema cache reload for schema $projectRef")
         withContext(Dispatchers.IO) {
             executeJdbc("NOTIFY pgrst, 'reload schema'")
+            runSshCommand(sshHost, sshUser, buildSchemaCacheReloadCommand(dockerDir))
         }
         logger.info("Requested PostgREST schema cache reload for schema $projectRef")
     }
@@ -153,6 +154,11 @@ class SelfHostedSupabaseManagementService(
         /** Returns the SQL statement that safely drops the schema-scoped MCP role. */
         internal fun roleDropStatement(schemaName: String): String =
             "DROP ROLE IF EXISTS ${schemaName}_rpc"
+
+        internal fun buildSchemaCacheReloadCommand(dockerDir: String): String = """
+            cd $dockerDir && \
+            (docker compose kill -s SIGUSR1 rest || docker kill -s SIGUSR1 supabase-rest)
+        """.trimIndent()
 
         /**
          * Normalises any supported DB URL variant to `jdbc:postgresql://…`.

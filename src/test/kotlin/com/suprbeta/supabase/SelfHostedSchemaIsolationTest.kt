@@ -143,4 +143,13 @@ class SelfHostedSchemaIsolationTest {
         val adapted = SelfHostedSupabaseManagementService.adaptSqlForSchema(stmt, "proj_abc")
         assertEquals(stmt, adapted, "adaptSqlForSchema must not alter role drop statement")
     }
+
+    @Test
+    fun `buildSchemaCacheReloadCommand signals PostgREST via docker compose with container fallback`() {
+        val command = SelfHostedSupabaseManagementService.buildSchemaCacheReloadCommand("/opt/supabase/docker")
+
+        assertTrue(command.contains("cd /opt/supabase/docker"))
+        assertTrue(command.contains("docker compose kill -s SIGUSR1 rest"))
+        assertTrue(command.contains("docker kill -s SIGUSR1 supabase-rest"))
+    }
 }
