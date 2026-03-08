@@ -102,6 +102,11 @@ class SupabaseSchemaRepository(application: Application) {
 
         managementService.createDatabaseWebhook(projectRef)
         logger.info("✅ Database webhook created in schema $projectRef")
+
+        // PostgREST serves agent/task operations immediately after provisioning, so its
+        // schema cache must be refreshed after the JDBC DDL above creates the tables/triggers.
+        managementService.reloadSchemaCache(projectRef)
+        logger.info("✅ PostgREST schema cache reload requested for schema $projectRef")
     }
 
     /**

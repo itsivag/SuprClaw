@@ -18,6 +18,7 @@ interface SupabaseManagementService {
     suspend fun getServiceKey(projectRef: String): String
     suspend fun runSql(projectRef: String, sql: String)
     suspend fun createDatabaseWebhook(projectRef: String)
+    suspend fun reloadSchemaCache(projectRef: String) {}
     suspend fun deleteProject(projectRef: String)
     /** For self-hosted: returns the schema name (== projectRef). */
     fun resolveSchema(projectRef: String): String

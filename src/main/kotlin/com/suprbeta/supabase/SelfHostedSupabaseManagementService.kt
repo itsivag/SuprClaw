@@ -93,6 +93,14 @@ class SelfHostedSupabaseManagementService(
         logger.info("Self-hosted mode: schema $projectRef is already active (no wait needed)")
     }
 
+    override suspend fun reloadSchemaCache(projectRef: String) {
+        logger.info("Requesting PostgREST schema cache reload for schema $projectRef")
+        withContext(Dispatchers.IO) {
+            executeJdbc("NOTIFY pgrst, 'reload schema'")
+        }
+        logger.info("Requested PostgREST schema cache reload for schema $projectRef")
+    }
+
     /** Returns the fixed shared service_role key for all users. */
     override suspend fun getServiceKey(projectRef: String): String = serviceKey
 
