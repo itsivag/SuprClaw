@@ -15,7 +15,7 @@ object AppConfig {
 
     // Docker container provisioning settings
     val dockerOpenclawImage: String =
-        dotenv["DOCKER_OPENCLAW_IMAGE"] ?: System.getenv("DOCKER_OPENCLAW_IMAGE") ?: "suprclaw/openclaw:latest"
+        dotenv["DOCKER_OPENCLAW_IMAGE"] ?: System.getenv("DOCKER_OPENCLAW_IMAGE") ?: "ghcr.io/itsivag/openclaw:latest"
     val dockerHostCapacity: Int =
         (dotenv["DOCKER_HOST_CAPACITY"] ?: System.getenv("DOCKER_HOST_CAPACITY") ?: "20").toIntOrNull() ?: 20
     val dockerContainerMemory: String =

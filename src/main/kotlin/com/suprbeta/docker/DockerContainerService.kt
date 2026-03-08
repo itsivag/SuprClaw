@@ -1,6 +1,7 @@
 package com.suprbeta.docker
 
 import com.suprbeta.config.AppConfig
+import com.suprbeta.core.ShellEscaping.singleQuote
 import com.suprbeta.core.SshCommandExecutor
 import com.suprbeta.docker.models.*
 import io.ktor.server.application.*
@@ -213,6 +214,7 @@ class DockerContainerService(
     private suspend fun ensureImageExists(hostIp: String) {
         val image = AppConfig.dockerOpenclawImage
         val refreshLatestTag = image.substringAfterLast(':', "").equals("latest", ignoreCase = true) && !image.contains("@sha256:")
+        val quotedImage = singleQuote(image)
 
         if (refreshLatestTag) {
             logger.info("Refreshing latest OpenClaw image $image on $hostIp")
@@ -222,7 +224,7 @@ class DockerContainerService(
 
         val imageCheck = sshCommandExecutor.runSshCommand(
             hostIp,
-            "docker images --format '{{.Repository}}:{{.Tag}}' | grep -F '${image.substringBefore(":")}' || echo 'NOT_FOUND'"
+            "docker image inspect $quotedImage >/dev/null 2>&1 && echo 'FOUND' || echo 'NOT_FOUND'"
         ).trim()
 
         if (imageCheck == "NOT_FOUND") {

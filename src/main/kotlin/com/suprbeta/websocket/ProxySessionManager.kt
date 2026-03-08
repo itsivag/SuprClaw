@@ -1,5 +1,7 @@
 package com.suprbeta.websocket
 
+import com.suprbeta.core.ShellEscaping.requireUuid
+import com.suprbeta.core.ShellEscaping.singleQuote
 import com.suprbeta.core.SshCommandExecutor
 import com.suprbeta.digitalocean.models.UserDropletInternal
 import com.suprbeta.websocket.models.ProxySession
@@ -27,6 +29,11 @@ class ProxySessionManager(
     private val sshCommandExecutor: SshCommandExecutor
 ) {
     private val logger = application.log
+
+    private companion object {
+        const val PAIRING_APPROVAL_TTL_MS = 60_000L
+    }
+
     // Map of userId -> ProxySession
     private val sessions = ConcurrentHashMap<String, ProxySession>()
     private val pairingApprovals = ConcurrentHashMap<String, Long>()
@@ -276,9 +283,19 @@ class ProxySessionManager(
             return false
         }
 
+        val safeRequestId = runCatching {
+            requireUuid(requestId, "pairing requestId")
+        }.getOrNull()
+
+        if (safeRequestId == null) {
+            logger.warn("Ignoring invalid pairing requestId for user ${session.metadata.userId}")
+            return false
+        }
+
         val now = System.currentTimeMillis()
-        val previous = pairingApprovals.put(requestId, now)
-        if (previous != null && now - previous < 60_000L) {
+        evictExpiredPairingApprovals(now)
+        val previous = pairingApprovals.put(safeRequestId, now)
+        if (previous != null && now - previous < PAIRING_APPROVAL_TTL_MS) {
             logger.info("Pairing request $requestId is already being handled for user ${session.metadata.userId}")
             return true
         }
@@ -286,13 +303,13 @@ class ProxySessionManager(
         val userDroplet = firestoreRepository.getUserDropletInternal(session.metadata.userId)
         if (userDroplet == null) {
             logger.warn("Cannot approve pairing for user ${session.metadata.userId}: no droplet found")
-            pairingApprovals.remove(requestId)
+            pairingApprovals.remove(safeRequestId)
             return false
         }
 
         return try {
-            approvePairingRequest(userDroplet, requestId)
-            logger.info("Approved runtime pairing requestId=$requestId for user ${session.metadata.userId}")
+            approvePairingRequest(userDroplet, safeRequestId)
+            logger.info("Approved runtime pairing requestId=$safeRequestId for user ${session.metadata.userId}")
             runCatching {
                 session.openclawSession?.close(
                     CloseReason(CloseReason.Codes.NORMAL, "pairing approved, reconnecting")
@@ -300,9 +317,17 @@ class ProxySessionManager(
             }
             true
         } catch (e: Exception) {
-            pairingApprovals.remove(requestId)
+            pairingApprovals.remove(safeRequestId)
             logger.error("Failed to approve runtime pairing for user ${session.metadata.userId}: ${e.message}")
             false
+        }
+    }
+
+    private fun evictExpiredPairingApprovals(now: Long) {
+        pairingApprovals.entries.forEach { (requestId, timestamp) ->
+            if (now - timestamp >= PAIRING_APPROVAL_TTL_MS) {
+                pairingApprovals.remove(requestId, timestamp)
+            }
         }
     }
 
@@ -313,10 +338,13 @@ class ProxySessionManager(
         val containerId = userDroplet.dropletName.trim()
         val isDockerContainerId = Regex("^[a-f0-9]{12,64}$").matches(containerId)
 
+        val safeRequestId = requireUuid(requestId, "pairing requestId")
         val command = if (isDockerContainerId) {
-            "docker exec $containerId su - openclaw -s /bin/sh -c 'openclaw devices approve $requestId || test -s /home/openclaw/.openclaw/devices/paired.json'"
+            val approveCommand =
+                "openclaw devices approve ${singleQuote(safeRequestId)} || test -s /home/openclaw/.openclaw/devices/paired.json"
+            "docker exec $containerId su - openclaw -s /bin/sh -c ${singleQuote(approveCommand)}"
         } else {
-            "openclaw devices approve $requestId"
+            "openclaw devices approve ${singleQuote(safeRequestId)}"
         }
 
         sshCommandExecutor.runSshCommand(hostIp, command)

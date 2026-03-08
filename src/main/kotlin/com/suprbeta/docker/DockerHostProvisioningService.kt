@@ -1,6 +1,8 @@
 package com.suprbeta.docker
 
 import com.suprbeta.config.AppConfig
+import com.suprbeta.core.ShellEscaping.requireUuid
+import com.suprbeta.core.ShellEscaping.singleQuote
 import com.suprbeta.core.SshCommandExecutor
 import com.suprbeta.digitalocean.DropletMcpService
 import com.suprbeta.digitalocean.McpToolRegistry
@@ -732,11 +734,22 @@ class DockerHostProvisioningService(
                         return
                     }
 
+                    val safeRequestId = runCatching {
+                        requireUuid(requestId, "pairing requestId")
+                    }.getOrNull()
+
+                    if (safeRequestId == null) {
+                        logger.warn("Pairing phase: ignoring invalid requestId for droplet $dropletId")
+                        return
+                    }
+
+                    val approveCommand =
+                        "openclaw devices approve ${singleQuote(safeRequestId)} || test -s /home/openclaw/.openclaw/devices/paired.json"
                     sshCommandExecutor.runSshCommand(
                         hostIp,
-                        "docker exec $containerId su - openclaw -s /bin/sh -c 'openclaw devices approve $requestId || test -s /home/openclaw/.openclaw/devices/paired.json'"
+                        "docker exec $containerId su - openclaw -s /bin/sh -c ${singleQuote(approveCommand)}"
                     )
-                    logger.info("Pairing phase: approved requestId=$requestId (or pairing already present) for droplet $dropletId")
+                    logger.info("Pairing phase: approved requestId=$safeRequestId (or pairing already present) for droplet $dropletId")
                     return
                 }
             }

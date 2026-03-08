@@ -1,6 +1,8 @@
 package com.suprbeta.digitalocean
 
 import com.suprbeta.config.AppConfig
+import com.suprbeta.core.ShellEscaping.requireUuid
+import com.suprbeta.core.ShellEscaping.singleQuote
 import com.suprbeta.core.SshCommandExecutor
 import com.suprbeta.digitalocean.models.ProvisioningStatus
 import com.suprbeta.digitalocean.models.AgentInsert
@@ -648,8 +650,20 @@ server {
                         return
                     }
 
-                    sshCommandExecutor.runSshCommand(ipAddress, "openclaw devices approve $requestId")
-                    logger.info("Final pairing phase: approved requestId=$requestId for droplet $dropletId")
+                    val safeRequestId = runCatching {
+                        requireUuid(requestId, "pairing requestId")
+                    }.getOrNull()
+
+                    if (safeRequestId == null) {
+                        logger.warn("Final pairing phase: ignoring invalid requestId for droplet $dropletId")
+                        return
+                    }
+
+                    sshCommandExecutor.runSshCommand(
+                        ipAddress,
+                        "openclaw devices approve ${singleQuote(safeRequestId)}"
+                    )
+                    logger.info("Final pairing phase: approved requestId=$safeRequestId for droplet $dropletId")
                     return
                 }
             }
