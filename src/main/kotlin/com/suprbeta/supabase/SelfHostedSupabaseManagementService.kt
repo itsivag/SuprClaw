@@ -3,14 +3,78 @@ package com.suprbeta.supabase
 import com.suprbeta.core.SshHostKeyVerifierFactory
 import io.github.cdimascio.dotenv.dotenv
 import io.ktor.client.*
+import io.ktor.client.request.get
+import io.ktor.client.request.header
+import io.ktor.client.statement.bodyAsText
 import io.ktor.server.application.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import net.schmizz.sshj.SSHClient
 import net.schmizz.sshj.transport.verification.HostKeyVerifier
 import java.io.File
 import java.util.Base64
 import java.util.concurrent.TimeUnit
+
+private const val SCHEMA_CACHE_READY_ATTEMPTS = 30
+private const val SCHEMA_CACHE_READY_DELAY_MS = 2_000L
+private const val SCHEMA_CACHE_READY_BODY_SNIPPET_LENGTH = 200
+
+internal fun extractPostgrestErrorCode(responseBody: String): String? = runCatching {
+    Json.parseToJsonElement(responseBody)
+        .jsonObject["code"]
+        ?.jsonPrimitive
+        ?.contentOrNull
+}.getOrNull()
+
+internal fun isTransientPostgrestSchemaCacheProbeFailure(statusCode: Int, responseBody: String): Boolean {
+    val errorCode = extractPostgrestErrorCode(responseBody)
+    return errorCode in TRANSIENT_POSTGREST_CODES || statusCode in setOf(502, 503, 504)
+}
+
+internal suspend fun waitForPostgrestSchemaCacheReady(
+    httpClient: HttpClient,
+    selfHostedUrl: String,
+    serviceKey: String,
+    projectRef: String,
+    maxAttempts: Int = SCHEMA_CACHE_READY_ATTEMPTS,
+    delayMillis: Long = SCHEMA_CACHE_READY_DELAY_MS,
+    onRetry: (attempt: Int, delayMillis: Long, statusCode: Int, errorCode: String?, responseSnippet: String) -> Unit = { _, _, _, _, _ -> }
+) {
+    require(maxAttempts > 0) { "maxAttempts must be positive" }
+
+    val probeUrl = selfHostedUrl.trimEnd('/') + "/rest/v1/agents?select=id&limit=1"
+
+    repeat(maxAttempts) { attemptIndex ->
+        val response = httpClient.get(probeUrl) {
+            header("apikey", serviceKey)
+            header("Authorization", "Bearer $serviceKey")
+            header("Accept-Profile", projectRef)
+        }
+        val responseBody = response.bodyAsText()
+        if (response.status.value in 200..299) {
+            return
+        }
+
+        val errorCode = extractPostgrestErrorCode(responseBody)
+        val responseSnippet = responseBody.take(SCHEMA_CACHE_READY_BODY_SNIPPET_LENGTH)
+        val isLastAttempt = attemptIndex == maxAttempts - 1
+        if (!isTransientPostgrestSchemaCacheProbeFailure(response.status.value, responseBody) || isLastAttempt) {
+            throw IllegalStateException(
+                "PostgREST schema cache did not become ready for schema $projectRef " +
+                    "(status=${response.status.value}, code=${errorCode ?: "none"}): $responseSnippet"
+            )
+        }
+
+        val attempt = attemptIndex + 1
+        onRetry(attempt, delayMillis, response.status.value, errorCode, responseSnippet)
+        delay(delayMillis)
+    }
+}
 
 class SelfHostedSupabaseManagementService(
     @Suppress("unused") private val httpClient: HttpClient,
@@ -100,6 +164,21 @@ class SelfHostedSupabaseManagementService(
             runSshCommand(sshHost, sshUser, buildSchemaCacheReloadCommand(dockerDir))
         }
         logger.info("Requested PostgREST schema cache reload for schema $projectRef")
+        waitForPostgrestSchemaCacheReady(
+            httpClient = httpClient,
+            selfHostedUrl = selfHostedUrl,
+            serviceKey = serviceKey,
+            projectRef = projectRef,
+            onRetry = { attempt, delayMillis, statusCode, errorCode, responseSnippet ->
+                logger.info(
+                    "PostgREST schema cache still warming for schema $projectRef " +
+                        "(status=$statusCode, code=${errorCode ?: "none"}, " +
+                        "attempt $attempt/$SCHEMA_CACHE_READY_ATTEMPTS); retrying in ${delayMillis}ms " +
+                        "response=${responseSnippet.ifBlank { "<empty>" }}"
+                )
+            }
+        )
+        logger.info("PostgREST schema cache ready for schema $projectRef")
     }
 
     /** Returns the fixed shared service_role key for all users. */

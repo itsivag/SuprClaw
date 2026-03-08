@@ -11,7 +11,7 @@ import kotlinx.coroutines.delay
 private const val SCHEMA_CACHE_RETRY_ATTEMPTS = 6
 private const val SCHEMA_CACHE_RETRY_INITIAL_DELAY_MS = 1_000L
 private const val SCHEMA_CACHE_RETRY_MAX_DELAY_MS = 5_000L
-private val TRANSIENT_POSTGREST_CODES = setOf("PGRST002", "PGRST205")
+internal val TRANSIENT_POSTGREST_CODES = setOf("PGRST002", "PGRST205")
 
 internal fun isTransientPostgrestSchemaCacheError(error: Throwable): Boolean =
     error is PostgrestRestException && error.code in TRANSIENT_POSTGREST_CODES
