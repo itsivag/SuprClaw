@@ -2,7 +2,7 @@ package com.suprbeta.provider
 
 /**
  * Cloud provider abstraction for VPS/server lifecycle management.
- * Implementations include DigitalOceanService and HetznerService.
+ * Implementations include HetznerService.
  */
 interface VpsService {
     /**
@@ -26,7 +26,7 @@ interface VpsService {
     data class ServerCreateResult(val serverId: Long)
 
     data class ServerInfo(
-        /** Normalized status: "active" means the server is ready (maps from DO "active", Hetzner "running"). */
+        /** Normalized status: "active" means the server is ready (maps from Hetzner "running"). */
         val status: String,
         val publicIpV4: String?
     )

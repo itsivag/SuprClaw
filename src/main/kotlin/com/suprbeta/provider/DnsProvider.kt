@@ -2,7 +2,7 @@ package com.suprbeta.provider
 
 /**
  * DNS provider abstraction for managing A records on behalf of provisioned servers.
- * Implementations include DigitalOceanDnsAdapter and HetznerDnsService.
+ * Implementations include HetznerDnsService.
  */
 interface DnsProvider {
     /**

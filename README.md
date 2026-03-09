@@ -4,9 +4,9 @@
 
 ## About
 
-SuprClaw is the backend service for a multi-tenant AI agent orchestration platform. It handles provisioning personal AI agent infrastructure on DigitalOcean, managing per-user isolated databases via Supabase, and proxying real-time WebSocket communication between clients and AI agents running on user-owned VPS instances.
+SuprClaw is the backend service for a multi-tenant AI agent orchestration platform. It handles provisioning personal AI agent infrastructure on Hetzner-backed Docker hosts, managing per-user isolated databases via Supabase, and proxying real-time WebSocket communication between clients and AI agents running on user-owned VPS instances.
 
-Each user gets their own VPS (powered by [OpenClaw](https://github.com/anthropics/openclaw)) and an isolated Supabase project for storing tasks, agents, and conversation history.
+Each user gets their own OpenClaw container (running on a managed host VPS) and an isolated Supabase project for storing tasks, agents, and conversation history.
 
 ## How It Works
 
@@ -23,8 +23,8 @@ Client (Android/iOS/macOS)
   └── WebSocket Proxy      → forwards messages to user's VPS
         │
         ▼
-  DigitalOcean VPS (per user)
-  ├── openclaw-gateway     → Claude API proxy
+  Hetzner Host VPS (shared)
+  ├── openclaw containers  → one container per user
   ├── mcp-auth-proxy       → routes MCP tool calls (port 18790)
   └── Per-user Supabase    → stores tasks, agents, documents
 ```
@@ -32,7 +32,8 @@ Client (Android/iOS/macOS)
 ### Key Flows
 
 **1. Provisioning a new user**
-- Creates a DigitalOcean droplet from a base snapshot
+- Allocates capacity on a Hetzner Docker host (or creates a new host)
+- Creates a dedicated OpenClaw container for the user
 - In parallel: creates a per-user Supabase project
 - Configures SSH, gateway token, DNS, and SSL on the VPS
 - Injects MCP credentials to `/etc/suprclaw/mcp.env`
@@ -60,21 +61,19 @@ Client (Android/iOS/macOS)
 ### Prerequisites
 
 - JDK 21+
-- A [DigitalOcean](https://digitalocean.com) account with API access
+- A [Hetzner Cloud](https://www.hetzner.com/cloud) account with API access
 - A [Supabase](https://supabase.com) account (for the central project + Management API access)
 - A Firebase project with Firestore enabled and a service account key
-- A pre-built DigitalOcean snapshot with OpenClaw installed (base image)
-- A domain name with DNS managed via DigitalOcean
+- A domain name with DNS managed via Hetzner
 
 ### Environment Variables
 
 Copy `.env.example` to `.env` (or set these in your environment):
 
 ```env
-# DigitalOcean
-DO_API_TOKEN=your_digitalocean_api_token
-DO_SSH_KEY_ID=your_ssh_key_id_on_do
-SNAPSHOT_ID=your_base_image_snapshot_id
+# Hetzner Cloud
+HETZNER_API_TOKEN=your_hetzner_api_token
+VPS_PROVIDER=hetzner
 DOMAIN=yourdomain.com
 
 # Supabase (central project)
@@ -174,6 +173,6 @@ Admin APIs under `/api/admin/*` additionally require Firebase custom claim `role
 - **Runtime**: Kotlin / Ktor 3.4.0 / JVM 21
 - **Auth**: Firebase Auth + Firestore
 - **Database**: Supabase (central routing) + per-user Supabase projects
-- **Infrastructure**: DigitalOcean Droplets + DNS
+- **Infrastructure**: Hetzner Cloud hosts + Docker containers + DNS
 - **VPS config**: SSH via SSHJ
 - **Build**: Gradle with Shadow plugin

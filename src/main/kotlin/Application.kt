@@ -2,8 +2,6 @@ package com.suprbeta
 
 import com.suprbeta.admin.configureAdminRoutes
 import com.suprbeta.config.AppConfig
-import com.suprbeta.digitalocean.DigitalOceanService
-import com.suprbeta.digitalocean.DnsService
 import com.suprbeta.digitalocean.DropletConfigurationService
 import com.suprbeta.digitalocean.DropletConfigurationServiceImpl
 import com.suprbeta.digitalocean.DropletMcpServiceImpl
@@ -86,7 +84,7 @@ fun Application.module() {
     val marketplaceService = MarketplaceService(httpClient)
 
     configureWebSockets(httpClient, firebaseAuthService, firestoreRepository, remoteConfigService)
-    val digitalOceanServices = configureDigitalOcean(
+    val provisioningServices = configureProvisioning(
         httpClient,
         firestoreRepository,
         agentRepository,
@@ -98,9 +96,9 @@ fun Application.module() {
     configureTaskRoutes(taskRepository, firestoreRepository, userClientProvider)
     configureWebhookRoutes(firestoreRepository, userClientProvider, agentRepository, httpClient, managementService.webhookSecret)
     configureFcmRoutes(firestoreRepository)
-    configureMarketplaceRoutes(digitalOceanServices.configuringService, marketplaceService)
+    configureMarketplaceRoutes(provisioningServices.configuringService, marketplaceService)
     configureUsageRoutes(firestoreRepository, remoteConfigService)
-    configureAdminRoutes(firestoreRepository, digitalOceanServices.provisioningService)
+    configureAdminRoutes(firestoreRepository, provisioningServices.provisioningService)
     configureRouting()
 }
 
@@ -242,7 +240,7 @@ fun Application.configureWebSockets(
     log.info("WebSocket proxy initialized and ready")
 }
 
-fun Application.configureDigitalOcean(
+fun Application.configureProvisioning(
     httpClient: HttpClient,
     firestoreRepository: FirestoreRepository,
     agentRepository: SupabaseAgentRepository,
@@ -250,7 +248,7 @@ fun Application.configureDigitalOcean(
     managementService: SupabaseManagementService,
     userClientProvider: UserSupabaseClientProvider,
     marketplaceService: MarketplaceService
-): DigitalOceanServices {
+): ProvisioningServices {
     val dotenv = io.github.cdimascio.dotenv.dotenv { ignoreIfMissing = true; directory = "." }
     val sshCommandExecutor = SshCommandExecutorImpl(this)
     val dropletMcpService = DropletMcpServiceImpl(
@@ -259,9 +257,12 @@ fun Application.configureDigitalOcean(
         application = this
     )
 
-    val vpsProviderName = (dotenv["VPS_PROVIDER"] ?: System.getenv("VPS_PROVIDER"))?.lowercase() ?: "hetzner"
-    val (vpsService, dnsProvider) = createProviders(httpClient, vpsProviderName)
-    log.info("Provisioning mode: docker (vps provider: $vpsProviderName)")
+    val configuredVpsProvider = (dotenv["VPS_PROVIDER"] ?: System.getenv("VPS_PROVIDER"))?.lowercase() ?: "hetzner"
+    require(configuredVpsProvider == "hetzner") {
+        "Unsupported VPS_PROVIDER '$configuredVpsProvider'. DigitalOcean provider has been removed; set VPS_PROVIDER=hetzner."
+    }
+    val (vpsService, dnsProvider) = createHetznerProviders(httpClient)
+    log.info("Provisioning mode: docker (vps provider: hetzner)")
 
     val portAllocator = ContainerPortAllocator(
         startPort = AppConfig.dockerPortMin,
@@ -342,35 +343,20 @@ fun Application.configureDigitalOcean(
         agentRepository,
         userClientProvider
     )
-    return DigitalOceanServices(
+    return ProvisioningServices(
         configuringService = configuringService,
         provisioningService = provisioningService
     )
 }
 
-data class DigitalOceanServices(
+data class ProvisioningServices(
     val configuringService: DropletConfigurationService,
     val provisioningService: DropletProvisioningService
 )
 
-private fun Application.createProviders(
-    httpClient: HttpClient,
-    providerName: String
-): Pair<VpsService, DnsProvider> {
-    return when (providerName) {
-        "hetzner" -> {
-            log.info("Initializing Hetzner Cloud VPS and DNS providers")
-            Pair(HetznerService(httpClient, this), HetznerDnsService(httpClient, this))
-        }
-        else -> {
-            if (providerName != "digitalocean") {
-                log.warn("Unknown VPS_PROVIDER '$providerName', falling back to digitalocean")
-            }
-            log.info("Initializing DigitalOcean VPS and DNS providers")
-            val doService = DigitalOceanService(httpClient, this)
-            Pair(doService, DnsService(httpClient, this))
-        }
-    }
+private fun Application.createHetznerProviders(httpClient: HttpClient): Pair<VpsService, DnsProvider> {
+    log.info("Initializing Hetzner Cloud VPS and DNS providers")
+    return Pair(HetznerService(httpClient, this), HetznerDnsService(httpClient, this))
 }
 
 fun Application.configureFirebase(cryptoService: com.suprbeta.core.CryptoService): Triple<FirebaseAuthService, FirestoreRepository, com.suprbeta.firebase.RemoteConfigService> {
