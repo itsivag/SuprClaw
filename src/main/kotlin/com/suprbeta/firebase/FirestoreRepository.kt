@@ -745,4 +745,42 @@ class FirestoreRepository(
             application.log.error("Failed to delete user-host mapping: $userId", e)
         }
     }
+
+    // ==================== Admin Operations ====================
+
+    /**
+     * Lists all known user IDs from the top-level users collection.
+     */
+    suspend fun listUserIds(): List<String> {
+        return try {
+            val snapshot = firestore.collection(USERS).get().await()
+            snapshot.documents.map { it.id }
+        } catch (e: Exception) {
+            application.log.error("Failed to list user IDs", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * Lists all user droplet documents across every user.
+     *
+     * This reads raw internal droplet documents without decrypting fields so it can
+     * be used for admin inventory views that only need non-secret metadata.
+     */
+    suspend fun listAllUserDropletsInternal(): List<UserDropletInternal> {
+        return try {
+            val snapshot = firestore.collectionGroup(USER_DROPLETS_SUBCOLLECTION).get().await()
+            snapshot.documents.mapNotNull { doc ->
+                try {
+                    doc.toObject(UserDropletInternal::class.java)
+                } catch (e: Exception) {
+                    application.log.warn("Failed to deserialize user droplet document ${doc.reference.path}", e)
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            application.log.error("Failed to list all user droplets", e)
+            emptyList()
+        }
+    }
 }
