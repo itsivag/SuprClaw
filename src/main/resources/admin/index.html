@@ -1,0 +1,1034 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SuprClaw Admin</title>
+  <style>
+    :root {
+      --bg: #f2f6f4;
+      --bg-accent: #dbe7e1;
+      --surface: #ffffff;
+      --ink: #1e2a24;
+      --muted: #5e7067;
+      --brand: #0f766e;
+      --brand-strong: #115e59;
+      --warn: #b91c1c;
+      --line: #d3ddd8;
+      --ok: #0a7d50;
+      --cpu: #0f766e;
+      --mem: #2563eb;
+      --rx: #ea580c;
+      --tx: #7c3aed;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: radial-gradient(circle at 10% 20%, var(--bg-accent), var(--bg) 45%);
+      font: 14px/1.45 "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
+      min-height: 100vh;
+    }
+
+    .page {
+      width: min(1240px, 95vw);
+      margin: 24px auto 40px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 8px 24px rgba(16, 24, 20, 0.06);
+    }
+
+    .header {
+      padding: 18px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .title {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+    }
+
+    .subtitle {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .controls {
+      padding: 14px 20px 18px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      border-top: 1px solid var(--line);
+    }
+
+    button,
+    select {
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      padding: 8px 12px;
+      background: #fff;
+      color: var(--ink);
+      font: inherit;
+    }
+
+    button {
+      cursor: pointer;
+      transition: transform 0.08s ease, box-shadow 0.2s ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(17, 94, 89, 0.16);
+    }
+
+    .btn-primary {
+      background: var(--brand);
+      border-color: var(--brand-strong);
+      color: #fff;
+    }
+
+    .btn-danger {
+      color: #fff;
+      background: var(--warn);
+      border-color: #991b1b;
+    }
+
+    .btn-muted {
+      color: var(--muted);
+    }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .status {
+      margin-left: auto;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .status.ok {
+      color: var(--ok);
+      font-weight: 600;
+    }
+
+    .message {
+      padding: 12px 16px;
+      border-radius: 10px;
+      margin: 0 20px 18px;
+      display: none;
+      border: 1px solid;
+    }
+
+    .message.show {
+      display: block;
+    }
+
+    .message.error {
+      color: #7f1d1d;
+      border-color: #fecaca;
+      background: #fef2f2;
+    }
+
+    .message.info {
+      color: #164e63;
+      border-color: #bae6fd;
+      background: #f0f9ff;
+    }
+
+    .table-wrap {
+      overflow: auto;
+      border-top: 1px solid var(--line);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 980px;
+    }
+
+    th,
+    td {
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: middle;
+    }
+
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: #f6faf8;
+      color: #33453d;
+      font-size: 12px;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 12px;
+      border: 1px solid #b3ddd2;
+      background: #effaf6;
+      color: #14532d;
+    }
+
+    .mono {
+      font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+      font-size: 12px;
+    }
+
+    a {
+      color: var(--brand-strong);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .metrics-wrap {
+      padding: 0 20px 20px;
+      border-top: 1px solid var(--line);
+    }
+
+    .metrics-summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .summary-item {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      background: #f8fbfa;
+    }
+
+    .summary-label {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .summary-value {
+      font-size: 18px;
+      font-weight: 700;
+      margin-top: 4px;
+    }
+
+    .chart-grid {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 12px;
+    }
+
+    .chart-card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      background: #fcfefd;
+    }
+
+    .chart-title {
+      margin: 0 0 6px;
+      font-size: 13px;
+      color: #30453b;
+      font-weight: 700;
+    }
+
+    .chart-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .legend-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .legend-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .graph {
+      width: 100%;
+      height: 150px;
+      border: 1px solid #e4ece8;
+      border-radius: 8px;
+      background: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: 12px;
+      overflow: hidden;
+    }
+
+    .host-block {
+      margin-top: 18px;
+      border-top: 1px solid var(--line);
+      padding-top: 14px;
+    }
+
+    .host-title {
+      font-size: 16px;
+      font-weight: 700;
+      margin: 0;
+    }
+
+    .host-meta {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .host-error {
+      margin-top: 6px;
+      color: #7f1d1d;
+      font-size: 12px;
+    }
+
+    .container-list {
+      margin-top: 10px;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 10px;
+    }
+
+    .empty-box {
+      margin-top: 12px;
+      border: 1px dashed #b6c8c0;
+      border-radius: 10px;
+      padding: 14px;
+      color: var(--muted);
+      background: #fbfdfc;
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="card">
+      <div class="header">
+        <div>
+          <h1 class="title">SuprClaw Admin Console</h1>
+          <p class="subtitle">User inventory, provisioned container URLs, weekly usage, and teardown controls.</p>
+        </div>
+      </div>
+      <div class="controls">
+        <button id="signinBtn" class="btn-primary" type="button">Sign In with Google</button>
+        <button id="signoutBtn" class="btn-muted" type="button" disabled>Sign Out</button>
+        <button id="refreshBtn" type="button" disabled>Refresh</button>
+        <label for="scopeSelect">Scope</label>
+        <select id="scopeSelect" disabled>
+          <option value="provisioned">Provisioned Users</option>
+          <option value="all">All Known Users</option>
+        </select>
+        <div id="status" class="status">Loading configuration...</div>
+      </div>
+      <div id="message" class="message"></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>User ID</th>
+              <th>Container</th>
+              <th>Container URL</th>
+              <th>Mode</th>
+              <th>Weekly Credits</th>
+              <th>Weekly Events</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="usersBody">
+            <tr><td colspan="7">Sign in to load admin data.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="header">
+        <div>
+          <h2 class="title" style="font-size:20px;">Resource Graphs</h2>
+          <p class="subtitle">Live rolling 15-minute window. Poll interval: 10 seconds.</p>
+        </div>
+        <div id="metricsStatus" class="status">Metrics idle</div>
+      </div>
+      <div class="controls">
+        <button id="metricsRefreshBtn" type="button" disabled>Refresh Metrics</button>
+      </div>
+      <div class="metrics-wrap" id="metricsWrap">
+        <div class="empty-box" id="metricsEmpty">Sign in to view host and container resource graphs.</div>
+        <div id="metricsContent" style="display:none;"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script>
+    const statusEl = document.getElementById("status");
+    const metricsStatusEl = document.getElementById("metricsStatus");
+    const messageEl = document.getElementById("message");
+    const usersBody = document.getElementById("usersBody");
+    const signInBtn = document.getElementById("signinBtn");
+    const signOutBtn = document.getElementById("signoutBtn");
+    const refreshBtn = document.getElementById("refreshBtn");
+    const metricsRefreshBtn = document.getElementById("metricsRefreshBtn");
+    const scopeSelect = document.getElementById("scopeSelect");
+    const metricsEmptyEl = document.getElementById("metricsEmpty");
+    const metricsContentEl = document.getElementById("metricsContent");
+
+    const METRICS_POLL_MS = 10000;
+    const HISTORY_WINDOW_MS = 15 * 60 * 1000;
+
+    let firebaseReady = false;
+    let currentUser = null;
+    let metricsSnapshots = [];
+    let metricsTimer = null;
+
+    function setMessage(type, text) {
+      if (!text) {
+        messageEl.className = "message";
+        messageEl.textContent = "";
+        return;
+      }
+      messageEl.className = "message show " + type;
+      messageEl.textContent = text;
+    }
+
+    function setStatus(text, ok) {
+      statusEl.textContent = text;
+      statusEl.className = ok ? "status ok" : "status";
+    }
+
+    function setMetricsStatus(text, ok) {
+      metricsStatusEl.textContent = text;
+      metricsStatusEl.className = ok ? "status ok" : "status";
+    }
+
+    function setControlsForAuth(isAuthed) {
+      signOutBtn.disabled = !isAuthed;
+      refreshBtn.disabled = !isAuthed;
+      metricsRefreshBtn.disabled = !isAuthed;
+      scopeSelect.disabled = !isAuthed;
+      signInBtn.disabled = !firebaseReady;
+    }
+
+    async function init() {
+      try {
+        const configResp = await fetch("/api/admin/config", { cache: "no-store" });
+        const cfg = await configResp.json();
+        if (!cfg.configured) {
+          setStatus("Firebase Web config missing", false);
+          setMessage("error", "Missing env vars: " + (cfg.missing || []).join(", "));
+          return;
+        }
+
+        const firebaseConfig = {
+          apiKey: cfg.apiKey,
+          authDomain: cfg.authDomain,
+          projectId: cfg.projectId,
+          appId: cfg.appId,
+          messagingSenderId: cfg.messagingSenderId || undefined,
+          storageBucket: cfg.storageBucket || undefined,
+          measurementId: cfg.measurementId || undefined
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        firebaseReady = true;
+        setStatus("Ready for sign-in", true);
+        setControlsForAuth(false);
+
+        firebase.auth().onAuthStateChanged(async (user) => {
+          currentUser = user || null;
+          if (!currentUser) {
+            stopMetricsPolling();
+            metricsSnapshots = [];
+            renderRows([]);
+            renderMetricsEmpty("Sign in to view host and container resource graphs.");
+            setStatus("Not signed in", false);
+            setMetricsStatus("Metrics idle", false);
+            setControlsForAuth(false);
+            return;
+          }
+
+          setStatus("Signed in as " + (currentUser.email || currentUser.uid), true);
+          setControlsForAuth(true);
+          await loadUsers();
+          await startMetricsPolling();
+        });
+      } catch (err) {
+        setStatus("Failed to initialize", false);
+        setMessage("error", "Could not load admin configuration: " + (err && err.message ? err.message : String(err)));
+      }
+    }
+
+    function renderRows(rows) {
+      if (!rows.length) {
+        usersBody.innerHTML = "<tr><td colspan='7'>No users found for selected scope.</td></tr>";
+        return;
+      }
+
+      usersBody.innerHTML = rows.map((row) => {
+        const containerCell = row.hasContainer
+          ? "<span class='pill'>" + escapeHtml(row.containerStatus || "active") + "</span>"
+          : "<span class='pill' style='border-color:#e5e7eb;background:#f9fafb;color:#6b7280;'>none</span>";
+
+        const urlCell = row.containerUrl
+          ? "<a href='" + escapeAttr(row.containerUrl) + "' target='_blank' rel='noopener'>" + escapeHtml(row.containerUrl) + "</a>"
+          : "<span class='mono'>-</span>";
+
+        const modeCell = row.deploymentMode ? escapeHtml(row.deploymentMode) : "<span class='mono'>-</span>";
+        const deleteDisabled = row.canDelete ? "" : "disabled";
+        const deleteLabel = row.canDelete ? "Delete" : "N/A";
+
+        return (
+          "<tr>" +
+            "<td class='mono'>" + escapeHtml(row.userId) + "</td>" +
+            "<td>" + containerCell + "</td>" +
+            "<td>" + urlCell + "</td>" +
+            "<td>" + modeCell + "</td>" +
+            "<td class='mono'>" + Number(row.weeklyCreditsUsed || 0).toLocaleString() + "</td>" +
+            "<td class='mono'>" + Number(row.weeklyUsageEvents || 0).toLocaleString() + "</td>" +
+            "<td><button class='btn-danger delete-btn' data-user-id='" + escapeAttr(row.userId) + "' " + deleteDisabled + ">" + deleteLabel + "</button></td>" +
+          "</tr>"
+        );
+      }).join("");
+
+      document.querySelectorAll(".delete-btn").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const userId = btn.getAttribute("data-user-id");
+          if (!userId) return;
+          const confirmed = window.confirm("Delete provisioned container for user " + userId + "?");
+          if (!confirmed) return;
+          await deleteUser(userId);
+        });
+      });
+    }
+
+    async function getIdToken() {
+      if (!currentUser) throw new Error("Not signed in");
+      return currentUser.getIdToken(true);
+    }
+
+    async function loadUsers() {
+      try {
+        setMessage(null, "");
+        const token = await getIdToken();
+        const scope = scopeSelect.value;
+        const resp = await fetch("/api/admin/users?scope=" + encodeURIComponent(scope), {
+          headers: { Authorization: "Bearer " + token }
+        });
+
+        if (resp.status === 403) {
+          setMessage("error", "Signed-in user is not admin (requires custom claim role=admin).");
+          renderRows([]);
+          return;
+        }
+        if (!resp.ok) {
+          const err = await safeJson(resp);
+          throw new Error(err.error || ("Failed to load users (" + resp.status + ")"));
+        }
+
+        const body = await resp.json();
+        renderRows(body.users || []);
+        setStatus(
+          "Signed in as " + (currentUser.email || currentUser.uid) +
+          " • Week " + body.weekStartUtc + " to " + body.weekEndUtc,
+          true
+        );
+      } catch (err) {
+        setMessage("error", err && err.message ? err.message : String(err));
+      }
+    }
+
+    async function startMetricsPolling() {
+      stopMetricsPolling();
+      await loadMetrics();
+      metricsTimer = setInterval(() => {
+        loadMetrics().catch(() => {
+          // handled in loadMetrics
+        });
+      }, METRICS_POLL_MS);
+    }
+
+    function stopMetricsPolling() {
+      if (metricsTimer) {
+        clearInterval(metricsTimer);
+        metricsTimer = null;
+      }
+    }
+
+    async function loadMetrics() {
+      if (!currentUser) return;
+
+      try {
+        const token = await getIdToken();
+        const resp = await fetch("/api/admin/metrics", {
+          headers: { Authorization: "Bearer " + token },
+          cache: "no-store"
+        });
+
+        if (resp.status === 403) {
+          renderMetricsEmpty("Admin role is required to view metrics.");
+          setMetricsStatus("Metrics unauthorized", false);
+          return;
+        }
+
+        if (!resp.ok) {
+          const err = await safeJson(resp);
+          throw new Error(err.error || ("Failed to load metrics (" + resp.status + ")"));
+        }
+
+        const payload = await resp.json();
+        const sampleTs = parseTimestamp(payload.capturedAtUtc);
+        metricsSnapshots.push({ ts: sampleTs, payload: payload });
+        pruneMetricsHistory();
+        renderMetrics();
+
+        setMetricsStatus("Last update: " + new Date(sampleTs).toLocaleTimeString(), true);
+      } catch (err) {
+        setMetricsStatus("Metrics update failed", false);
+        setMessage("error", err && err.message ? err.message : String(err));
+      }
+    }
+
+    function parseTimestamp(value) {
+      const parsed = Date.parse(value || "");
+      if (Number.isNaN(parsed)) return Date.now();
+      return parsed;
+    }
+
+    function pruneMetricsHistory() {
+      const cutoff = Date.now() - HISTORY_WINDOW_MS;
+      metricsSnapshots = metricsSnapshots.filter((sample) => sample.ts >= cutoff);
+    }
+
+    function renderMetricsEmpty(text) {
+      metricsEmptyEl.style.display = "block";
+      metricsContentEl.style.display = "none";
+      metricsEmptyEl.textContent = text;
+    }
+
+    function renderMetrics() {
+      if (!metricsSnapshots.length) {
+        renderMetricsEmpty("Waiting for first metrics sample...");
+        return;
+      }
+
+      const latest = metricsSnapshots[metricsSnapshots.length - 1].payload;
+      const hosts = latest.hosts || [];
+      const overall = latest.overall || null;
+
+      metricsEmptyEl.style.display = "none";
+      metricsContentEl.style.display = "block";
+
+      const overallSummary = overall ? `
+        <div class="metrics-summary">
+          <div class="summary-item"><div class="summary-label">Hosts</div><div class="summary-value">${Number(overall.hostCount || 0).toLocaleString()}</div></div>
+          <div class="summary-item"><div class="summary-label">Containers</div><div class="summary-value">${Number(overall.containerCount || 0).toLocaleString()}</div></div>
+          <div class="summary-item"><div class="summary-label">Users</div><div class="summary-value">${Number(overall.userCount || 0).toLocaleString()}</div></div>
+          <div class="summary-item"><div class="summary-label">Memory</div><div class="summary-value">${formatBytes(overall.memoryUsedBytes || 0)} / ${formatBytes(overall.memoryTotalBytes || 0)}</div></div>
+        </div>
+      ` : "";
+
+      metricsContentEl.innerHTML = `
+        <div class="chart-grid">
+          <div class="chart-card">
+            <h3 class="chart-title">Overall Host Utilization</h3>
+            <div class="chart-legend">
+              <span class="legend-chip"><span class="legend-dot" style="background:var(--cpu);"></span>CPU %</span>
+              <span class="legend-chip"><span class="legend-dot" style="background:var(--mem);"></span>Memory %</span>
+            </div>
+            <div id="chart-overall-percent" class="graph"></div>
+          </div>
+          <div class="chart-card">
+            <h3 class="chart-title">Overall Host Network Throughput</h3>
+            <div class="chart-legend">
+              <span class="legend-chip"><span class="legend-dot" style="background:var(--rx);"></span>RX bytes/s</span>
+              <span class="legend-chip"><span class="legend-dot" style="background:var(--tx);"></span>TX bytes/s</span>
+            </div>
+            <div id="chart-overall-network" class="graph"></div>
+          </div>
+        </div>
+        ${overallSummary}
+        <div id="hostsContainer"></div>
+      `;
+
+      const hostsContainer = document.getElementById("hostsContainer");
+      if (!hosts.length) {
+        hostsContainer.innerHTML = "<div class='empty-box'>No active hosts found.</div>";
+      } else {
+        hostsContainer.innerHTML = hosts.map((host) => renderHostBlock(host)).join("");
+      }
+
+      renderOverallCharts();
+      hosts.forEach((host) => {
+        renderHostCharts(host.hostId);
+        (host.containers || []).forEach((container) => {
+          renderContainerCharts(host.hostId, container.containerId);
+        });
+      });
+    }
+
+    function renderHostBlock(host) {
+      const hostKey = sanitizeId(String(host.hostId));
+      const containers = host.containers || [];
+
+      const containerHtml = containers.length
+        ? `<div class="container-list">${containers.map((container) => renderContainerCard(host.hostId, container)).join("")}</div>`
+        : "<div class='empty-box'>No container metrics found for this host.</div>";
+
+      return `
+        <div class="host-block">
+          <h3 class="host-title">Host ${escapeHtml(String(host.hostId))} • ${escapeHtml(host.hostIp || "unknown")}</h3>
+          <div class="host-meta">Status: ${escapeHtml(host.hostStatus || "unknown")} • Cores: ${host.coreCount == null ? "-" : escapeHtml(String(host.coreCount))}</div>
+          ${host.error ? `<div class="host-error">Metrics warning: ${escapeHtml(host.error)}</div>` : ""}
+          <div class="chart-grid">
+            <div class="chart-card">
+              <h4 class="chart-title">Host ${escapeHtml(String(host.hostId))} CPU & Memory %</h4>
+              <div class="chart-legend">
+                <span class="legend-chip"><span class="legend-dot" style="background:var(--cpu);"></span>CPU %</span>
+                <span class="legend-chip"><span class="legend-dot" style="background:var(--mem);"></span>Memory %</span>
+              </div>
+              <div id="chart-host-${hostKey}-percent" class="graph"></div>
+            </div>
+            <div class="chart-card">
+              <h4 class="chart-title">Host ${escapeHtml(String(host.hostId))} Network Throughput</h4>
+              <div class="chart-legend">
+                <span class="legend-chip"><span class="legend-dot" style="background:var(--rx);"></span>RX bytes/s</span>
+                <span class="legend-chip"><span class="legend-dot" style="background:var(--tx);"></span>TX bytes/s</span>
+              </div>
+              <div id="chart-host-${hostKey}-network" class="graph"></div>
+            </div>
+          </div>
+          ${containerHtml}
+        </div>
+      `;
+    }
+
+    function renderContainerCard(hostId, container) {
+      const hostKey = sanitizeId(String(hostId));
+      const containerKey = sanitizeId(String(container.containerId));
+      const containerTitle = (container.userId ? container.userId + " • " : "") + container.containerId;
+      const memoryText = container.memoryUsedBytes != null && container.memoryLimitBytes != null
+        ? `${formatBytes(container.memoryUsedBytes)} / ${formatBytes(container.memoryLimitBytes)}`
+        : "-";
+
+      return `
+        <div class="chart-card">
+          <h4 class="chart-title">Container ${escapeHtml(containerTitle)}</h4>
+          <div class="host-meta">Status: ${escapeHtml(container.status || "unknown")} • Memory: ${escapeHtml(memoryText)}</div>
+          <div class="chart-legend">
+            <span class="legend-chip"><span class="legend-dot" style="background:var(--cpu);"></span>CPU %</span>
+            <span class="legend-chip"><span class="legend-dot" style="background:var(--mem);"></span>Memory %</span>
+          </div>
+          <div id="chart-container-${hostKey}-${containerKey}-percent" class="graph"></div>
+          <div class="chart-legend" style="margin-top:8px;">
+            <span class="legend-chip"><span class="legend-dot" style="background:var(--rx);"></span>RX bytes/s</span>
+            <span class="legend-chip"><span class="legend-dot" style="background:var(--tx);"></span>TX bytes/s</span>
+          </div>
+          <div id="chart-container-${hostKey}-${containerKey}-network" class="graph"></div>
+        </div>
+      `;
+    }
+
+    function renderOverallCharts() {
+      const series = buildEntitySeries((sample) => {
+        if (!sample || !sample.payload || !sample.payload.overall) return null;
+        const overall = sample.payload.overall;
+        return {
+          cpuPercent: numberOrNull(overall.cpuPercent),
+          memoryPercent: numberOrNull(overall.memoryUsagePercent),
+          networkRxBytes: numberOrNull(overall.networkRxBytes),
+          networkTxBytes: numberOrNull(overall.networkTxBytes)
+        };
+      });
+
+      drawPercentChart("chart-overall-percent", series);
+      drawNetworkChart("chart-overall-network", series);
+    }
+
+    function renderHostCharts(hostId) {
+      const hostKey = sanitizeId(String(hostId));
+      const series = buildEntitySeries((sample) => {
+        const hosts = sample && sample.payload && sample.payload.hosts ? sample.payload.hosts : [];
+        const host = hosts.find((item) => String(item.hostId) === String(hostId));
+        if (!host) return null;
+        return {
+          cpuPercent: numberOrNull(host.cpuPercent),
+          memoryPercent: numberOrNull(host.memoryUsagePercent),
+          networkRxBytes: numberOrNull(host.networkRxBytes),
+          networkTxBytes: numberOrNull(host.networkTxBytes)
+        };
+      });
+
+      drawPercentChart(`chart-host-${hostKey}-percent`, series);
+      drawNetworkChart(`chart-host-${hostKey}-network`, series);
+    }
+
+    function renderContainerCharts(hostId, containerId) {
+      const hostKey = sanitizeId(String(hostId));
+      const containerKey = sanitizeId(String(containerId));
+      const series = buildEntitySeries((sample) => {
+        const hosts = sample && sample.payload && sample.payload.hosts ? sample.payload.hosts : [];
+        const host = hosts.find((item) => String(item.hostId) === String(hostId));
+        if (!host) return null;
+        const containers = host.containers || [];
+        const container = containers.find((item) => String(item.containerId) === String(containerId));
+        if (!container) return null;
+
+        let memoryPercent = null;
+        if (container.memoryUsedBytes != null && container.memoryLimitBytes != null && Number(container.memoryLimitBytes) > 0) {
+          memoryPercent = (Number(container.memoryUsedBytes) / Number(container.memoryLimitBytes)) * 100;
+        }
+
+        return {
+          cpuPercent: numberOrNull(container.cpuPercent),
+          memoryPercent: memoryPercent,
+          networkRxBytes: numberOrNull(container.networkRxBytes),
+          networkTxBytes: numberOrNull(container.networkTxBytes)
+        };
+      });
+
+      drawPercentChart(`chart-container-${hostKey}-${containerKey}-percent`, series);
+      drawNetworkChart(`chart-container-${hostKey}-${containerKey}-network`, series);
+    }
+
+    function buildEntitySeries(selector) {
+      const points = [];
+      for (const sample of metricsSnapshots) {
+        const value = selector(sample);
+        if (!value) continue;
+        points.push({
+          ts: sample.ts,
+          cpuPercent: numberOrNull(value.cpuPercent),
+          memoryPercent: numberOrNull(value.memoryPercent),
+          networkRxBytes: numberOrNull(value.networkRxBytes),
+          networkTxBytes: numberOrNull(value.networkTxBytes)
+        });
+      }
+
+      let prev = null;
+      for (const point of points) {
+        point.networkRxRate = null;
+        point.networkTxRate = null;
+        if (prev) {
+          const dt = (point.ts - prev.ts) / 1000;
+          if (dt > 0) {
+            if (point.networkRxBytes != null && prev.networkRxBytes != null) {
+              point.networkRxRate = Math.max(0, (point.networkRxBytes - prev.networkRxBytes) / dt);
+            }
+            if (point.networkTxBytes != null && prev.networkTxBytes != null) {
+              point.networkTxRate = Math.max(0, (point.networkTxBytes - prev.networkTxBytes) / dt);
+            }
+          }
+        }
+        prev = point;
+      }
+
+      return points;
+    }
+
+    function drawPercentChart(containerId, points) {
+      drawLineChart(containerId, [
+        { key: "cpuPercent", color: "var(--cpu)" },
+        { key: "memoryPercent", color: "var(--mem)" }
+      ], points, 100);
+    }
+
+    function drawNetworkChart(containerId, points) {
+      drawLineChart(containerId, [
+        { key: "networkRxRate", color: "var(--rx)" },
+        { key: "networkTxRate", color: "var(--tx)" }
+      ], points, null);
+    }
+
+    function drawLineChart(containerId, seriesDefs, points, fixedMax) {
+      const host = document.getElementById(containerId);
+      if (!host) return;
+
+      if (!points.length || points.length < 2) {
+        host.textContent = "Waiting for more samples...";
+        return;
+      }
+
+      const width = 520;
+      const height = 150;
+      const padding = 10;
+      const innerW = width - (padding * 2);
+      const innerH = height - (padding * 2);
+
+      let maxY = fixedMax != null ? fixedMax : 0;
+      if (fixedMax == null) {
+        for (const series of seriesDefs) {
+          for (const point of points) {
+            const value = numberOrNull(point[series.key]);
+            if (value != null) maxY = Math.max(maxY, value);
+          }
+        }
+        if (maxY <= 0) maxY = 1;
+      }
+
+      const lines = [];
+      const grid = [];
+      for (let g = 0; g <= 4; g += 1) {
+        const y = padding + ((innerH / 4) * g);
+        grid.push(`<line x1="${padding}" y1="${y}" x2="${width - padding}" y2="${y}" stroke="#edf2ef" stroke-width="1"/>`);
+      }
+
+      for (const series of seriesDefs) {
+        const coords = [];
+        for (let i = 0; i < points.length; i += 1) {
+          const value = numberOrNull(points[i][series.key]);
+          if (value == null) continue;
+          const x = padding + ((innerW * i) / (points.length - 1));
+          const normalized = Math.max(0, Math.min(1, value / maxY));
+          const y = padding + (innerH * (1 - normalized));
+          coords.push(`${x},${y}`);
+        }
+
+        if (coords.length >= 2) {
+          lines.push(`<polyline fill="none" stroke="${series.color}" stroke-width="2" points="${coords.join(" ")}"/>`);
+        }
+      }
+
+      host.innerHTML = `
+        <svg viewBox="0 0 ${width} ${height}" width="100%" height="100%" preserveAspectRatio="none">
+          ${grid.join("")}
+          ${lines.join("")}
+        </svg>
+      `;
+    }
+
+    async function deleteUser(userId) {
+      try {
+        const token = await getIdToken();
+        const resp = await fetch("/api/admin/users/" + encodeURIComponent(userId), {
+          method: "DELETE",
+          headers: { Authorization: "Bearer " + token }
+        });
+
+        const body = await safeJson(resp);
+        if (!resp.ok) {
+          throw new Error(body.error || "Delete failed");
+        }
+        setMessage("info", body.message || ("Deleted provisioned container for " + userId));
+        await loadUsers();
+        await loadMetrics();
+      } catch (err) {
+        setMessage("error", err && err.message ? err.message : String(err));
+      }
+    }
+
+    async function safeJson(resp) {
+      try {
+        return await resp.json();
+      } catch (_) {
+        return {};
+      }
+    }
+
+    function numberOrNull(value) {
+      if (value === null || value === undefined || value === "") return null;
+      const n = Number(value);
+      return Number.isFinite(n) ? n : null;
+    }
+
+    function formatBytes(bytes) {
+      const input = numberOrNull(bytes) || 0;
+      const units = ["B", "KB", "MB", "GB", "TB"];
+      let value = input;
+      let idx = 0;
+      while (value >= 1024 && idx < units.length - 1) {
+        value /= 1024;
+        idx += 1;
+      }
+      return value.toFixed(value >= 10 || idx === 0 ? 0 : 1) + " " + units[idx];
+    }
+
+    function escapeHtml(input) {
+      return String(input)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll("\"", "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    function escapeAttr(input) {
+      return escapeHtml(input).replaceAll("`", "&#96;");
+    }
+
+    function sanitizeId(input) {
+      return String(input).replace(/[^a-zA-Z0-9_-]/g, "_");
+    }
+
+    signInBtn.addEventListener("click", async () => {
+      if (!firebaseReady) return;
+      try {
+        const provider = new firebase.auth.GoogleAuthProvider();
+        await firebase.auth().signInWithPopup(provider);
+        setMessage(null, "");
+      } catch (err) {
+        setMessage("error", "Sign-in failed: " + (err && err.message ? err.message : String(err)));
+      }
+    });
+
+    signOutBtn.addEventListener("click", async () => {
+      if (!firebaseReady) return;
+      stopMetricsPolling();
+      await firebase.auth().signOut();
+      setMessage("info", "Signed out.");
+    });
+
+    refreshBtn.addEventListener("click", async () => {
+      await loadUsers();
+      await loadMetrics();
+    });
+
+    metricsRefreshBtn.addEventListener("click", async () => {
+      await loadMetrics();
+    });
+
+    scopeSelect.addEventListener("change", loadUsers);
+
+    init();
+  </script>
+</body>
+</html>

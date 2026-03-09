@@ -1,5 +1,6 @@
 package com.suprbeta
 
+import com.suprbeta.admin.configureAdminRoutes
 import com.suprbeta.config.AppConfig
 import com.suprbeta.digitalocean.DigitalOceanService
 import com.suprbeta.digitalocean.DnsService
@@ -85,7 +86,7 @@ fun Application.module() {
     val marketplaceService = MarketplaceService(httpClient)
 
     configureWebSockets(httpClient, firebaseAuthService, firestoreRepository, remoteConfigService)
-    val configuringService = configureDigitalOcean(
+    val digitalOceanServices = configureDigitalOcean(
         httpClient,
         firestoreRepository,
         agentRepository,
@@ -97,8 +98,9 @@ fun Application.module() {
     configureTaskRoutes(taskRepository, firestoreRepository, userClientProvider)
     configureWebhookRoutes(firestoreRepository, userClientProvider, agentRepository, httpClient, managementService.webhookSecret)
     configureFcmRoutes(firestoreRepository)
-    configureMarketplaceRoutes(configuringService, marketplaceService)
+    configureMarketplaceRoutes(digitalOceanServices.configuringService, marketplaceService)
     configureUsageRoutes(firestoreRepository, remoteConfigService)
+    configureAdminRoutes(firestoreRepository, digitalOceanServices.provisioningService)
     configureRouting()
 }
 
@@ -248,7 +250,7 @@ fun Application.configureDigitalOcean(
     managementService: SupabaseManagementService,
     userClientProvider: UserSupabaseClientProvider,
     marketplaceService: MarketplaceService
-): DropletConfigurationService {
+): DigitalOceanServices {
     val dotenv = io.github.cdimascio.dotenv.dotenv { ignoreIfMissing = true; directory = "." }
     val sshCommandExecutor = SshCommandExecutorImpl(this)
     val dropletMcpService = DropletMcpServiceImpl(
@@ -340,8 +342,16 @@ fun Application.configureDigitalOcean(
         agentRepository,
         userClientProvider
     )
-    return configuringService
+    return DigitalOceanServices(
+        configuringService = configuringService,
+        provisioningService = provisioningService
+    )
 }
+
+data class DigitalOceanServices(
+    val configuringService: DropletConfigurationService,
+    val provisioningService: DropletProvisioningService
+)
 
 private fun Application.createProviders(
     httpClient: HttpClient,
