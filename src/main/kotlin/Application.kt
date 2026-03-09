@@ -138,7 +138,10 @@ fun createHttpClient(): HttpClient {
             requestTimeoutMillis = 30_000
             socketTimeoutMillis = 30_000
         }
-        install(WebSockets)
+        install(WebSockets) {
+            // Keep upstream OpenClaw WebSocket sessions alive across idle periods.
+            pingIntervalMillis = 15_000
+        }
         install(ClientContentNegotiation) {
             json(Json {
                 ignoreUnknownKeys = true
@@ -170,7 +173,11 @@ fun Application.configureWebSockets(
     }
 
     // Install server-side WebSockets plugin
-    install(io.ktor.server.websocket.WebSockets)
+    install(io.ktor.server.websocket.WebSockets) {
+        // Keep mobile client connections healthy through intermediaries/load balancers.
+        pingPeriodMillis = 15_000
+        timeoutMillis = 60_000
+    }
 
     val tokenCalculator = TokenCalculator(
         application = this,
