@@ -57,6 +57,21 @@ class ProxySessionManager(
             logger.info("Resuming existing session for user: $userId (Tier: $userTier)")
             existingSession.disconnectJob?.cancel()
             existingSession.disconnectJob = null
+            existingSession.inboundJob?.cancel()
+
+            // Force a fresh upstream handshake when the mobile client reconnects.
+            // Reusing a previously-connected upstream session can leave the client
+            // waiting in handshake state on subsequent reconnects.
+            existingSession.outboundJob?.cancel()
+            existingSession.outboundJob = null
+            runCatching {
+                existingSession.openclawSession?.close(
+                    CloseReason(CloseReason.Codes.NORMAL, "client reconnected; forcing upstream re-handshake")
+                )
+            }
+            existingSession.openclawSession = null
+            existingSession.openClawGatewayToken = null
+
             existingSession.clientSession = clientSession
             // Optionally, update userTier if they upgraded mid-session
             // We'd need to make metadata vars mutable if we want that, 
