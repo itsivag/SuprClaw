@@ -48,7 +48,7 @@ RUN useradd -m -s /bin/bash openclaw \
     && chown -R openclaw:openclaw /home/openclaw
 
 # Install the OpenClaw CLI version validated against this image bootstrap flow.
-ARG OPENCLAW_VERSION=2026.3.2
+ARG OPENCLAW_VERSION=2026.2.23
 RUN npm install -g openclaw@${OPENCLAW_VERSION} \
     && npm cache clean --force
 

@@ -89,9 +89,11 @@ docker run -d \
 
 ### Processes Managed by Supervisor
 
-1. **openclaw-gateway** - Main OpenClay gateway service
+1. **openclaw-gateway** - Main OpenClaw gateway service
 2. **mcp-auth-proxy** - MCP tool authentication proxy
-3. **mcporter** - MCP tool process manager
+
+`mcporter` is installed in the image and its daemon is restarted on MCP config updates.
+It is not a dedicated foreground supervisor process in the Docker deployment.
 
 ### Health Checks
 

@@ -267,21 +267,24 @@ class DropletMcpServiceTest {
     }
 
     @Test
-    fun `configureMcpTools restarts mcp auth proxy through supervisor in docker deployments`() = testApplication {
+    fun `configureMcpTools restarts mcp auth proxy and mcporter daemon in docker deployments`() = testApplication {
         val commands = captureCommands()
         val service = buildService(application)
 
         service.configureMcpTools(dockerDroplet, listOf("supabase"))
 
-        val restartIdx = commands.indexOfFirst { it.contains("supervisorctl restart mcp-auth-proxy") }
+        val proxyRestartIdx = commands.indexOfFirst { it.contains("supervisorctl restart mcp-auth-proxy") }
+        val mcporterRestartIdx = commands.indexOfFirst { it.contains("mcporter daemon restart") }
         val lastConfigIdx = commands.indexOfLast {
             it.contains("mcp.env") ||
                 it.contains("mcp-routes.json") ||
                 it.contains("mcporter.json") ||
                 it.contains("mcp-auth-proxy.js")
         }
-        assertTrue(restartIdx >= 0, "Expected in-container mcp-auth-proxy restart command")
-        assertTrue(restartIdx > lastConfigIdx, "Restart must come after MCP config files are written")
+        assertTrue(proxyRestartIdx >= 0, "Expected in-container mcp-auth-proxy restart command")
+        assertTrue(mcporterRestartIdx >= 0, "Expected in-container mcporter daemon restart command")
+        assertTrue(proxyRestartIdx > lastConfigIdx, "Proxy restart must come after MCP config files are written")
+        assertTrue(mcporterRestartIdx > lastConfigIdx, "mcporter restart must come after MCP config files are written")
     }
 
     // ── mcp.env ────────────────────────────────────────────────────────────

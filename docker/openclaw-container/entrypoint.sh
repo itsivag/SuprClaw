@@ -111,8 +111,18 @@ setup_openclaw_config() {
       "sandbox": { "mode": "non-main", "workspaceAccess": "rw", "scope": "agent" }
     },
     "list": [
-      { "id": "main", "name": "main", "workspace": "/home/openclaw/.openclaw/workspace", "model": "${bedrock_model}" }
+      {
+        "id": "main",
+        "name": "main",
+        "workspace": "/home/openclaw/.openclaw/workspace",
+        "model": "${bedrock_model}",
+        "sandbox": { "mode": "off" },
+        "tools": { "profile": "full" }
+      }
     ]
+  },
+  "tools": {
+    "profile": "full"
   },
   "messages": { "ackReactionScope": "group-mentions" },
   "commands": { "native": "auto", "nativeSkills": "auto" },
@@ -303,17 +313,24 @@ setup_mcp_credentials() {
     fi
 }
 
-# Verify OpenClaw installation
-verify_openclaw() {
-    log_info "Verifying OpenClaw installation..."
+# Verify required runtime tooling
+verify_runtime_tools() {
+    log_info "Verifying runtime tooling..."
 
     if ! command -v openclaw &> /dev/null; then
         log_error "OpenClaw command not found"
         exit 1
     fi
 
-    local version=$(openclaw --version 2>/dev/null || echo "unknown")
-    log_info "OpenClaw version: $version"
+    if ! command -v mcporter &> /dev/null; then
+        log_error "mcporter command not found"
+        exit 1
+    fi
+
+    local openclaw_version=$(openclaw --version 2>/dev/null || echo "unknown")
+    local mcporter_version=$(mcporter --version 2>/dev/null || echo "unknown")
+    log_info "OpenClaw version: $openclaw_version"
+    log_info "mcporter version: $mcporter_version"
 }
 
 # OpenClaw 2026.3.x requires an explicit non-interactive onboarding step
@@ -373,7 +390,7 @@ main() {
     validate_env
 
     # Setup configurations
-    verify_openclaw
+    verify_runtime_tools
     bootstrap_openclaw_onboarding
     setup_openclaw_config
     setup_mcp_config

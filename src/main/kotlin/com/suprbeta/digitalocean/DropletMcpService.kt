@@ -163,6 +163,7 @@ open class DropletMcpServiceImpl(
     private fun restartMcpRuntime(droplet: UserDropletInternal) {
         if (droplet.isDockerDeployment()) {
             runRemoteCommand(droplet, "supervisorctl restart mcp-auth-proxy >/dev/null 2>&1 || true")
+            runRemoteCommand(droplet, "mcporter daemon restart >/dev/null 2>&1 || mcporter daemon start >/dev/null 2>&1 || true")
             return
         }
 
