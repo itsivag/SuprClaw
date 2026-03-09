@@ -99,3 +99,9 @@ data class TaskListResponse(
     val count: Int,
     val tasks: List<Task>
 )
+
+@Serializable
+data class DeliverableListResponse(
+    val count: Int,
+    val deliverables: List<TaskDocument>
+)

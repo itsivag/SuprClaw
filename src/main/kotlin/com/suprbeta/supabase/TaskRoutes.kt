@@ -3,6 +3,7 @@ package com.suprbeta.supabase
 import com.suprbeta.firebase.FirestoreRepository
 import com.suprbeta.firebase.authenticated
 import com.suprbeta.firebase.firebaseUserKey
+import com.suprbeta.supabase.models.DeliverableListResponse
 import com.suprbeta.supabase.models.TaskListResponse
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -40,6 +41,36 @@ fun Application.configureTaskRoutes(
                         )
                     } catch (e: Exception) {
                         log.error("Error fetching tasks for user ${user.uid}", e)
+                        call.respond(
+                            HttpStatusCode.InternalServerError,
+                            mapOf("error" to (e.message ?: "Unknown error occurred"))
+                        )
+                    }
+                }
+
+                /**
+                 * GET /api/tasks/deliverables
+                 * Returns all deliverables (task_documents) for the authenticated user's Supabase project.
+                 */
+                get("deliverables") {
+                    val user = call.attributes[firebaseUserKey]
+                    val droplet = firestoreRepository.getUserDropletInternal(user.uid)
+                    if (droplet == null) {
+                        call.respond(HttpStatusCode.NotFound, mapOf("error" to "No droplet found for user"))
+                        return@get
+                    }
+                    val client = userClientProvider.getClient(droplet.resolveSupabaseUrl(), droplet.supabaseServiceKey, droplet.supabaseSchema)
+                    try {
+                        val deliverables = taskRepository.getDeliverables(client)
+                        call.respond(
+                            HttpStatusCode.OK,
+                            DeliverableListResponse(
+                                count = deliverables.size,
+                                deliverables = deliverables
+                            )
+                        )
+                    } catch (e: Exception) {
+                        log.error("Error fetching deliverables for user ${user.uid}", e)
                         call.respond(
                             HttpStatusCode.InternalServerError,
                             mapOf("error" to (e.message ?: "Unknown error occurred"))

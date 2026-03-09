@@ -103,4 +103,9 @@ class SupabaseTaskRepository(
             null
         }
     }
+
+    suspend fun getDeliverables(client: SupabaseClient): List<TaskDocument> {
+        application.log.debug("Fetching task deliverables")
+        return client.from("task_documents").select().decodeList<TaskDocument>()
+    }
 }
