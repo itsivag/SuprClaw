@@ -187,16 +187,28 @@ class ProxySessionManager(
         while (true) {
             val vpsSession = session.openclawSession ?: break
 
+            var upstreamCloseReason: CloseReason? = null
+
             try {
                 for (frame in vpsSession.incoming) {
                     if (frame is Frame.Text) {
                         handleOutboundMessage(session, frame.readText())
                     }
                 }
+
+                upstreamCloseReason = awaitCloseReasonSafely(vpsSession)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 logger.error("Outbound forwarding error for user ${session.metadata.userId}: ${e.message}")
+            } finally {
+                if (upstreamCloseReason == null) {
+                    upstreamCloseReason = awaitCloseReasonSafely(vpsSession)
+                }
+                logger.info(
+                    "OpenClaw upstream WebSocket closed for user ${session.metadata.userId}: " +
+                        describeCloseReason(upstreamCloseReason)
+                )
             }
 
             session.openclawSession = null
@@ -443,5 +455,19 @@ class ProxySessionManager(
         sessions.keys.toList().forEach { userId ->
             closeSession(userId)
         }
+    }
+
+    private fun describeCloseReason(reason: CloseReason?): String {
+        if (reason == null) return "close=unavailable"
+
+        val message = reason.message.takeIf { it.isNotBlank() } ?: "<empty>"
+        return "close.code=${reason.code} close.message=$message"
+    }
+
+    private suspend fun awaitCloseReasonSafely(
+        session: DefaultWebSocketSession,
+        timeoutMillis: Long = 250
+    ): CloseReason? {
+        return runCatching { withTimeoutOrNull(timeoutMillis) { session.closeReason.await() } }.getOrNull()
     }
 }

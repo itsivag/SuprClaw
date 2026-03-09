@@ -7,7 +7,9 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
 import io.ktor.websocket.*
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Configure WebSocket routes for the proxy
@@ -56,6 +58,8 @@ fun Application.configureWebSocketRoutes(
                 userTier = userTier
             )
 
+            var clientCloseReason: CloseReason? = null
+
             try {
                 // Establish connection to OpenClaw VPS (noop if already connected)
                 val connected = sessionManager.establishOpenClawConnection(session)
@@ -73,15 +77,26 @@ fun Application.configureWebSocketRoutes(
                 logger.info("Session ${session.sessionId} active for user $userId")
                 
                 // Wait for client to disconnect
-                closeReason.await()
+                clientCloseReason = closeReason.await()
+                logger.info(
+                    "Client WebSocket close captured for user $userId: ${describeCloseReason(clientCloseReason)}"
+                )
 
             } catch (e: ClosedReceiveChannelException) {
-                logger.info("Client disconnected normally for user $userId")
+                clientCloseReason = clientCloseReason ?: awaitCloseReasonSafely(closeReason)
+                logger.info(
+                    "Client disconnected normally for user $userId (${describeCloseReason(clientCloseReason)})"
+                )
             } catch (e: Exception) {
-                logger.error("Error during WebSocket session for user $userId: ${e.message}")
+                clientCloseReason = clientCloseReason ?: awaitCloseReasonSafely(closeReason)
+                logger.error(
+                    "Error during WebSocket session for user $userId: ${e.message} " +
+                        "(${describeCloseReason(clientCloseReason)})"
+                )
             } finally {
                 // Instead of closing the session, we trigger the offline grace period
-                logger.info("WebSocket connection closed for user $userId. Triggering offline grace period.")
+                val closeSummary = describeCloseReason(clientCloseReason)
+                logger.info("WebSocket connection closed for user $userId ($closeSummary). Triggering offline grace period.")
                 sessionManager.handleClientDisconnect(userId, this)
             }
         }
@@ -91,4 +106,15 @@ fun Application.configureWebSocketRoutes(
             call.respondText("OK", ContentType.Text.Plain, HttpStatusCode.OK)
         }
     }
+}
+
+private fun describeCloseReason(reason: CloseReason?): String {
+    if (reason == null) return "close=unavailable"
+
+    val message = reason.message.takeIf { it.isNotBlank() } ?: "<empty>"
+    return "close.code=${reason.code} close.message=$message"
+}
+
+private suspend fun awaitCloseReasonSafely(reasonDeferred: Deferred<CloseReason?>): CloseReason? {
+    return runCatching { withTimeoutOrNull(250) { reasonDeferred.await() } }.getOrNull()
 }
