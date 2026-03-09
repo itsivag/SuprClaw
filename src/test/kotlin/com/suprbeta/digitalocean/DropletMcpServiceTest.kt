@@ -29,6 +29,11 @@ class DropletMcpServiceTest {
         gatewayToken = "gw-token"
     )
 
+    private val dockerDroplet = testDroplet.copy(
+        dropletName = "71bb0ef6c173d2db26c6f011f0d2743908f5891a3708def3ea255edbe124c7a8",
+        deploymentMode = "docker"
+    )
+
     /** Builds a testable service where env() returns values from [testEnv] (blank for missing). */
     private fun buildService(application: Application, testEnv: Map<String, String> = emptyMap()): DropletMcpServiceImpl =
         object : DropletMcpServiceImpl(managementService, sshExecutor, application) {
@@ -218,7 +223,7 @@ class DropletMcpServiceTest {
             "mcporter.json supabase URL must contain ?project_ref=proj_abc12345, got: $json")
     }
 
-    // ── mcporter service restart ───────────────────────────────────────────
+    // ── host VPS restart behaviour ────────────────────────────────────────
 
     @Test
     fun `configureMcpTools always restarts mcporter service after writing config`() = testApplication {
@@ -241,6 +246,42 @@ class DropletMcpServiceTest {
         val restartIdx = commands.indexOfFirst { it.contains("restart") && it.contains("mcporter") }
         val configIdx  = commands.indexOfFirst { it.contains("mcporter.json") }
         assertTrue(restartIdx > configIdx, "Restart must come after mcporter.json is written")
+    }
+
+    // ── docker deployment behaviour ───────────────────────────────────────
+
+    @Test
+    fun `configureMcpTools uses docker exec without sudo or systemctl for docker deployments`() = testApplication {
+        val commands = captureCommands()
+        val service = buildService(application)
+
+        service.configureMcpTools(dockerDroplet, listOf("supabase"))
+
+        assertTrue(commands.isNotEmpty(), "Expected MCP configuration commands to run")
+        assertTrue(commands.all { it.contains("docker exec") },
+            "All MCP commands must target the tenant container, got: $commands")
+        assertFalse(commands.any { it.contains("sudo") },
+            "Docker MCP configuration must not rely on host sudo, got: $commands")
+        assertFalse(commands.any { it.contains("systemctl") },
+            "Docker MCP configuration must not use systemctl, got: $commands")
+    }
+
+    @Test
+    fun `configureMcpTools restarts mcp auth proxy through supervisor in docker deployments`() = testApplication {
+        val commands = captureCommands()
+        val service = buildService(application)
+
+        service.configureMcpTools(dockerDroplet, listOf("supabase"))
+
+        val restartIdx = commands.indexOfFirst { it.contains("supervisorctl restart mcp-auth-proxy") }
+        val lastConfigIdx = commands.indexOfLast {
+            it.contains("mcp.env") ||
+                it.contains("mcp-routes.json") ||
+                it.contains("mcporter.json") ||
+                it.contains("mcp-auth-proxy.js")
+        }
+        assertTrue(restartIdx >= 0, "Expected in-container mcp-auth-proxy restart command")
+        assertTrue(restartIdx > lastConfigIdx, "Restart must come after MCP config files are written")
     }
 
     // ── mcp.env ────────────────────────────────────────────────────────────

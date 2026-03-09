@@ -1,5 +1,6 @@
 package com.suprbeta.digitalocean
 
+import com.suprbeta.core.ShellEscaping.singleQuote
 import com.suprbeta.core.SshCommandExecutor
 import com.suprbeta.digitalocean.models.AgentInsert
 import com.suprbeta.digitalocean.models.UserDropletInternal
@@ -27,6 +28,8 @@ class DropletConfigurationServiceImpl(
 ) : DropletConfigurationService {
     companion object {
         private const val DEFAULT_AGENT_MODEL = "amazon-bedrock/minimax.minimax-m2.1"
+        private val SAFE_MODEL_REGEX = Regex("^[a-zA-Z0-9._:/-]+$")
+        private val SAFE_RELATIVE_PATH_REGEX = Regex("^[a-zA-Z0-9._/-]+$")
     }
 
     private val logger = application.log
@@ -35,10 +38,11 @@ class DropletConfigurationServiceImpl(
     override suspend fun createAgent(userId: String, name: String, role: String, model: String?): String {
         val userDroplet = validateAndGetDroplet(userId, name)
         val workspacePath = "/home/openclaw/.openclaw/workspace-$name"
-        val selectedModel = model?.trim()?.ifBlank { DEFAULT_AGENT_MODEL } ?: DEFAULT_AGENT_MODEL
-        val command = "openclaw agents add $name --workspace $workspacePath --model $selectedModel"
+        val selectedModel = validateModel(model?.trim()?.ifBlank { DEFAULT_AGENT_MODEL } ?: DEFAULT_AGENT_MODEL)
+        val command =
+            "openclaw agents add ${singleQuote(name)} --workspace ${singleQuote(workspacePath)} --model ${singleQuote(selectedModel)}"
         logger.info("Creating OpenClaw agent '$name' on droplet ${userDroplet.dropletId}")
-        val output = sshCommandExecutor.runSshCommand(userDroplet.ipAddress, command)
+        val output = runAgentCommand(userDroplet, command)
 
         val client = userClientProvider.getClient(userDroplet.resolveSupabaseUrl(), userDroplet.supabaseServiceKey, userDroplet.supabaseSchema)
         agentRepository.saveAgent(
@@ -56,7 +60,9 @@ class DropletConfigurationServiceImpl(
 
     override suspend fun installMarketplaceAgent(userId: String, agent: MarketplaceAgent, repo: String): String {
         val userDroplet = validateAndGetDroplet(userId, agent.id)
-        val workspacePath = "/home/openclaw/${agent.installPath}"
+        val safeInstallPath = validateRelativePath(agent.installPath, "install path")
+        val safeSourcePath = validateRelativePath(agent.sourcePath, "source path")
+        val workspacePath = "/home/openclaw/$safeInstallPath"
         val tmpDir = "/tmp/marketplace-${agent.id}"
         var agentCreated = false
 
@@ -76,21 +82,22 @@ class DropletConfigurationServiceImpl(
 
             // Step 1: Create agent workspace via openclaw CLI
             logger.info("Installing marketplace agent '${agent.id}' on droplet ${userDroplet.dropletId}")
-            val output = sshCommandExecutor.runSshCommand(
-                userDroplet.ipAddress,
-                "openclaw agents add ${agent.id} --workspace $workspacePath --model $DEFAULT_AGENT_MODEL"
+            val output = runAgentCommand(
+                userDroplet,
+                "openclaw agents add ${singleQuote(agent.id)} --workspace ${singleQuote(workspacePath)} --model ${singleQuote(DEFAULT_AGENT_MODEL)}"
             )
             agentCreated = true
 
             // Step 2: Sparse-checkout only the agent's source directory, then overwrite workspace files
-            sshCommandExecutor.runSshCommand(
-                userDroplet.ipAddress,
-                "rm -rf $tmpDir" +
-                " && git clone --depth=1 --filter=blob:none --sparse $repo $tmpDir" +
-                " && git -C $tmpDir sparse-checkout set ${agent.sourcePath}" +
-                " && git -C $tmpDir checkout" +
-                " && cp -rf $tmpDir/${agent.sourcePath}/. $workspacePath/" +
-                " && rm -rf $tmpDir"
+            runAgentCommand(
+                userDroplet,
+                "rm -rf ${singleQuote(tmpDir)}" +
+                    " && git clone --depth=1 --filter=blob:none --sparse ${singleQuote(repo)} ${singleQuote(tmpDir)}" +
+                    " && git -C ${singleQuote(tmpDir)} sparse-checkout set -- ${singleQuote(safeSourcePath)}" +
+                    " && git -C ${singleQuote(tmpDir)} checkout" +
+                    " && mkdir -p ${singleQuote(workspacePath)}" +
+                    " && cp -rf ${singleQuote("$tmpDir/$safeSourcePath/.")} ${singleQuote("$workspacePath/")}" +
+                    " && rm -rf ${singleQuote(tmpDir)}"
             )
             logger.info("Marketplace config applied to $workspacePath for agent '${agent.id}'")
 
@@ -111,10 +118,7 @@ class DropletConfigurationServiceImpl(
             if (agentCreated) {
                 logger.warn("Installation failed for agent '${agent.id}', rolling back...")
                 runCatching {
-                    sshCommandExecutor.runSshCommand(
-                        userDroplet.ipAddress,
-                        "echo y | openclaw agents delete ${agent.id}"
-                    )
+                    runAgentCommand(userDroplet, "openclaw agents delete ${singleQuote(agent.id)} --force")
                     logger.info("Rollback successful: agent '${agent.id}' deleted")
                 }.onFailure { rollbackError ->
                     logger.error("Rollback failed for agent '${agent.id}': ${rollbackError.message}")
@@ -126,10 +130,10 @@ class DropletConfigurationServiceImpl(
 
     override suspend fun deleteAgent(userId: String, name: String): String {
         val userDroplet = validateAndGetDroplet(userId, name)
-        val command = "openclaw agents delete $name --force"
+        val command = "openclaw agents delete ${singleQuote(name)} --force"
         logger.info("Deleting OpenClaw agent '$name' on droplet ${userDroplet.dropletId}")
         val output = try {
-            sshCommandExecutor.runSshCommandOnce(userDroplet.ipAddress, command)
+            runAgentCommand(userDroplet, command, singleAttempt = true)
         } catch (e: Exception) {
             if (e.message.orEmpty().contains("not found", ignoreCase = true)) {
                 logger.warn("Agent '$name' not found in openclaw registry, proceeding with cleanup")
@@ -138,7 +142,7 @@ class DropletConfigurationServiceImpl(
         }
 
         val workspacePath = "/home/openclaw/.openclaw/workspace-$name"
-        sshCommandExecutor.runSshCommand(userDroplet.ipAddress, "rm -rf $workspacePath")
+        runAgentCommand(userDroplet, "rm -rf ${singleQuote(workspacePath)}")
         logger.info("Deleted workspace '$workspacePath' on droplet ${userDroplet.dropletId}")
 
         val client = userClientProvider.getClient(userDroplet.resolveSupabaseUrl(), userDroplet.supabaseServiceKey, userDroplet.supabaseSchema)
@@ -159,5 +163,41 @@ class DropletConfigurationServiceImpl(
         }
 
         return userDroplet
+    }
+
+    private fun runAgentCommand(userDroplet: UserDropletInternal, command: String, singleAttempt: Boolean = false): String {
+        val hostCommand = if (userDroplet.isDockerDeployment()) {
+            val containerId = userDroplet.containerIdOrNull()
+                ?: throw IllegalStateException("Missing container ID for docker deployment")
+            "docker exec ${singleQuote(containerId)} su - openclaw -s /bin/sh -lc ${singleQuote(command)}"
+        } else {
+            command
+        }
+
+        return if (singleAttempt) {
+            sshCommandExecutor.runSshCommandOnce(userDroplet.ipAddress, hostCommand)
+        } else {
+            sshCommandExecutor.runSshCommand(userDroplet.ipAddress, hostCommand)
+        }
+    }
+
+    private fun validateModel(model: String): String {
+        if (!SAFE_MODEL_REGEX.matches(model)) {
+            throw IllegalArgumentException("Invalid model. Use only letters, numbers, ., _, :, / and -")
+        }
+        return model
+    }
+
+    private fun validateRelativePath(path: String, label: String): String {
+        val normalized = path.trim().replace('\\', '/')
+        if (
+            normalized.isBlank() ||
+            normalized.startsWith("/") ||
+            normalized.split('/').any { it == ".." } ||
+            !SAFE_RELATIVE_PATH_REGEX.matches(normalized)
+        ) {
+            throw IllegalArgumentException("Invalid $label")
+        }
+        return normalized
     }
 }

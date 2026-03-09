@@ -28,10 +28,15 @@ data class UserDropletInternal(
     val supabaseServiceKey: String = "",  // User's Supabase service role key
     val supabaseUrl: String = "",         // Full Supabase base URL (empty = derive from supabaseProjectRef for hosted)
     val supabaseSchema: String = "public", // PostgREST schema to query (hosted: "public"; self-hosted: schema name)
-    val configuredMcpTools: List<String> = listOf("supabase") // MCP tools configured on this VPS
+    val configuredMcpTools: List<String> = listOf("supabase"), // MCP tools configured on this VPS
+    val deploymentMode: String = ""       // "vps" or "docker"
 ) {
+    companion object {
+        private val CONTAINER_ID_REGEX = Regex("^[a-f0-9]{12,64}$")
+    }
+
     // No-arg constructor for Firestore deserialization
-    constructor() : this("", 0, "", "", "", "", "", "", "", null, "", "active", true, "", "", "", "public", listOf("supabase"))
+    constructor() : this("", 0, "", "", "", "", "", "", "", null, "", "active", true, "", "", "", "public", listOf("supabase"), "")
 
     /**
      * Resolves the full Supabase base URL.
@@ -39,6 +44,15 @@ data class UserDropletInternal(
      * For self-hosted: uses the stored supabaseUrl directly.
      */
     fun resolveSupabaseUrl(): String = supabaseUrl.ifBlank { "https://$supabaseProjectRef.supabase.co" }
+
+    fun isDockerDeployment(): Boolean =
+        deploymentMode.equals("docker", ignoreCase = true) ||
+            (deploymentMode.isBlank() && CONTAINER_ID_REGEX.matches(dropletName.trim()))
+
+    fun containerIdOrNull(): String? {
+        val candidate = dropletName.trim()
+        return candidate.takeIf { isDockerDeployment() && CONTAINER_ID_REGEX.matches(it) }
+    }
 
     /**
      * Convert to client-safe UserDroplet (without vpsGatewayUrl)

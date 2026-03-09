@@ -6,9 +6,13 @@ import com.google.cloud.firestore.DocumentSnapshot
 import com.google.cloud.firestore.FieldValue
 import com.google.cloud.firestore.QuerySnapshot
 import com.google.cloud.firestore.SetOptions
+import com.suprbeta.core.CryptoOperationException
 import com.suprbeta.digitalocean.models.ProvisioningStatus
 import com.suprbeta.digitalocean.models.UserDroplet
 import com.suprbeta.digitalocean.models.UserDropletInternal
+import com.suprbeta.docker.models.HostInfo
+import com.suprbeta.usage.CreditCalculator
+import com.suprbeta.usage.DailyUsageData
 import com.suprbeta.websocket.models.TokenUsageDelta
 import io.ktor.server.application.*
 import kotlinx.coroutines.Dispatchers
@@ -23,7 +27,8 @@ private suspend fun <T> ApiFuture<T>.await(): T = withContext(Dispatchers.IO) {
 
 class FirestoreRepository(
     private val firestore: Firestore,
-    private val application: Application
+    private val application: Application,
+    private val cryptoService: com.suprbeta.core.CryptoService
 ) {
     companion object {
         private const val PROVISIONING_COLLECTION = "provisioning_status"
@@ -33,6 +38,8 @@ class FirestoreRepository(
         private const val USER_USAGE_SUBCOLLECTION = "usage"
         private const val USER_MESSAGE_QUEUE_SUBCOLLECTION = "message_queue"
         private const val PROJECT_REFS_COLLECTION = "supabase_project_refs"
+        private const val HOSTS_COLLECTION = "hosts"
+        private const val USER_HOST_MAPPINGS_COLLECTION = "user_host_mappings"
     }
 
     data class QueuedMessage(val docId: String, val payload: String)
@@ -187,6 +194,24 @@ class FirestoreRepository(
 
     // ==================== User Droplets Operations ====================
 
+    private fun encryptDroplet(droplet: UserDropletInternal): UserDropletInternal {
+        return droplet.copy(
+            gatewayToken = cryptoService.encrypt(droplet.gatewayToken, droplet.userId),
+            hookToken = cryptoService.encrypt(droplet.hookToken, droplet.userId),
+            sshKey = cryptoService.encrypt(droplet.sshKey, droplet.userId),
+            supabaseServiceKey = cryptoService.encrypt(droplet.supabaseServiceKey, droplet.userId)
+        )
+    }
+
+    private fun decryptDroplet(droplet: UserDropletInternal): UserDropletInternal {
+        return droplet.copy(
+            gatewayToken = cryptoService.decrypt(droplet.gatewayToken, droplet.userId),
+            hookToken = cryptoService.decrypt(droplet.hookToken, droplet.userId),
+            sshKey = cryptoService.decrypt(droplet.sshKey, droplet.userId),
+            supabaseServiceKey = cryptoService.decrypt(droplet.supabaseServiceKey, droplet.userId)
+        )
+    }
+
     /**
      * Saves or updates a user's droplet information (internal version with VPS URL)
      * One user can have only one droplet
@@ -201,7 +226,8 @@ class FirestoreRepository(
                 .collection(USER_DROPLETS_SUBCOLLECTION)
                 .document(dropletDocId)
 
-            docRef.set(droplet).await()
+            val encryptedDroplet = encryptDroplet(droplet)
+            docRef.set(encryptedDroplet).await()
 
             if (droplet.supabaseProjectRef.isNotBlank()) {
                 saveProjectRefMapping(droplet.supabaseProjectRef, droplet.userId)
@@ -244,13 +270,16 @@ class FirestoreRepository(
             val snapshot: DocumentSnapshot = docRef.get().await()
 
             if (snapshot.exists()) {
-                val droplet = snapshot.toObject(UserDropletInternal::class.java)
+                val droplet = snapshot.toObject(UserDropletInternal::class.java)?.let { decryptDroplet(it) }
                 application.log.debug("Found droplet for user $userId: dropletId=${droplet?.dropletId}, doc=${dropletDoc.id}")
                 droplet
             } else {
                 application.log.debug("No droplet found for user: $userId")
                 null
             }
+        } catch (e: CryptoOperationException) {
+            application.log.error("Failed to decrypt user droplet for user $userId", e)
+            throw e
         } catch (e: Exception) {
             application.log.error("Failed to fetch user droplet for user $userId", e)
             null
@@ -422,6 +451,9 @@ class FirestoreRepository(
                 .await()
             val userId = doc.getString("userId") ?: return null
             getUserDropletInternal(userId)
+        } catch (e: CryptoOperationException) {
+            application.log.error("Failed to decrypt project ref mapping for $projectRef", e)
+            throw e
         } catch (e: Exception) {
             application.log.error("Failed to look up droplet for projectRef $projectRef", e)
             null
@@ -441,6 +473,86 @@ class FirestoreRepository(
         }
     }
 
+    suspend fun getDailyTokenUsage(userId: String, dayUtc: String): Long {
+        return try {
+            val docRef = firestore.collection(USERS)
+                .document(userId)
+                .collection(USER_USAGE_SUBCOLLECTION)
+                .document(dayUtc)
+
+            val snapshot = docRef.get().await()
+            if (snapshot.exists()) {
+                snapshot.getLong("totalTokens") ?: 0L
+            } else {
+                0L
+            }
+        } catch (e: Exception) {
+            application.log.error("Failed to fetch daily token usage for user $userId day $dayUtc", e)
+            0L
+        }
+    }
+
+    /**
+     * Retrieves daily credit usage for a specific user and day.
+     * Credits are weighted: input=1x, output=2x, 1000 tokens = 1 credit
+     */
+    suspend fun getDailyCreditUsage(userId: String, dayUtc: String): Long {
+        return try {
+            val docRef = firestore.collection(USERS)
+                .document(userId)
+                .collection(USER_USAGE_SUBCOLLECTION)
+                .document(dayUtc)
+
+            val snapshot = docRef.get().await()
+            if (snapshot.exists()) {
+                snapshot.getLong("credits") ?: 0L
+            } else {
+                0L
+            }
+        } catch (e: Exception) {
+            application.log.error("Failed to fetch daily credit usage for user $userId day $dayUtc", e)
+            0L
+        }
+    }
+
+    /**
+     * Retrieves detailed daily usage data for a specific user and day.
+     * Returns null if no usage data exists for that day.
+     */
+    suspend fun getDailyUsageDetail(userId: String, dayUtc: String): DailyUsageData? {
+        return try {
+            val docRef = firestore.collection(USERS)
+                .document(userId)
+                .collection(USER_USAGE_SUBCOLLECTION)
+                .document(dayUtc)
+
+            val snapshot = docRef.get().await()
+            if (snapshot.exists()) {
+                DailyUsageData(
+                    userId = snapshot.getString("userId") ?: userId,
+                    dayUtc = snapshot.getString("dayUtc") ?: dayUtc,
+                    promptTokens = snapshot.getLong("promptTokens") ?: 0L,
+                    completionTokens = snapshot.getLong("completionTokens") ?: 0L,
+                    totalTokens = snapshot.getLong("totalTokens") ?: 0L,
+                    inboundPromptTokens = snapshot.getLong("inboundPromptTokens") ?: 0L,
+                    inboundCompletionTokens = snapshot.getLong("inboundCompletionTokens") ?: 0L,
+                    inboundTotalTokens = snapshot.getLong("inboundTotalTokens") ?: 0L,
+                    outboundPromptTokens = snapshot.getLong("outboundPromptTokens") ?: 0L,
+                    outboundCompletionTokens = snapshot.getLong("outboundCompletionTokens") ?: 0L,
+                    outboundTotalTokens = snapshot.getLong("outboundTotalTokens") ?: 0L,
+                    usageEvents = snapshot.getLong("usageEvents") ?: 0L,
+                    lastSessionId = snapshot.getString("lastSessionId") ?: "",
+                    credits = snapshot.getLong("credits") ?: 0L
+                )
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            application.log.error("Failed to fetch daily usage detail for user $userId day $dayUtc", e)
+            null
+        }
+    }
+
     suspend fun incrementUserTokenUsageDaily(
         userId: String,
         dayUtc: String,
@@ -448,6 +560,9 @@ class FirestoreRepository(
         sessionId: String
     ) {
         if (delta.isZero()) return
+
+        // Calculate credits: (input * 1 + output * 2) / 1000
+        val credits = CreditCalculator.toCredits(delta)
 
         try {
             firestore.collection(USERS)
@@ -469,7 +584,8 @@ class FirestoreRepository(
                         "outboundPromptTokens" to FieldValue.increment(delta.outboundPromptTokens),
                         "outboundCompletionTokens" to FieldValue.increment(delta.outboundCompletionTokens),
                         "outboundTotalTokens" to FieldValue.increment(delta.outboundTotalTokens),
-                        "usageEvents" to FieldValue.increment(delta.usageEvents)
+                        "usageEvents" to FieldValue.increment(delta.usageEvents),
+                        "credits" to FieldValue.increment(credits)
                     ),
                     SetOptions.merge()
                 )
@@ -480,6 +596,191 @@ class FirestoreRepository(
                 e
             )
             throw e
+        }
+    }
+
+    // ==================== Host Management Operations (Docker Multi-Tenant) ====================
+
+    /**
+     * Saves or updates host information for Docker multi-tenant architecture.
+     */
+    suspend fun saveHostInfo(hostInfo: com.suprbeta.docker.models.HostInfo) {
+        try {
+            application.log.info("Saving host info: ${hostInfo.hostId}")
+            firestore.collection(HOSTS_COLLECTION)
+                .document(hostInfo.hostId.toString())
+                .set(hostInfo)
+                .await()
+            application.log.info("✅ Host info saved: ${hostInfo.hostId}")
+        } catch (e: Exception) {
+            application.log.error("Failed to save host info: ${hostInfo.hostId}", e)
+            throw e
+        }
+    }
+
+    /**
+     * Retrieves host information by host ID.
+     */
+    suspend fun getHostInfo(hostId: Long): com.suprbeta.docker.models.HostInfo? {
+        return try {
+            application.log.debug("Fetching host info: $hostId")
+            val snapshot = firestore.collection(HOSTS_COLLECTION)
+                .document(hostId.toString())
+                .get()
+                .await()
+            
+            if (snapshot.exists()) {
+                snapshot.toObject(com.suprbeta.docker.models.HostInfo::class.java)
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            application.log.error("Failed to fetch host info: $hostId", e)
+            null
+        }
+    }
+
+    /**
+     * Lists all hosts.
+     */
+    suspend fun listHosts(): List<com.suprbeta.docker.models.HostInfo> {
+        return try {
+            application.log.debug("Fetching all hosts")
+            val snapshot = firestore.collection(HOSTS_COLLECTION).get().await()
+            snapshot.documents.mapNotNull { 
+                it.toObject(com.suprbeta.docker.models.HostInfo::class.java) 
+            }
+        } catch (e: Exception) {
+            application.log.error("Failed to fetch hosts", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * Atomically increments container count on a host and updates its status.
+     * Uses a Firestore transaction to avoid the read-modify-write race condition.
+     */
+    suspend fun incrementHostContainerCount(hostId: Long, totalCapacity: Int) {
+        try {
+            val docRef = firestore.collection(HOSTS_COLLECTION).document(hostId.toString())
+            firestore.runTransaction { transaction ->
+                val snapshot = transaction.get(docRef).get()
+                val newCount = (snapshot.getLong("currentContainers") ?: 0L) + 1
+                val newStatus = if (newCount >= totalCapacity) HostInfo.STATUS_FULL else HostInfo.STATUS_ACTIVE
+                transaction.update(docRef, mapOf("currentContainers" to newCount, "status" to newStatus))
+            }.await()
+        } catch (e: Exception) {
+            application.log.error("Failed to increment container count for host $hostId", e)
+            throw e
+        }
+    }
+
+    /**
+     * Atomically decrements container count on a host and marks it active.
+     * Uses a Firestore transaction to avoid the read-modify-write race condition.
+     */
+    suspend fun decrementHostContainerCount(hostId: Long) {
+        try {
+            val docRef = firestore.collection(HOSTS_COLLECTION).document(hostId.toString())
+            firestore.runTransaction { transaction ->
+                val snapshot = transaction.get(docRef).get()
+                val newCount = ((snapshot.getLong("currentContainers") ?: 1L) - 1).coerceAtLeast(0)
+                transaction.update(docRef, mapOf("currentContainers" to newCount, "status" to HostInfo.STATUS_ACTIVE))
+            }.await()
+        } catch (e: Exception) {
+            application.log.error("Failed to decrement container count for host $hostId", e)
+            throw e
+        }
+    }
+
+    /**
+     * Saves user-to-host mapping.
+     */
+    suspend fun saveUserHostMapping(userId: String, hostId: Long) {
+        try {
+            application.log.info("Saving user-host mapping: $userId -> $hostId")
+            firestore.collection(USER_HOST_MAPPINGS_COLLECTION)
+                .document(userId)
+                .set(mapOf("hostId" to hostId, "updatedAt" to FieldValue.serverTimestamp()))
+                .await()
+        } catch (e: Exception) {
+            application.log.error("Failed to save user-host mapping: $userId -> $hostId", e)
+            throw e
+        }
+    }
+
+    /**
+     * Retrieves host ID for a user.
+     */
+    suspend fun getUserHostMapping(userId: String): Long? {
+        return try {
+            application.log.debug("Fetching host mapping for user: $userId")
+            val snapshot = firestore.collection(USER_HOST_MAPPINGS_COLLECTION)
+                .document(userId)
+                .get()
+                .await()
+            
+            if (snapshot.exists()) {
+                snapshot.getLong("hostId")
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            application.log.error("Failed to fetch user-host mapping: $userId", e)
+            null
+        }
+    }
+
+    /**
+     * Deletes user-to-host mapping.
+     */
+    suspend fun deleteUserHostMapping(userId: String) {
+        try {
+            application.log.info("Deleting user-host mapping: $userId")
+            firestore.collection(USER_HOST_MAPPINGS_COLLECTION)
+                .document(userId)
+                .delete()
+                .await()
+        } catch (e: Exception) {
+            application.log.error("Failed to delete user-host mapping: $userId", e)
+        }
+    }
+
+    // ==================== Admin Operations ====================
+
+    /**
+     * Lists all known user IDs from the top-level users collection.
+     */
+    suspend fun listUserIds(): List<String> {
+        return try {
+            val snapshot = firestore.collection(USERS).get().await()
+            snapshot.documents.map { it.id }
+        } catch (e: Exception) {
+            application.log.error("Failed to list user IDs", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * Lists all user droplet documents across every user.
+     *
+     * This reads raw internal droplet documents without decrypting fields so it can
+     * be used for admin inventory views that only need non-secret metadata.
+     */
+    suspend fun listAllUserDropletsInternal(): List<UserDropletInternal> {
+        return try {
+            val snapshot = firestore.collectionGroup(USER_DROPLETS_SUBCOLLECTION).get().await()
+            snapshot.documents.mapNotNull { doc ->
+                try {
+                    doc.toObject(UserDropletInternal::class.java)
+                } catch (e: Exception) {
+                    application.log.warn("Failed to deserialize user droplet document ${doc.reference.path}", e)
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            application.log.error("Failed to list all user droplets", e)
+            emptyList()
         }
     }
 }

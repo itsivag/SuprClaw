@@ -23,7 +23,7 @@ class FirebaseService(
     private val projectId = dotenv["FIREBASE_PROJECT_ID"]
         ?: throw IllegalStateException("FIREBASE_PROJECT_ID not found in environment")
 
-    private val firebaseApp: FirebaseApp
+    val firebaseApp: FirebaseApp
 
     init {
         application.log.info("Initializing Firebase with project: $projectId")

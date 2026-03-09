@@ -1,7 +1,22 @@
 #cloud-config
 ssh_pwauth: true
 
+write_files:
+  - path: /etc/ssh/ssh_host_ed25519_key
+    owner: root:root
+    permissions: '0600'
+    content: |
+{{HOST_SSH_PRIVATE_KEY}}
+  - path: /etc/ssh/ssh_host_ed25519_key.pub
+    owner: root:root
+    permissions: '0644'
+    content: |
+{{HOST_SSH_PUBLIC_KEY}}
+
 chpasswd:
   expire: false
   list:
     - openclaw:{{PASSWORD}}
+
+runcmd:
+  - systemctl restart ssh || systemctl restart sshd || true

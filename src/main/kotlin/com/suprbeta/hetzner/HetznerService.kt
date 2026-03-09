@@ -20,7 +20,6 @@ import io.ktor.server.application.*
  *   HETZNER_API_TOKEN       — Hetzner Cloud API token
  *
  * Optional environment variables:
- *   HETZNER_IMAGE           — Server image name or snapshot ID (default: ubuntu-22.04)
  *   HETZNER_SERVER_TYPE     — Server type slug (default: cx22 ≈ 2 vCPU / 4 GB RAM)
  *   HETZNER_LOCATION        — Datacenter location code (default: ash = Ashburn, US)
  *   HETZNER_SSH_KEY_IDS     — Comma-separated numeric SSH key IDs registered in Hetzner
@@ -45,24 +44,25 @@ class HetznerService(
     private val apiToken: String = dotenv["HETZNER_API_TOKEN"]
         ?: throw IllegalStateException("HETZNER_API_TOKEN not found in environment")
 
-    private val image: String = dotenv["HETZNER_IMAGE"] ?: DEFAULT_IMAGE
     private val serverType: String = dotenv["HETZNER_SERVER_TYPE"] ?: DEFAULT_SERVER_TYPE
     private val location: String = dotenv["HETZNER_LOCATION"] ?: DEFAULT_LOCATION
+
+    private val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
 
     private val sshKeys: List<Long>? = dotenv["HETZNER_SSH_KEY_IDS"]
         ?.split(",")
         ?.mapNotNull { it.trim().toLongOrNull() }
         ?.takeIf { it.isNotEmpty() }
 
-    override suspend fun createServer(name: String, password: String): VpsService.ServerCreateResult {
-        application.log.info("Creating Hetzner server: $name (type=$serverType, location=$location, image=$image)")
+    override suspend fun createServer(name: String, password: String, userDataOverride: String?): VpsService.ServerCreateResult {
+        application.log.info("Creating Hetzner server: $name (type=$serverType, location=$location, image=$DEFAULT_IMAGE)")
 
-        val userData = UserDataGenerator.generateBootstrapUserData(password)
+        val userData = userDataOverride ?: UserDataGenerator.generateBootstrapUserData(password)
 
         val request = CreateServerRequest(
             name = name,
             server_type = serverType,
-            image = image,
+            image = DEFAULT_IMAGE,
             location = location,
             user_data = userData,
             ssh_keys = sshKeys,
@@ -80,8 +80,7 @@ class HetznerService(
         }
         val rawBody = httpResponse.body<String>()
         application.log.info("Hetzner create server response [${httpResponse.status}]: $rawBody")
-        val response = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-            .decodeFromString(CreateServerResponse.serializer(), rawBody)
+        val response = json.decodeFromString(CreateServerResponse.serializer(), rawBody)
 
         val serverId = response.server?.id
             ?: throw IllegalStateException("Hetzner did not return a server ID")

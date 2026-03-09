@@ -1,6 +1,8 @@
 package com.suprbeta.digitalocean
 
 import com.suprbeta.config.AppConfig
+import com.suprbeta.core.ShellEscaping.requireUuid
+import com.suprbeta.core.ShellEscaping.singleQuote
 import com.suprbeta.core.SshCommandExecutor
 import com.suprbeta.digitalocean.models.ProvisioningStatus
 import com.suprbeta.digitalocean.models.AgentInsert
@@ -20,11 +22,16 @@ import io.ktor.websocket.*
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.net.InetAddress
+import java.net.UnknownHostException
+import java.security.SecureRandom
 import java.time.Instant
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
@@ -43,7 +50,7 @@ interface DropletProvisioningService {
         val password: String
     )
 
-    suspend fun createAndProvision(name: String): CreateResult
+    suspend fun createAndProvision(name: String, userId: String): CreateResult
 
     suspend fun provisionDroplet(
         dropletId: Long,
@@ -52,6 +59,8 @@ interface DropletProvisioningService {
     ): UserDroplet
 
     fun getStatus(dropletId: Long): ProvisioningStatus?
+
+    fun getStatusForUser(dropletId: Long, userId: String): ProvisioningStatus?
 
     suspend fun teardown(userId: String)
 }
@@ -74,12 +83,15 @@ class DropletProvisioningServiceImpl(
 
     /** In-memory status map keyed by droplet ID. */
     val statuses = ConcurrentHashMap<Long, ProvisioningStatus>()
+    private val statusOwners = ConcurrentHashMap<Long, String>()
+    private val provisioningIdsByUser = ConcurrentHashMap<String, Long>()
 
     companion object {
         private const val GATEWAY_PORT = 18789
         private const val POLL_INTERVAL_MS = 5_000L
         private const val MAX_POLL_WAIT_MS = 300_000L       // 5 minutes for droplet to become active
-        private const val GATEWAY_VERIFY_TIMEOUT_S = 30
+        private const val DNS_PROPAGATION_TIMEOUT_MS = 120_000L
+        private val secureRandom = SecureRandom()
 
         // Progress values for each phase (0.0 to 1.0)
         private val PHASE_PROGRESS = mapOf(
@@ -101,7 +113,23 @@ class DropletProvisioningServiceImpl(
      * Creates the droplet and returns info needed to kick off provisioning.
      * The returned password is held in memory only until SSH completes.
      */
-    override suspend fun createAndProvision(name: String): DropletProvisioningService.CreateResult {
+    override suspend fun createAndProvision(name: String, userId: String): DropletProvisioningService.CreateResult {
+        val existingDroplet = firestoreRepository.getUserDropletInternal(userId)
+        if (existingDroplet != null && existingDroplet.userId.isNotBlank()) {
+            throw IllegalStateException("User already has a droplet")
+        }
+
+        val existingProvisioningId = provisioningIdsByUser[userId]
+        if (existingProvisioningId != null) {
+            val existingStatus = statuses[existingProvisioningId]
+            if (existingStatus != null &&
+                existingStatus.phase != ProvisioningStatus.PHASE_COMPLETE &&
+                existingStatus.phase != ProvisioningStatus.PHASE_FAILED
+            ) {
+                throw IllegalStateException("Provisioning already in progress for user")
+            }
+        }
+
         val password = UserDataGenerator.generatePassword()
 
         val sanitizedName = name.lowercase().replace(Regex("[^a-z0-9-]"), "-")
@@ -117,6 +145,8 @@ class DropletProvisioningServiceImpl(
             started_at = Instant.now().toString()
         )
         statuses[dropletId] = status
+        statusOwners[dropletId] = userId
+        provisioningIdsByUser[userId] = dropletId
 
         return DropletProvisioningService.CreateResult(dropletId, status, password)
     }
@@ -135,9 +165,10 @@ class DropletProvisioningServiceImpl(
             // Phase 2 — Wait for active + IP and create Supabase project in parallel
             updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_ACTIVE, "Polling VPS provider API and creating Supabase project...")
 
-            var ipAddress: String? = null
-            var serviceKey: String? = null
-            var resolvedSupabaseUrl: String? = null
+            val resolvedIp: String
+            val resolvedProjectRef: String
+            val resolvedServiceKey: String
+            val resolvedSupabaseEndpoint: String
 
             coroutineScope {
                 val waitForActiveDeferred = async { waitForDropletReady(dropletId) }
@@ -150,17 +181,13 @@ class DropletProvisioningServiceImpl(
                     Triple(result.projectRef, sk, result.endpoint)
                 }
 
-                ipAddress = waitForActiveDeferred.await()
+                resolvedIp = waitForActiveDeferred.await()
                 val (pRef, sk, endpoint) = createProjectDeferred.await()
-                projectRef = pRef
-                serviceKey = sk
-                resolvedSupabaseUrl = endpoint
+                resolvedProjectRef = pRef
+                resolvedServiceKey = sk
+                resolvedSupabaseEndpoint = endpoint
             }
-
-            val resolvedIp = ipAddress!!
-            val resolvedProjectRef = projectRef!!
-            val resolvedServiceKey = serviceKey!!
-            val resolvedSupabaseEndpoint = resolvedSupabaseUrl!!
+            projectRef = resolvedProjectRef
 
             logger.info("Droplet $dropletId active at $resolvedIp, Supabase project $resolvedProjectRef ready")
 
@@ -171,6 +198,14 @@ class DropletProvisioningServiceImpl(
             // Phase 3b — Wait for cloud-init to apply password (deterministic probe)
             updateStatus(dropletId, ProvisioningStatus.PHASE_WAITING_SSH, "Waiting for cloud-init to finish (probing SSH auth)...")
             sshCommandExecutor.waitForSshAuth(resolvedIp)
+            sshCommandExecutor.runSshCommand(
+                resolvedIp,
+                "sudo install -d -m 755 /etc/ssh/sshd_config.d && " +
+                    "printf '%s\n' 'PasswordAuthentication no' 'KbdInteractiveAuthentication no' | " +
+                    "sudo tee /etc/ssh/sshd_config.d/99-suprclaw-hardening.conf > /dev/null && " +
+                    "(sudo systemctl reload ssh || sudo systemctl reload sshd || true)"
+            )
+            logger.info("Disabled SSH password authentication for droplet $dropletId")
 
             // Phase 4 — Configuration (gateway token + hook token)
             updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Configuring gateway token...")
@@ -187,7 +222,7 @@ class DropletProvisioningServiceImpl(
             delay(2000)
             sshCommandExecutor.runSshCommand(resolvedIp, "XDG_RUNTIME_DIR=/run/user/\$(id -u) systemctl --user daemon-reload 2>/dev/null || true")
 
-            logger.info("Gateway token set for droplet $dropletId: $gatewayToken")
+            logger.info("Gateway token configured for droplet $dropletId")
 
             // Phase 4b — Write MCP credentials and start system services
             updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Configuring MCP credentials and starting services...")
@@ -204,13 +239,18 @@ class DropletProvisioningServiceImpl(
             sshCommandExecutor.runSshCommand(resolvedIp, "nohup openclaw doctor --fix > /tmp/openclaw-doctor.log 2>&1 &")
             logger.info("MCP credentials written and services started for droplet $dropletId")
 
-            // Phase 6 — DNS configuration (MANDATORY - fail if this fails)
-            updateStatus(dropletId, ProvisioningStatus.PHASE_DNS, "Creating DNS record...")
-            val sanitizedName = dropletName.lowercase().replace(Regex("[^a-z0-9-]"), "-")
-
-            // Create DNS record - this will throw if it fails, triggering cleanup
-            val subdomain = dnsProvider.createDnsRecord(sanitizedName, resolvedIp)
-            logger.info("✅ Subdomain configured: $subdomain")
+            val subdomain = if (AppConfig.sslEnabled) {
+                // Phase 6 — DNS configuration (MANDATORY - fail if this fails)
+                updateStatus(dropletId, ProvisioningStatus.PHASE_DNS, "Creating DNS record...")
+                val sanitizedName = dropletName.lowercase().replace(Regex("[^a-z0-9-]"), "-")
+                val configuredSubdomain = dnsProvider.createDnsRecord(sanitizedName, resolvedIp)
+                logger.info("✅ Subdomain configured: $configuredSubdomain")
+                waitForDnsResolution(configuredSubdomain, resolvedIp)
+                configuredSubdomain
+            } else {
+                logger.info("ℹ️ Skipping DNS setup (running in local mode)")
+                ""
+            }
 
             // Phase 7 — Gateway verification
             updateStatus(dropletId, ProvisioningStatus.PHASE_VERIFYING, "Verifying gateway status...")
@@ -261,7 +301,8 @@ class DropletProvisioningServiceImpl(
                 supabaseServiceKey = resolvedServiceKey,
                 supabaseUrl = resolvedSupabaseEndpoint,
                 supabaseSchema = resolvedSchema,
-                configuredMcpTools = McpToolRegistry.defaultTools
+                configuredMcpTools = McpToolRegistry.defaultTools,
+                deploymentMode = "vps"
             )
 
             // Save to Firestore + save agent — must all succeed before marking complete
@@ -313,7 +354,7 @@ class DropletProvisioningServiceImpl(
             // Clean up: delete the Supabase project if it was created
             if (projectRef != null) {
                 try {
-                    managementService.deleteProject(projectRef!!)
+                    managementService.deleteProject(projectRef)
                     logger.info("🗑️ Supabase project $projectRef deleted after provisioning failure")
                 } catch (deleteError: Exception) {
                     logger.error("Failed to delete Supabase project $projectRef: ${deleteError.message}")
@@ -341,6 +382,9 @@ class DropletProvisioningServiceImpl(
     }
 
     override fun getStatus(dropletId: Long): ProvisioningStatus? = statuses[dropletId]
+
+    override fun getStatusForUser(dropletId: Long, userId: String): ProvisioningStatus? =
+        statuses[dropletId]?.takeIf { statusOwners[dropletId] == userId }
 
     override suspend fun teardown(userId: String) {
         val droplet = firestoreRepository.getUserDropletInternal(userId)
@@ -383,7 +427,12 @@ class DropletProvisioningServiceImpl(
         }
 
         // 4 — Clear in-memory status
+        provisioningIdsByUser.remove(userId)?.let { provisioningId ->
+            statuses.remove(provisioningId)
+            statusOwners.remove(provisioningId)
+        }
         statuses.remove(droplet.dropletId)
+        statusOwners.remove(droplet.dropletId)
 
         if (errors.isNotEmpty()) {
             throw IllegalStateException("Teardown partially failed: ${errors.joinToString("; ")}")
@@ -419,7 +468,8 @@ class DropletProvisioningServiceImpl(
     // ── Phase 5 — Gateway verification ──────────────────────────────────
 
     private suspend fun verifyGateway(ipAddress: String) {
-        val deadline = System.currentTimeMillis() + (GATEWAY_VERIFY_TIMEOUT_S * 1000L)
+        val maxWaitSeconds = AppConfig.dockerGatewayReadyTimeoutSeconds
+        val deadline = System.currentTimeMillis() + (maxWaitSeconds * 1000L)
 
         while (System.currentTimeMillis() < deadline) {
             try {
@@ -432,7 +482,34 @@ class DropletProvisioningServiceImpl(
             }
         }
 
-        throw IllegalStateException("Gateway did not become ready within ${GATEWAY_VERIFY_TIMEOUT_S}s")
+        throw IllegalStateException("Gateway did not become ready within ${maxWaitSeconds}s")
+    }
+
+    private suspend fun waitForDnsResolution(hostname: String, expectedIp: String) {
+        val deadline = System.currentTimeMillis() + DNS_PROPAGATION_TIMEOUT_MS
+
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                val addresses = withContext(Dispatchers.IO) {
+                    InetAddress.getAllByName(hostname)
+                        .map { it.hostAddress }
+                        .distinct()
+                }
+
+                if (addresses.contains(expectedIp)) {
+                    logger.info("DNS propagated for $hostname -> ${addresses.joinToString(", ")}")
+                    return
+                }
+
+                logger.info("DNS for $hostname currently resolves to ${addresses.joinToString(", ")}; waiting for $expectedIp")
+            } catch (_: UnknownHostException) {
+                logger.info("DNS for $hostname is not resolvable yet; waiting...")
+            }
+
+            delay(2_000L)
+        }
+
+        throw IllegalStateException("DNS record $hostname did not resolve to $expectedIp within ${DNS_PROPAGATION_TIMEOUT_MS / 1000}s")
     }
 
     // ── Phase 7 — Nginx reverse proxy + SSL ────────────────────────────
@@ -619,8 +696,20 @@ server {
                         return
                     }
 
-                    sshCommandExecutor.runSshCommand(ipAddress, "openclaw devices approve $requestId")
-                    logger.info("Final pairing phase: approved requestId=$requestId for droplet $dropletId")
+                    val safeRequestId = runCatching {
+                        requireUuid(requestId, "pairing requestId")
+                    }.getOrNull()
+
+                    if (safeRequestId == null) {
+                        logger.warn("Final pairing phase: ignoring invalid requestId for droplet $dropletId")
+                        return
+                    }
+
+                    sshCommandExecutor.runSshCommand(
+                        ipAddress,
+                        "openclaw devices approve ${singleQuote(safeRequestId)}"
+                    )
+                    logger.info("Final pairing phase: approved requestId=$safeRequestId for droplet $dropletId")
                     return
                 }
             }
@@ -658,10 +747,9 @@ server {
      * Generates a cryptographically secure random gateway token
      */
     private fun generateGatewayToken(): String {
-        val chars = "abcdef0123456789"
-        return (1..48)
-            .map { chars.random() }
-            .joinToString("")
+        val bytes = ByteArray(24)
+        secureRandom.nextBytes(bytes)
+        return bytes.joinToString("") { "%02x".format(it) }
     }
 
 }

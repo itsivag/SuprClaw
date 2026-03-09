@@ -1,0 +1,104 @@
+#cloud-config
+# Docker multi-tenant host setup
+# Installs Docker + Traefik, creates openclaw user with provisioning SSH key.
+# Writes /var/run/suprclaw-host-ready when complete.
+
+users:
+  - name: openclaw
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - {{SSH_PUBLIC_KEY}}
+
+package_update: true
+package_upgrade: false
+
+packages:
+  - curl
+  - ca-certificates
+  - gnupg
+  - lsb-release
+  - jq
+  - ufw
+
+write_files:
+  - path: /etc/ssh/ssh_host_ed25519_key
+    owner: root:root
+    permissions: '0600'
+    content: |
+{{HOST_SSH_PRIVATE_KEY}}
+  - path: /etc/ssh/ssh_host_ed25519_key.pub
+    owner: root:root
+    permissions: '0644'
+    content: |
+{{HOST_SSH_PUBLIC_KEY}}
+  - path: /opt/traefik/traefik.yml
+    owner: root:root
+    permissions: '0644'
+    content: |
+      entryPoints:
+        web:
+          address: ":80"
+          http:
+            redirections:
+              entryPoint:
+                to: websecure
+                scheme: https
+                permanent: true
+        websecure:
+          address: ":443"
+        traefik:
+          address: ":8080"
+      api:
+        insecure: true
+        dashboard: true
+      providers:
+        file:
+          directory: /opt/traefik/dynamic
+          watch: true
+      log:
+        level: INFO
+        format: json
+      accessLog:
+        format: json
+      certificatesResolvers:
+        letsencrypt:
+          acme:
+            email: admin@suprclaw.com
+            storage: /opt/traefik/certs/acme.json
+            tlsChallenge: {}
+
+runcmd:
+  - systemctl restart ssh || systemctl restart sshd || true
+  # Install Docker
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  - chmod a+r /etc/apt/keyrings/docker.gpg
+  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list
+  - apt-get update -y
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  - systemctl enable docker
+  - systemctl start docker
+  # Add openclaw to docker group (group created by Docker install)
+  - usermod -aG docker openclaw
+  # Setup Traefik directories and permissions
+  - mkdir -p /opt/traefik/dynamic /opt/traefik/certs
+  - touch /opt/traefik/certs/acme.json
+  - chmod 600 /opt/traefik/certs/acme.json
+  - chown -R openclaw:openclaw /opt/traefik
+  # Setup log directory
+  - mkdir -p /var/log/suprclaw
+  - chown openclaw:openclaw /var/log/suprclaw
+  # Configure firewall
+  - ufw --force reset
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow OpenSSH
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw allow from 127.0.0.1 to any port 8080
+  - ufw --force enable
+  # Start Traefik
+  - docker run -d --name traefik --restart unless-stopped --network host -v /var/run/docker.sock:/var/run/docker.sock:ro -v /opt/traefik/traefik.yml:/etc/traefik/traefik.yml:ro -v /opt/traefik/dynamic:/opt/traefik/dynamic:ro -v /opt/traefik/certs:/opt/traefik/certs -e DOCKER_API_VERSION=1.47 -e TZ=UTC traefik:v3.0
+  # Sentinel: signals that Docker host setup is complete
+  - touch /var/run/suprclaw-host-ready

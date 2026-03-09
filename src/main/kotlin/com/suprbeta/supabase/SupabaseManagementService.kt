@@ -13,11 +13,13 @@ interface SupabaseManagementService {
     val managementToken: String
     val webhookBaseUrl: String
     val webhookSecret: String
+    suspend fun reconcileConfiguration() {}
     suspend fun createProject(name: String): ProjectResult
     suspend fun waitForProjectActive(projectRef: String)
     suspend fun getServiceKey(projectRef: String): String
     suspend fun runSql(projectRef: String, sql: String)
     suspend fun createDatabaseWebhook(projectRef: String)
+    suspend fun reloadSchemaCache(projectRef: String) {}
     suspend fun deleteProject(projectRef: String)
     /** For self-hosted: returns the schema name (== projectRef). */
     fun resolveSchema(projectRef: String): String

@@ -46,10 +46,10 @@ class DigitalOceanService(
      * Creates a droplet with minimal bootstrap user-data (only creates openclaw user).
      * The password is templated into cloud-config for SSH access during onboarding.
      */
-    suspend fun createDroplet(name: String, password: String): DropletResponse {
+    suspend fun createDroplet(name: String, password: String, userDataOverride: String? = null): DropletResponse {
         application.log.info("Creating DigitalOcean droplet: $name")
 
-        val userData = UserDataGenerator.generateBootstrapUserData(password)
+        val userData = userDataOverride ?: UserDataGenerator.generateBootstrapUserData(password)
 
         val request = CreateDropletRequest(
             name = name,
@@ -103,8 +103,8 @@ class DigitalOceanService(
 
     // ── VpsService implementation ────────────────────────────────────────────
 
-    override suspend fun createServer(name: String, password: String): VpsService.ServerCreateResult {
-        val response = createDroplet(name, password)
+    override suspend fun createServer(name: String, password: String, userDataOverride: String?): VpsService.ServerCreateResult {
+        val response = createDroplet(name, password, userDataOverride)
         val dropletId = response.droplet?.id
             ?: throw IllegalStateException("DigitalOcean did not return a droplet ID")
         return VpsService.ServerCreateResult(serverId = dropletId)

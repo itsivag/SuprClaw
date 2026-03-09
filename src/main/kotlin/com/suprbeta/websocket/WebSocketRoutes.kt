@@ -7,6 +7,7 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
 import io.ktor.websocket.*
+import kotlinx.coroutines.channels.ClosedReceiveChannelException
 
 /**
  * Configure WebSocket routes for the proxy
@@ -38,77 +39,56 @@ fun Application.configureWebSocketRoutes(
             }
 
             val platform = call.request.queryParameters["platform"]
+            val userTier = (user.customClaims["tier"] as? String)?.lowercase() ?: "free"
+            val userId = user.uid
 
-            logger.info("New WebSocket connection request for user: ${user.uid}")
+            logger.info("New WebSocket connection request for user: $userId (Tier: $userTier)")
 
-            // Create proxy session with verified user information
-            val session = sessionManager.createSession(
+            // Create or resume proxy session
+            val session = sessionManager.getOrCreateSession(
                 clientSession = this,
                 token = token,
                 platform = platform,
-                userId = user.uid,
+                userId = userId,
                 userEmail = user.email,
                 emailVerified = user.emailVerified,
-                authProvider = user.provider
+                authProvider = user.provider,
+                userTier = userTier
             )
 
             try {
-                // Establish connection to OpenClaw VPS
+                // Establish connection to OpenClaw VPS (noop if already connected)
                 val connected = sessionManager.establishOpenClawConnection(session)
 
                 if (!connected) {
-                    logger.error("Failed to establish OpenClaw connection for session ${session.sessionId}")
+                    logger.error("Failed to establish OpenClaw connection for user $userId")
                     close(CloseReason(CloseReason.Codes.INTERNAL_ERROR, "Failed to connect to OpenClaw VPS"))
-                    sessionManager.closeSession(session.sessionId)
+                    sessionManager.closeSession(userId)
                     return@webSocket
                 }
 
                 // Start bidirectional message forwarding
                 sessionManager.startMessageForwarding(session, this)
 
-                logger.info("Session ${session.sessionId} fully initialized and forwarding messages")
+                logger.info("Session ${session.sessionId} active for user $userId")
+                
+                // Wait for client to disconnect
                 closeReason.await()
 
+            } catch (e: ClosedReceiveChannelException) {
+                logger.info("Client disconnected normally for user $userId")
             } catch (e: Exception) {
-                logger.error("Error during WebSocket session ${session.sessionId}: ${e.message}", e)
-                sessionManager.closeSession(session.sessionId)
-                throw e
+                logger.error("Error during WebSocket session for user $userId: ${e.message}")
             } finally {
-                // Cleanup when connection closes
-                logger.info("WebSocket connection closed for session ${session.sessionId}")
-                sessionManager.closeSession(session.sessionId)
+                // Instead of closing the session, we trigger the offline grace period
+                logger.info("WebSocket connection closed for user $userId. Triggering offline grace period.")
+                sessionManager.handleClientDisconnect(userId, this)
             }
         }
 
         // Health check endpoint
         get("/ws/health") {
-            val activeSessionCount = sessionManager.getSessionCount()
-            val activeSessions = sessionManager.getActiveSessions()
-
-            val healthInfo = buildString {
-                appendLine("WebSocket Proxy Health")
-                appendLine("Active Sessions: $activeSessionCount")
-                appendLine()
-
-                if (activeSessions.isNotEmpty()) {
-                    appendLine("Session Details:")
-                    activeSessions.forEach { (sessionId, session) ->
-                        appendLine("  - $sessionId:")
-                        appendLine("    User ID: ${session.metadata.userId}")
-                        appendLine("    Email: ${session.metadata.userEmail ?: "none"}")
-                        appendLine("    Email Verified: ${session.metadata.emailVerified}")
-                        appendLine("    Auth Provider: ${session.metadata.authProvider ?: "unknown"}")
-                        appendLine("    Platform: ${session.metadata.platform ?: "unknown"}")
-                        appendLine("    Connected: ${session.metadata.connectedAt}")
-                        appendLine("    Messages Sent: ${session.metadata.getSentCount()}")
-                        appendLine("    Messages Received: ${session.metadata.getReceivedCount()}")
-                        appendLine("    OpenClaw Connected: ${session.isOpenClawConnected}")
-                        appendLine("    Forwarding Active: ${session.hasActiveForwarding()}")
-                    }
-                }
-            }
-
-            call.respondText(healthInfo, ContentType.Text.Plain, HttpStatusCode.OK)
+            call.respondText("OK", ContentType.Text.Plain, HttpStatusCode.OK)
         }
     }
 }

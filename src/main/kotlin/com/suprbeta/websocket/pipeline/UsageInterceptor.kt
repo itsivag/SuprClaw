@@ -1,6 +1,7 @@
 package com.suprbeta.websocket.pipeline
 
 import com.suprbeta.firebase.FirestoreRepository
+import com.suprbeta.usage.CreditCalculator
 import com.suprbeta.websocket.models.ProxySession
 import com.suprbeta.websocket.models.TokenUsageDelta
 import com.suprbeta.websocket.models.WebSocketFrame
@@ -52,11 +53,11 @@ class UsageInterceptor(
                         processWorkItem(workItem)
                     } catch (e: Exception) {
                         logger.error(
-                            "Usage processing failed for session ${workItem.sessionId}: ${e.message}",
+                            "Usage processing failed for session ${workItem.session.sessionId}: ${e.message}",
                             e
                         )
                     } finally {
-                        pendingQueueBySession[workItem.sessionId]?.decrementAndGet()
+                        pendingQueueBySession[workItem.session.sessionId]?.decrementAndGet()
                     }
                 }
             }
@@ -76,7 +77,7 @@ class UsageInterceptor(
         val agentId = extractAgentId(frame) ?: return InterceptorResult.Continue(frame)
 
         val workItem = UsageWorkItem(
-            sessionId = session.sessionId,
+            session = session,
             userId = userId,
             agentId = agentId,
             direction = direction,
@@ -114,26 +115,26 @@ class UsageInterceptor(
 
     private suspend fun processWorkItem(workItem: UsageWorkItem) {
         val model = resolveModel(workItem.userId, workItem.agentId)
-        val tokens = tokenCalculator.countFrameTokens(workItem.frame, model)
-        if (tokens <= 0L) return
+        val delta = tokenCalculator.extractTokenUsage(workItem.frame, model)
+        if (delta.isZero()) return
+
+        // Update in-memory counter immediately for rate-limiting (use credits)
+        val credits = CreditCalculator.toCredits(delta)
+        workItem.session.metadata.incrementWeeklyCredits(credits)
 
         val dayUtc = currentDayUtc()
-        val key = bufferKey(workItem.sessionId, dayUtc)
+        val key = bufferKey(workItem.session.sessionId, dayUtc)
         val buffer = sessionBuffers.computeIfAbsent(key) {
             SessionDayBuffer(userId = workItem.userId, dayUtc = dayUtc)
         }
 
         var snapshot: UsageSnapshot? = null
         buffer.mutex.withLock {
-            val delta = when (workItem.direction) {
-                MessageDirection.INBOUND -> TokenUsageDelta.inbound(tokens)
-                MessageDirection.OUTBOUND -> TokenUsageDelta.outbound(tokens)
-            }
             buffer.pending = buffer.pending.plus(delta)
             buffer.pendingEvents += delta.usageEvents.toInt()
 
             if (buffer.pendingEvents >= FLUSH_THRESHOLD) {
-                snapshot = buffer.createSnapshot(workItem.sessionId)
+                snapshot = buffer.createSnapshot(workItem.session.sessionId)
             }
         }
 
@@ -233,7 +234,7 @@ class UsageInterceptor(
     private fun bufferKey(sessionId: String, dayUtc: String): String = "$sessionId|$dayUtc"
 
     private data class UsageWorkItem(
-        val sessionId: String,
+        val session: ProxySession,
         val userId: String,
         val agentId: String,
         val direction: MessageDirection,

@@ -143,4 +143,16 @@ class SelfHostedSchemaIsolationTest {
         val adapted = SelfHostedSupabaseManagementService.adaptSqlForSchema(stmt, "proj_abc")
         assertEquals(stmt, adapted, "adaptSqlForSchema must not alter role drop statement")
     }
+
+    @Test
+    fun `buildUpdateConfiguredSchemasCommand recreates rest with reconciled schema list`() {
+        val command = SelfHostedSupabaseManagementService.buildUpdateConfiguredSchemasCommand(
+            "/opt/supabase/docker",
+            listOf("public", "storage", "graphql_public", "proj_abc")
+        )
+
+        assertTrue(command.contains("cd /opt/supabase/docker"))
+        assertTrue(command.contains("PGRST_DB_SCHEMAS=public,storage,graphql_public,proj_abc"))
+        assertTrue(command.contains("docker compose up -d --force-recreate rest"))
+    }
 }

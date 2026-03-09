@@ -19,8 +19,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
-import org.junit.Assume.assumeTrue
-import org.junit.Test
+import org.junit.jupiter.api.Assumptions.assumeTrue
+import org.junit.jupiter.api.Test
 import org.slf4j.LoggerFactory
 import java.util.Base64
 import kotlin.test.assertFalse
@@ -61,14 +61,16 @@ class ProvisioningMcpIntegrationTest {
      *   INTG_MCP_GATEWAY_TOKEN — gateway token written to mcp.env (default: intg-test-gateway-token)
      *   INTG_MCP_DROPLET_ID    — numeric server ID (default: 0, only used for UserDropletInternal)
      */
-    @Test(timeout = 10 * 60 * 1000L)
+    @org.junit.jupiter.api.Timeout(value = 10, unit = java.util.concurrent.TimeUnit.MINUTES)
+    @Test
     fun `MCP phase only`() {
         val dotenv = dotenv { ignoreIfMissing = true; directory = "." }
         fun env(k: String) = System.getenv(k) ?: dotenv[k] ?: ""
 
         val ip = env("INTG_MCP_IP")
         val schema = env("INTG_MCP_SCHEMA")
-        assumeTrue("Set INTG_MCP_IP and INTG_MCP_SCHEMA to run this test", ip.isNotBlank() && schema.isNotBlank())
+        assumeTrue(ip.isNotBlank() && schema.isNotBlank()) { "Set INTG_MCP_IP and INTG_MCP_SCHEMA to run this test" }
+        assumeSshTrustConfigured(::env)
 
         val gatewayToken = env("INTG_MCP_GATEWAY_TOKEN").ifBlank { "intg-test-gateway-token" }
         val dropletId = env("INTG_MCP_DROPLET_ID").toLongOrNull() ?: 0L
@@ -93,13 +95,15 @@ class ProvisioningMcpIntegrationTest {
 
     // ── Full provisioning test ────────────────────────────────────────────────
 
-    @Test(timeout = 25 * 60 * 1000L)
+    @org.junit.jupiter.api.Timeout(value = 25, unit = java.util.concurrent.TimeUnit.MINUTES)
+    @Test
     fun `full provisioning and MCP schema isolation`() {
         val dotenv = dotenv { ignoreIfMissing = true; directory = "." }
-        assumeTrue(
-            "Set INTEGRATION_TEST=true to run this test",
-            System.getenv("INTEGRATION_TEST") == "true" || dotenv["INTEGRATION_TEST"] == "true"
-        )
+        assumeTrue(System.getenv("INTEGRATION_TEST") == "true" || dotenv["INTEGRATION_TEST"] == "true") {
+            "Set INTEGRATION_TEST=true to run this test"
+        }
+        fun env(k: String) = System.getenv(k) ?: dotenv[k] ?: ""
+        assumeSshTrustConfigured(::env)
 
         val app = mockk<Application>(relaxed = true)
         val httpClient = HttpClient(CIO) {
@@ -364,5 +368,22 @@ class ProvisioningMcpIntegrationTest {
         log.info("[INTG] 7h PASS")
 
         log.info("[INTG] ✅ All MCP assertions passed")
+    }
+
+    private fun assumeSshTrustConfigured(env: (String) -> String) {
+        val hasProvisioningHostKey = env("PROVISIONING_SSH_HOST_PRIVATE_KEY_B64").isNotBlank() &&
+            env("PROVISIONING_SSH_HOST_PUBLIC_KEY").isNotBlank()
+        val hasProvisioningVerifier = env("PROVISIONING_SSH_HOST_FINGERPRINT").isNotBlank() ||
+            env("PROVISIONING_SSH_KNOWN_HOSTS").isNotBlank() ||
+            env("PROVISIONING_SSH_KNOWN_HOSTS_B64").isNotBlank()
+        val hasSelfHostedVerifier = env("SUPABASE_SELF_HOSTED_SSH_HOST_FINGERPRINT").isNotBlank() ||
+            env("SUPABASE_SELF_HOSTED_SSH_KNOWN_HOSTS").isNotBlank() ||
+            env("SUPABASE_SELF_HOSTED_SSH_KNOWN_HOSTS_B64").isNotBlank()
+
+        assumeTrue(
+            hasProvisioningHostKey && hasProvisioningVerifier && hasSelfHostedVerifier
+        ) {
+            "Set pinned provisioning host key env vars and self-hosted SSH verifier trust env vars before running this test"
+        }
     }
 }

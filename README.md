@@ -91,6 +91,16 @@ SUPABASE_REGION=us-east-1
 FIREBASE_PROJECT_ID=your_firebase_project_id
 FIREBASE_CREDENTIALS_PATH=/path/to/serviceAccountKey.json
 
+# Firebase Web SDK (Admin Page)
+FIREBASE_WEB_API_KEY=your_firebase_web_api_key
+FIREBASE_WEB_APP_ID=your_firebase_web_app_id
+# Optional: defaults to ${FIREBASE_PROJECT_ID}.firebaseapp.com when omitted
+FIREBASE_WEB_AUTH_DOMAIN=your-project.firebaseapp.com
+# Optional
+FIREBASE_WEB_MESSAGING_SENDER_ID=your_sender_id
+FIREBASE_WEB_STORAGE_BUCKET=your-project.appspot.com
+FIREBASE_WEB_MEASUREMENT_ID=G-XXXXXXXXXX
+
 # Webhooks
 WEBHOOK_BASE_URL=https://api.yourdomain.com
 WEBHOOK_SECRET=your_webhook_secret
@@ -147,10 +157,16 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for production deployment instructions.
 | `GET` | `/api/tasks/{id}` | Get task details |
 | `GET` | `/marketplace` | Browse agent marketplace |
 | `POST` | `/marketplace/{id}` | Install a marketplace agent |
+| `GET` | `/admin` | Admin webpage (Firebase Web login) |
+| `GET` | `/api/admin/config` | Firebase Web config for admin page bootstrap |
+| `GET` | `/api/admin/users?scope=provisioned|all` | Admin list of users, containers, and weekly usage |
+| `GET` | `/api/admin/metrics` | Admin live host/container resource metrics (CPU, memory, network) |
+| `DELETE` | `/api/admin/users/{userId}` | Admin teardown of a user's provisioned container |
 | `WS` | `/ws` | WebSocket proxy to user's VPS |
 | `GET` | `/health` | Health check |
 
 All `/api/*` and `/marketplace` routes require Firebase authentication (`Authorization: Bearer <firebase_id_token>`).
+Admin APIs under `/api/admin/*` additionally require Firebase custom claim `role=admin`.
 
 ## Tech Stack
 

@@ -23,6 +23,7 @@ import java.security.KeyPairGenerator
 import java.security.KeyFactory
 import java.security.MessageDigest
 import java.security.Signature
+import java.net.URI
 import java.util.Base64
 import java.util.Properties
 import java.security.spec.PKCS8EncodedKeySpec
@@ -74,7 +75,13 @@ class OpenClawConnector(
                 return session
 
             } catch (e: Exception) {
-                logger.error("Failed to connect to OpenClaw VPS at $vpsGatewayUrl (attempt ${attempt + 1}/$maxRetries): ${e.message}")
+                val host = runCatching { URI(vpsGatewayUrl).host }.getOrNull() ?: vpsGatewayUrl
+                val dnsHint = if (e.javaClass.simpleName == "UnresolvedAddressException") {
+                    " | dns: host $host could not be resolved"
+                } else {
+                    ""
+                }
+                logger.error("Failed to connect to OpenClaw VPS at $vpsGatewayUrl (attempt ${attempt + 1}/$maxRetries): [${e.javaClass.simpleName}] ${e.message}$dnsHint | cause: ${e.cause?.javaClass?.simpleName}: ${e.cause?.message}")
 
                 if (attempt < maxRetries - 1) {
                     delay(retryDelay)

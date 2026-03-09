@@ -4,7 +4,7 @@ import io.github.cdimascio.dotenv.dotenv
 import io.ktor.server.application.*
 import kotlinx.coroutines.delay
 import net.schmizz.sshj.SSHClient
-import net.schmizz.sshj.transport.verification.PromiscuousVerifier
+import net.schmizz.sshj.transport.verification.HostKeyVerifier
 import java.io.File
 import java.io.IOException
 import java.net.InetSocketAddress
@@ -18,6 +18,7 @@ class SshCommandExecutorImpl(
     private val logger = application.log
 
     private val dotenv = dotenv { ignoreIfMissing = true; directory = "." }
+    private val hostKeyVerifier: HostKeyVerifier by lazy { SshHostKeyVerifierFactory.createProvisioningVerifier(application) }
 
     private val privateKeyPem: String by lazy {
         val b64 = dotenv["PROVISIONING_SSH_PRIVATE_KEY_B64"]
@@ -74,7 +75,7 @@ class SshCommandExecutorImpl(
                 withKeyFile { keyFile ->
                     val ssh = SSHClient()
                     try {
-                        ssh.addHostKeyVerifier(PromiscuousVerifier())
+                        ssh.addHostKeyVerifier(hostKeyVerifier)
                         ssh.connectTimeout = SSH_CONNECT_TIMEOUT_MS
                         ssh.connect(ipAddress, SSH_PORT)
                         ssh.authPublickey(SSH_USER, ssh.loadKeys(keyFile.absolutePath))
@@ -117,7 +118,7 @@ class SshCommandExecutorImpl(
         withKeyFile { keyFile ->
             val ssh = SSHClient()
             try {
-                ssh.addHostKeyVerifier(PromiscuousVerifier())
+                ssh.addHostKeyVerifier(hostKeyVerifier)
                 ssh.connectTimeout = SSH_CONNECT_TIMEOUT_MS
                 ssh.connect(ipAddress, SSH_PORT)
                 ssh.authPublickey(SSH_USER, ssh.loadKeys(keyFile.absolutePath))

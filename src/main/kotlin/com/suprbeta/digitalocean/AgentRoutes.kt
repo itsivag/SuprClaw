@@ -16,6 +16,7 @@ import io.ktor.server.routing.*
 
 fun Application.configureAgentRoutes(
     configuringService: DropletConfigurationService,
+    workspaceService: AgentWorkspaceService,
     firestoreRepository: FirestoreRepository,
     agentRepository: SupabaseAgentRepository,
     userClientProvider: UserSupabaseClientProvider
@@ -47,6 +48,93 @@ fun Application.configureAgentRoutes(
                         )
                     } catch (e: Exception) {
                         log.error("Error fetching agents for user ${user.uid}", e)
+                        call.respond(
+                            HttpStatusCode.InternalServerError,
+                            mapOf("error" to (e.message ?: "Unknown error occurred"))
+                        )
+                    }
+                }
+
+                /**
+                 * GET /api/agents/{id}/{name}/files
+                 * Lists the allowlisted workspace files present for the requested agent.
+                 */
+                get("{id}/{name}/files") {
+                    val user = call.attributes[firebaseUserKey]
+
+                    try {
+                        val dropletId = call.requireOwnedDropletId(user.uid, firestoreRepository) ?: return@get
+                        val agentName = call.parameters["name"].orEmpty()
+                        if (agentName.isBlank()) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid agent name"))
+                            return@get
+                        }
+
+                        val response = workspaceService.listWorkspaceFiles(user.uid, dropletId, agentName)
+                        call.respond(HttpStatusCode.OK, response)
+                    } catch (e: IllegalArgumentException) {
+                        call.respond(
+                            HttpStatusCode.BadRequest,
+                            mapOf("error" to (e.message ?: "Invalid request"))
+                        )
+                    } catch (e: SecurityException) {
+                        call.respond(
+                            HttpStatusCode.Forbidden,
+                            mapOf("error" to (e.message ?: "Droplet does not belong to user"))
+                        )
+                    } catch (e: NoSuchElementException) {
+                        call.respond(
+                            HttpStatusCode.NotFound,
+                            mapOf("error" to (e.message ?: "Agent workspace not found"))
+                        )
+                    } catch (e: Exception) {
+                        log.error("Error listing workspace files for user ${user.uid}", e)
+                        call.respond(
+                            HttpStatusCode.InternalServerError,
+                            mapOf("error" to (e.message ?: "Unknown error occurred"))
+                        )
+                    }
+                }
+
+                /**
+                 * GET /api/agents/{id}/{name}/files/{fileName}
+                 * Returns a single allowlisted workspace file for the requested agent.
+                 */
+                get("{id}/{name}/files/{fileName}") {
+                    val user = call.attributes[firebaseUserKey]
+
+                    try {
+                        val dropletId = call.requireOwnedDropletId(user.uid, firestoreRepository) ?: return@get
+                        val agentName = call.parameters["name"].orEmpty()
+                        val fileName = call.parameters["fileName"].orEmpty()
+                        if (agentName.isBlank()) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid agent name"))
+                            return@get
+                        }
+                        if (fileName.isBlank()) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid file name"))
+                            return@get
+                        }
+
+                        val response = workspaceService.getWorkspaceFile(user.uid, dropletId, agentName, fileName)
+                        call.respond(HttpStatusCode.OK, response)
+                    } catch (e: IllegalArgumentException) {
+                        call.respond(
+                            HttpStatusCode.BadRequest,
+                            mapOf("error" to (e.message ?: "Invalid request"))
+                        )
+                    } catch (e: SecurityException) {
+                        call.respond(
+                            HttpStatusCode.Forbidden,
+                            mapOf("error" to (e.message ?: "Droplet does not belong to user"))
+                        )
+                    } catch (e: NoSuchElementException) {
+                        call.respond(
+                            HttpStatusCode.NotFound,
+                            mapOf("error" to (e.message ?: "Workspace file not found"))
+                        )
+                    } catch (e: Exception) {
+                        log.error("Error fetching workspace file for user ${user.uid}", e)
                         call.respond(
                             HttpStatusCode.InternalServerError,
                             mapOf("error" to (e.message ?: "Unknown error occurred"))
