@@ -22,7 +22,11 @@ interface DropletMcpService {
      * This is idempotent: pass the full desired set of tools each time.
      * During initial provisioning the restart is a no-op if services are not started yet.
      */
-    suspend fun configureMcpTools(droplet: UserDropletInternal, toolNames: List<String>)
+    suspend fun configureMcpTools(
+        droplet: UserDropletInternal,
+        toolNames: List<String>,
+        runtimeConfigByTool: Map<String, McpToolRuntimeConfig> = emptyMap()
+    )
 }
 
 open class DropletMcpServiceImpl(
@@ -60,16 +64,25 @@ open class DropletMcpServiceImpl(
 
     private fun isMissingEnvVar(key: String): Boolean = env(key).isBlank()
 
-    override suspend fun configureMcpTools(droplet: UserDropletInternal, toolNames: List<String>) {
+    override suspend fun configureMcpTools(
+        droplet: UserDropletInternal,
+        toolNames: List<String>,
+        runtimeConfigByTool: Map<String, McpToolRuntimeConfig>
+    ) {
         val toolDefs = toolNames.mapNotNull { name ->
             McpToolRegistry.get(name) ?: run {
                 logger.warn("Unknown MCP tool '$name', skipping")
                 null
             }
         }
+        val authEnvValueOverrides = runtimeConfigByTool.mapNotNull { (toolName, config) ->
+            val tool = McpToolRegistry.get(toolName) ?: return@mapNotNull null
+            val authValue = config.authEnvValueOverride?.trim()
+            if (authValue.isNullOrEmpty()) null else tool.authEnvVar to authValue
+        }.toMap()
 
-        writeMcpEnv(droplet, toolDefs)
-        writeMcpRoutes(droplet, toolDefs)
+        writeMcpEnv(droplet, toolDefs, authEnvValueOverrides)
+        writeMcpRoutes(droplet, toolDefs, runtimeConfigByTool)
         writeMcporterConfig(droplet, toolDefs, droplet.supabaseProjectRef)
 
         // Refresh the proxy script so runtime updates do not depend on a full image rebuild.
@@ -81,9 +94,17 @@ open class DropletMcpServiceImpl(
         logger.info("MCP tools configured on droplet ${droplet.dropletId}: ${toolNames.joinToString()}")
     }
 
+    suspend fun configureMcpTools(droplet: UserDropletInternal, toolNames: List<String>) {
+        configureMcpTools(droplet, toolNames, emptyMap())
+    }
+
     // ── File writers ─────────────────────────────────────────────────────
 
-    private fun writeMcpEnv(droplet: UserDropletInternal, toolDefs: List<McpToolDefinition>) {
+    private fun writeMcpEnv(
+        droplet: UserDropletInternal,
+        toolDefs: List<McpToolDefinition>,
+        authEnvValueOverrides: Map<String, String>
+    ) {
         val scopedAccessToken = generateScopedJwt(droplet.supabaseProjectRef)
             .ifBlank { managementService.managementToken }
 
@@ -99,20 +120,26 @@ open class DropletMcpServiceImpl(
         )
         for (tool in toolDefs) {
             if (tool.authEnvVar !in ALWAYS_PRESENT_ENV_VARS) {
-                lines += "${tool.authEnvVar}=${env(tool.authEnvVar)}"
+                val value = authEnvValueOverrides[tool.authEnvVar] ?: env(tool.authEnvVar)
+                lines += "${tool.authEnvVar}=$value"
             }
         }
         writeProtectedFile(droplet, "/etc/suprclaw/mcp.env", lines.joinToString("\n"))
     }
 
-    private fun writeMcpRoutes(droplet: UserDropletInternal, toolDefs: List<McpToolDefinition>) {
+    private fun writeMcpRoutes(
+        droplet: UserDropletInternal,
+        toolDefs: List<McpToolDefinition>,
+        runtimeConfigByTool: Map<String, McpToolRuntimeConfig>
+    ) {
         val routes = toolDefs.joinToString(",") { tool ->
             val auth = when (tool.authType) {
                 "bearer" -> """{"type":"bearer","envVar":"${tool.authEnvVar}"}"""
                 "path-prefix" -> """{"type":"path-prefix","envVar":"${tool.authEnvVar}","template":"${tool.authTemplate}"}"""
                 else -> """{"type":"${tool.authType}","envVar":"${tool.authEnvVar}"}"""
             }
-            val upstream = if (tool.name == "supabase") env("SUPABASE_MCP_URL").ifBlank { tool.upstream } else tool.upstream
+            val upstream = runtimeConfigByTool[tool.name]?.upstreamOverride?.trim()?.ifBlank { null }
+                ?: if (tool.name == "supabase") env("SUPABASE_MCP_URL").ifBlank { tool.upstream } else tool.upstream
             """"${tool.name}":{"upstream":"$upstream","auth":$auth}"""
         }
         writeProtectedFile(droplet, "/etc/suprclaw/mcp-routes.json", "{$routes}")

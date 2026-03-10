@@ -150,6 +150,36 @@ class DropletMcpServiceTest {
             "mcp-routes.json upstream must fall back to supabase.suprclaw.com, got: $json")
     }
 
+    @Test
+    fun `mcp-routes uses runtime upstream override when provided`() = testApplication {
+        val commands = captureCommands()
+        val service = buildService(application)
+        val runtimeConfig = mapOf(
+            "zapier" to McpToolRuntimeConfig(
+                upstreamOverride = "https://mcp.zapier.com/api/mcp/s/abc123",
+                authEnvValueOverride = "zapier-runtime-token"
+            )
+        )
+
+        service.configureMcpTools(testDroplet, listOf("zapier"), runtimeConfig)
+
+        val routesCmd = commands.find { it.contains("mcp-routes.json") && it.contains("base64") }
+        assertNotNull(routesCmd, "Expected mcp-routes.json write command")
+        val routesJson = decodeBase64FromCmd(routesCmd)
+        assertTrue(
+            routesJson.contains("\"upstream\":\"https://mcp.zapier.com/api/mcp/s/abc123\""),
+            "mcp-routes.json must include runtime upstream override, got: $routesJson"
+        )
+
+        val envCmd = commands.find { it.contains("mcp.env") && it.contains("base64") }
+        assertNotNull(envCmd, "Expected mcp.env write command")
+        val envContent = decodeBase64FromCmd(envCmd)
+        assertTrue(
+            envContent.contains("ZAPIER_MCP_EMBED_SECRET=zapier-runtime-token"),
+            "mcp.env must include runtime auth override, got: $envContent"
+        )
+    }
+
     // ── mcp.env: JWT / fallback ────────────────────────────────────────────
 
     @Test

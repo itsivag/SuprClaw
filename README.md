@@ -106,6 +106,8 @@ WEBHOOK_SECRET=your_webhook_secret
 
 # Optional MCP tool keys
 FIRECRAWL_API_KEY=your_firecrawl_api_key
+ZAPIER_MCP_EMBED_ID=your_zapier_embed_id
+ZAPIER_MCP_EMBED_SECRET=your_zapier_embed_secret
 ```
 
 ### Running Locally
@@ -157,6 +159,12 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for production deployment instructions.
 | `GET` | `/api/tasks/{id}` | Get task details |
 | `GET` | `/marketplace` | Browse agent marketplace |
 | `POST` | `/marketplace/{id}` | Install a marketplace agent |
+| `GET` | `/api/connectors` | List connected third-party connectors |
+| `GET` | `/api/connectors/zapier/embed-config` | Get Zapier MCP embed client config |
+| `POST` | `/api/connectors/zapier` | Complete Zapier MCP connection with user MCP server URL |
+| `POST` | `/api/connectors/zapier/complete` | Alias for Zapier MCP completion |
+| `PUT` | `/api/connectors/{provider}/policy` | Update connector allowlist policy |
+| `DELETE` | `/api/connectors/{provider}` | Disconnect a connector |
 | `GET` | `/admin` | Admin webpage (Firebase Web login) |
 | `GET` | `/api/admin/config` | Firebase Web config for admin page bootstrap |
 | `GET` | `/api/admin/users?scope=provisioned|all` | Admin list of users, containers, and weekly usage |

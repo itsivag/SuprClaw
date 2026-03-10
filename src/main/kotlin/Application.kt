@@ -1,9 +1,12 @@
 package com.suprbeta
 
 import com.suprbeta.admin.configureAdminRoutes
+import com.suprbeta.connector.ConnectorServiceImpl
+import com.suprbeta.connector.configureConnectorRoutes
 import com.suprbeta.config.AppConfig
 import com.suprbeta.digitalocean.DropletConfigurationService
 import com.suprbeta.digitalocean.DropletConfigurationServiceImpl
+import com.suprbeta.digitalocean.DropletMcpService
 import com.suprbeta.digitalocean.DropletMcpServiceImpl
 import com.suprbeta.digitalocean.DropletProvisioningService
 import com.suprbeta.digitalocean.AgentWorkspaceServiceImpl
@@ -97,6 +100,12 @@ fun Application.module() {
     configureWebhookRoutes(firestoreRepository, userClientProvider, agentRepository, httpClient, managementService.webhookSecret)
     configureFcmRoutes(firestoreRepository)
     configureMarketplaceRoutes(provisioningServices.configuringService, marketplaceService)
+    val connectorService = ConnectorServiceImpl(
+        firestoreRepository = firestoreRepository,
+        dropletMcpService = provisioningServices.dropletMcpService,
+        application = this
+    )
+    configureConnectorRoutes(connectorService)
     configureUsageRoutes(firestoreRepository, remoteConfigService)
     configureAdminRoutes(firestoreRepository, provisioningServices.provisioningService)
     configureRouting()
@@ -345,13 +354,15 @@ fun Application.configureProvisioning(
     )
     return ProvisioningServices(
         configuringService = configuringService,
-        provisioningService = provisioningService
+        provisioningService = provisioningService,
+        dropletMcpService = dropletMcpService
     )
 }
 
 data class ProvisioningServices(
     val configuringService: DropletConfigurationService,
-    val provisioningService: DropletProvisioningService
+    val provisioningService: DropletProvisioningService,
+    val dropletMcpService: DropletMcpService
 )
 
 private fun Application.createHetznerProviders(httpClient: HttpClient): Pair<VpsService, DnsProvider> {

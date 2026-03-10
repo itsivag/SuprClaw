@@ -197,7 +197,10 @@ function handleRequest(req, res, serverName, remaining, env, route, body) {
   }
 
   // ── Normal proxy — forward buffered body to upstream ──────────────────────
-  let upstreamPath = remaining;
+  const upstreamBasePath = upstreamUrl.pathname && upstreamUrl.pathname !== "/"
+    ? upstreamUrl.pathname.replace(/\/$/, "")
+    : "";
+  let upstreamPath = upstreamBasePath + remaining;
   const headers = Object.assign({}, req.headers, { host: upstreamUrl.hostname });
 
   if (auth.type === "bearer") {
@@ -207,7 +210,11 @@ function handleRequest(req, res, serverName, remaining, env, route, body) {
     }
   } else if (auth.type === "path-prefix") {
     const prefix = (auth.template || "").replace("{key}", envValue);
-    upstreamPath = prefix + remaining;
+    upstreamPath = upstreamBasePath + prefix + remaining;
+  }
+
+  if (upstreamUrl.search) {
+    upstreamPath += (upstreamPath.includes("?") ? "&" : "?") + upstreamUrl.search.slice(1);
   }
 
   const opts = {

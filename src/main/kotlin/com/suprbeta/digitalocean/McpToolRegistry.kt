@@ -18,6 +18,11 @@ data class McpToolDefinition(
     val mcporterUrlTemplate: String
 )
 
+data class McpToolRuntimeConfig(
+    val upstreamOverride: String? = null,
+    val authEnvValueOverride: String? = null
+)
+
 object McpToolRegistry {
 
     val tools: Map<String, McpToolDefinition> = mapOf(
@@ -35,6 +40,13 @@ object McpToolRegistry {
             authEnvVar = "FIRECRAWL_API_KEY",
             authTemplate = "/{key}/v2",
             mcporterUrlTemplate = "http://127.0.0.1:18790/firecrawl/mcp"
+        ),
+        "zapier" to McpToolDefinition(
+            name = "zapier",
+            upstream = "https://mcp.zapier.com",
+            authType = "bearer",
+            authEnvVar = "ZAPIER_MCP_EMBED_SECRET",
+            mcporterUrlTemplate = "http://127.0.0.1:18790/zapier/mcp"
         )
     )
 
