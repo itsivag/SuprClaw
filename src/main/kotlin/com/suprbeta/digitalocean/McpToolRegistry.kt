@@ -46,7 +46,8 @@ object McpToolRegistry {
             upstream = "https://mcp.zapier.com",
             authType = "bearer",
             authEnvVar = "ZAPIER_MCP_EMBED_SECRET",
-            mcporterUrlTemplate = "http://127.0.0.1:18790/zapier/mcp"
+            // Zapier embed returns a full per-user MCP server URL; avoid appending an extra fixed path.
+            mcporterUrlTemplate = "http://127.0.0.1:18790/zapier"
         )
     )
 
