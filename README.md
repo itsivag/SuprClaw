@@ -161,6 +161,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for production deployment instructions.
 | `POST` | `/api/agents/{id}` | Create a new agent |
 | `DELETE` | `/api/agents/{id}/{name}` | Delete an agent |
 | `GET` | `/api/tasks` | List tasks |
+| `GET` | `/api/notifications` | List notifications from the authenticated user's schema |
 | `GET` | `/api/tasks/deliverables` | List deliverables (task documents) for authenticated user |
 | `GET` | `/api/tasks/{id}` | Get task details |
 | `GET` | `/marketplace` | Browse agent marketplace |

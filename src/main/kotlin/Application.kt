@@ -27,11 +27,13 @@ import com.suprbeta.hetzner.HetznerService
 import com.suprbeta.provider.DnsProvider
 import com.suprbeta.provider.VpsService
 import com.suprbeta.supabase.SupabaseAgentRepository
+import com.suprbeta.supabase.NotificationRepository
 import com.suprbeta.supabase.SelfHostedSupabaseManagementService
 import com.suprbeta.supabase.SupabaseManagementService
 import com.suprbeta.supabase.SupabaseSchemaRepository
 import com.suprbeta.supabase.SupabaseTaskRepository
 import com.suprbeta.supabase.UserSupabaseClientProvider
+import com.suprbeta.supabase.configureNotificationRoutes
 import com.suprbeta.supabase.configureTaskRoutes
 import com.suprbeta.marketplace.MarketplaceService
 import com.suprbeta.marketplace.configureMarketplaceRoutes
@@ -75,6 +77,7 @@ fun Application.module() {
     val (firebaseAuthService, firestoreRepository, remoteConfigService) = configureFirebase(cryptoService)
     val agentRepository = SupabaseAgentRepository(this)
     val taskRepository = SupabaseTaskRepository(this)
+    val notificationRepository = NotificationRepository(this)
     val schemaRepository = SupabaseSchemaRepository(this)
     val userClientProvider = UserSupabaseClientProvider()
 
@@ -97,6 +100,7 @@ fun Application.module() {
         marketplaceService
     )
     configureTaskRoutes(taskRepository, firestoreRepository, userClientProvider)
+    configureNotificationRoutes(notificationRepository, firestoreRepository, userClientProvider)
     configureWebhookRoutes(firestoreRepository, userClientProvider, agentRepository, httpClient, managementService.webhookSecret)
     configureFcmRoutes(firestoreRepository)
     configureMarketplaceRoutes(provisioningServices.configuringService, marketplaceService)
