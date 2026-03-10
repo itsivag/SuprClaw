@@ -200,7 +200,9 @@ function handleRequest(req, res, serverName, remaining, env, route, body) {
   const upstreamBasePath = upstreamUrl.pathname && upstreamUrl.pathname !== "/"
     ? upstreamUrl.pathname.replace(/\/$/, "")
     : "";
-  let upstreamPath = upstreamBasePath + remaining;
+  const normalizedRemaining = remaining === "/" ? "" : remaining;
+  let upstreamPath = upstreamBasePath + normalizedRemaining;
+  if (!upstreamPath) upstreamPath = "/";
   const headers = Object.assign({}, req.headers, { host: upstreamUrl.hostname });
 
   if (auth.type === "bearer") {
@@ -210,7 +212,8 @@ function handleRequest(req, res, serverName, remaining, env, route, body) {
     }
   } else if (auth.type === "path-prefix") {
     const prefix = (auth.template || "").replace("{key}", envValue);
-    upstreamPath = upstreamBasePath + prefix + remaining;
+    upstreamPath = upstreamBasePath + prefix + normalizedRemaining;
+    if (!upstreamPath) upstreamPath = "/";
   }
 
   if (upstreamUrl.search) {
