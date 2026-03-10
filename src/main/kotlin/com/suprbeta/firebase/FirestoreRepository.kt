@@ -7,6 +7,7 @@ import com.google.cloud.firestore.FieldValue
 import com.google.cloud.firestore.QuerySnapshot
 import com.google.cloud.firestore.SetOptions
 import com.suprbeta.connector.ConnectorInternal
+import com.suprbeta.connector.ConnectorSessionInternal
 import com.suprbeta.core.CryptoOperationException
 import com.suprbeta.digitalocean.models.ProvisioningStatus
 import com.suprbeta.digitalocean.models.UserDroplet
@@ -39,6 +40,7 @@ class FirestoreRepository(
         private const val USER_USAGE_SUBCOLLECTION = "usage"
         private const val USER_MESSAGE_QUEUE_SUBCOLLECTION = "message_queue"
         private const val USER_CONNECTORS_SUBCOLLECTION = "connectors"
+        private const val CONNECTOR_SESSIONS_COLLECTION = "connector_sessions"
         private const val PROJECT_REFS_COLLECTION = "supabase_project_refs"
         private const val HOSTS_COLLECTION = "hosts"
         private const val USER_HOST_MAPPINGS_COLLECTION = "user_host_mappings"
@@ -399,6 +401,34 @@ class FirestoreRepository(
         } catch (e: Exception) {
             application.log.error("Failed to delete connector '$provider' for userId=$userId", e)
             throw e
+        }
+    }
+
+    suspend fun saveConnectorSession(session: ConnectorSessionInternal) {
+        try {
+            if (session.id.isBlank()) throw IllegalArgumentException("Connector session id is required")
+            firestore.collection(CONNECTOR_SESSIONS_COLLECTION)
+                .document(session.id)
+                .set(session)
+                .await()
+            application.log.info("Saved connector session '${session.id}' for userId=${session.userId}")
+        } catch (e: Exception) {
+            application.log.error("Failed to save connector session '${session.id}' for userId=${session.userId}", e)
+            throw e
+        }
+    }
+
+    suspend fun getConnectorSession(sessionId: String): ConnectorSessionInternal? {
+        return try {
+            val snapshot = firestore.collection(CONNECTOR_SESSIONS_COLLECTION)
+                .document(sessionId)
+                .get()
+                .await()
+            if (!snapshot.exists()) return null
+            snapshot.toObject(ConnectorSessionInternal::class.java)
+        } catch (e: Exception) {
+            application.log.error("Failed to fetch connector session '$sessionId'", e)
+            null
         }
     }
 

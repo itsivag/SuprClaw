@@ -106,8 +106,15 @@ WEBHOOK_SECRET=your_webhook_secret
 
 # Optional MCP tool keys
 FIRECRAWL_API_KEY=your_firecrawl_api_key
-ZAPIER_MCP_EMBED_ID=your_zapier_embed_id
 ZAPIER_MCP_EMBED_SECRET=your_zapier_embed_secret
+CONNECTOR_PUBLIC_BASE_URL=https://api.yourdomain.com
+CONNECTOR_SESSION_SIGNING_SECRET=your_connector_session_signing_secret
+CONNECTOR_SESSION_TTL_SECONDS=900
+# Build a provider redirect using placeholders {state}, {callbackUrl}, {sessionId}
+ZAPIER_MCP_CONNECT_URL_TEMPLATE=https://mcp.zapier.com/connect?state={state}&callback_url={callbackUrl}&session_id={sessionId}
+# Optional post-callback redirects (if blank, callback returns JSON)
+CONNECTOR_CALLBACK_SUCCESS_URL=suprclaw://connectors/success
+CONNECTOR_CALLBACK_FAILURE_URL=suprclaw://connectors/failure
 ```
 
 ### Running Locally
@@ -160,9 +167,10 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for production deployment instructions.
 | `GET` | `/marketplace` | Browse agent marketplace |
 | `POST` | `/marketplace/{id}` | Install a marketplace agent |
 | `GET` | `/api/connectors` | List connected third-party connectors |
-| `GET` | `/api/connectors/zapier/embed-config` | Get Zapier MCP embed client config |
-| `POST` | `/api/connectors/zapier` | Complete Zapier MCP connection with user MCP server URL |
-| `POST` | `/api/connectors/zapier/complete` | Alias for Zapier MCP completion |
+| `POST` | `/api/connectors/apps/session` | Start product-branded connector session and return backend-owned `connectUrl` |
+| `GET` | `/api/connectors/apps/session/{sessionId}` | Get connector session status (`pending/completed/failed/cancelled/expired`) |
+| `GET` | `/api/connectors/apps/connect/{sessionId}` | Backend-owned connect URL that resolves and redirects provider flow |
+| `GET` | `/api/connectors/apps/callback` | Provider callback/finalize endpoint (also supports `POST`) |
 | `PUT` | `/api/connectors/{provider}/policy` | Update connector allowlist policy |
 | `DELETE` | `/api/connectors/{provider}` | Disconnect a connector |
 | `GET` | `/admin` | Admin webpage (Firebase Web login) |

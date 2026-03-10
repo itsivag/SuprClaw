@@ -3,10 +3,13 @@ package com.suprbeta.connector
 import com.suprbeta.firebase.authenticated
 import com.suprbeta.firebase.firebaseUserKey
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.Parameters
 import io.ktor.server.application.Application
 import io.ktor.server.application.log
+import io.ktor.server.request.receiveParameters
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondRedirect
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
@@ -18,53 +21,40 @@ fun Application.configureConnectorRoutes(connectorService: ConnectorService) {
     routing {
         authenticated {
             route("/api/connectors") {
-                get("/zapier/embed-config") {
-                    try {
-                        val config = connectorService.getZapierEmbedConfig()
-                        call.respond(HttpStatusCode.OK, config)
-                    } catch (e: IllegalStateException) {
-                        call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to (e.message ?: "Zapier embed is not configured")))
-                    } catch (e: Exception) {
-                        call.application.log.error("Failed to load Zapier embed config", e)
-                        call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Failed to load embed config"))
-                    }
-                }
-
                 get {
                     val user = call.attributes[firebaseUserKey]
                     val connectors = connectorService.listConnectors(user.uid)
                     call.respond(HttpStatusCode.OK, ConnectorListResponse(connectors))
                 }
 
-                post("/zapier") {
+                post("/apps/session") {
                     val user = call.attributes[firebaseUserKey]
                     try {
-                        val request = call.receive<ConnectZapierRequest>()
-                        val connector = connectorService.connectZapier(user.uid, request)
-                        call.respond(HttpStatusCode.Created, connector)
-                    } catch (e: IllegalArgumentException) {
-                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to (e.message ?: "Invalid request")))
+                        val session = connectorService.startConnectorSession(user.uid)
+                        call.respond(HttpStatusCode.OK, session)
                     } catch (e: IllegalStateException) {
-                        call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to (e.message ?: "Connector credentials are not configured")))
+                        call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to (e.message ?: "Connector session flow is not configured")))
                     } catch (e: Exception) {
-                        call.application.log.error("Failed to connect Zapier connector for user ${user.uid}", e)
-                        call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Failed to connect connector")))
+                        call.application.log.error("Failed to start connector session for user ${user.uid}", e)
+                        call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Failed to start connector session")))
                     }
                 }
 
-                post("/zapier/complete") {
+                get("/apps/session/{sessionId}") {
                     val user = call.attributes[firebaseUserKey]
+                    val sessionId = call.parameters["sessionId"].orEmpty()
+                    if (sessionId.isBlank()) {
+                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing sessionId"))
+                        return@get
+                    }
                     try {
-                        val request = call.receive<ConnectZapierRequest>()
-                        val connector = connectorService.connectZapier(user.uid, request)
-                        call.respond(HttpStatusCode.Created, connector)
-                    } catch (e: IllegalArgumentException) {
-                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to (e.message ?: "Invalid request")))
-                    } catch (e: IllegalStateException) {
-                        call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to (e.message ?: "Connector credentials are not configured")))
+                        val status = connectorService.getConnectorSessionStatus(user.uid, sessionId)
+                        call.respond(HttpStatusCode.OK, status)
+                    } catch (e: NoSuchElementException) {
+                        call.respond(HttpStatusCode.NotFound, mapOf("error" to (e.message ?: "Session not found")))
                     } catch (e: Exception) {
-                        call.application.log.error("Failed to connect Zapier connector for user ${user.uid}", e)
-                        call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Failed to connect connector")))
+                        call.application.log.error("Failed to get connector session status for user ${user.uid}", e)
+                        call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Failed to get session status")))
                     }
                 }
 
@@ -106,5 +96,71 @@ fun Application.configureConnectorRoutes(connectorService: ConnectorService) {
                 }
             }
         }
+
+        route("/api/connectors/apps") {
+            get("/connect/{sessionId}") {
+                val sessionId = call.parameters["sessionId"].orEmpty()
+                val state = call.request.queryParameters["state"].orEmpty()
+                if (sessionId.isBlank() || state.isBlank()) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing sessionId or state"))
+                    return@get
+                }
+                try {
+                    val redirectUrl = connectorService.resolveSessionConnectRedirect(sessionId, state)
+                    call.respondRedirect(redirectUrl, permanent = false)
+                } catch (e: NoSuchElementException) {
+                    call.respond(HttpStatusCode.NotFound, mapOf("error" to (e.message ?: "Session not found")))
+                } catch (e: IllegalArgumentException) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to (e.message ?: "Invalid session state")))
+                } catch (e: IllegalStateException) {
+                    call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to (e.message ?: "Connector connect flow is not configured")))
+                } catch (e: Exception) {
+                    call.application.log.error("Failed to resolve connector connect redirect", e)
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Failed to resolve connect URL")))
+                }
+            }
+
+            get("/callback") {
+                call.handleConnectorCallback(connectorService)
+            }
+
+            post("/callback") {
+                call.handleConnectorCallback(connectorService)
+            }
+        }
+    }
+}
+
+private suspend fun io.ktor.server.application.ApplicationCall.handleConnectorCallback(connectorService: ConnectorService) {
+    val query = request.queryParameters
+    val form: Parameters = runCatching { receiveParameters() }.getOrDefault(Parameters.Empty)
+    val state = query["state"] ?: form["state"] ?: ""
+    val mcpServerUrl = query["mcpServerUrl"]
+        ?: query["mcp_server_url"]
+        ?: query["server_url"]
+        ?: form["mcpServerUrl"]
+        ?: form["mcp_server_url"]
+        ?: form["server_url"]
+
+    if (state.isBlank()) {
+        respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing state"))
+        return
+    }
+
+    try {
+        val callback = connectorService.finalizeConnectorCallback(state, mcpServerUrl)
+        val redirect = connectorService.callbackRedirectUrl(callback)
+        if (redirect != null) {
+            respondRedirect(redirect, permanent = false)
+        } else {
+            respond(HttpStatusCode.OK, callback)
+        }
+    } catch (e: NoSuchElementException) {
+        respond(HttpStatusCode.NotFound, mapOf("error" to (e.message ?: "Session not found")))
+    } catch (e: IllegalArgumentException) {
+        respond(HttpStatusCode.BadRequest, mapOf("error" to (e.message ?: "Invalid callback request")))
+    } catch (e: Exception) {
+        application.log.error("Failed to finalize connector callback", e)
+        respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Failed to finalize callback")))
     }
 }

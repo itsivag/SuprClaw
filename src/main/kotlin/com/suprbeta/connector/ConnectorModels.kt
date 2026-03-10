@@ -2,6 +2,14 @@ package com.suprbeta.connector
 
 import kotlinx.serialization.Serializable
 
+object ConnectorSessionStatus {
+    const val PENDING = "pending"
+    const val COMPLETED = "completed"
+    const val FAILED = "failed"
+    const val CANCELLED = "cancelled"
+    const val EXPIRED = "expired"
+}
+
 @Serializable
 data class ConnectorInternal(
     val provider: String = "",
@@ -35,19 +43,59 @@ data class ConnectorListResponse(
 )
 
 @Serializable
-data class ConnectZapierRequest(
-    val mcpServerUrl: String,
-    val enabledApps: List<String> = listOf("gmail", "calendar", "drive", "docs"),
-    val allowedAgents: List<String> = emptyList()
+data class ConnectorSessionStartResponse(
+    val connectUrl: String,
+    val sessionId: String
 )
+
+@Serializable
+data class ConnectorSessionStatusResponse(
+    val sessionId: String,
+    val status: String,
+    val error: String? = null
+)
+
+@Serializable
+data class ConnectorSessionCallbackResponse(
+    val sessionId: String,
+    val status: String,
+    val error: String? = null
+)
+
+@Serializable
+data class ConnectorSessionInternal(
+    val id: String = "",
+    val userId: String = "",
+    val status: String = ConnectorSessionStatus.PENDING,
+    val providerInternal: String = "zapier",
+    val connectUrl: String = "",
+    val callbackState: String = "",
+    val createdAt: String = "",
+    val updatedAt: String = "",
+    val expiresAt: String = "",
+    val error: String? = null,
+    val connectorId: String? = null,
+    val enabledApps: List<String> = emptyList(),
+    val allowedAgents: List<String> = emptyList()
+) {
+    constructor() : this(
+        id = "",
+        userId = "",
+        status = ConnectorSessionStatus.PENDING,
+        providerInternal = "zapier",
+        connectUrl = "",
+        callbackState = "",
+        createdAt = "",
+        updatedAt = "",
+        expiresAt = "",
+        error = null,
+        connectorId = null,
+        enabledApps = emptyList(),
+        allowedAgents = emptyList()
+    )
+}
 
 @Serializable
 data class UpdateConnectorPolicyRequest(
     val allowedAgents: List<String> = emptyList()
-)
-
-@Serializable
-data class ZapierEmbedConfigResponse(
-    val embedId: String,
-    val scriptUrl: String = "https://mcp.zapier.com/embed/v1/mcp.js"
 )
