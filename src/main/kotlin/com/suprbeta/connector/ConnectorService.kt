@@ -24,7 +24,7 @@ interface ConnectorService {
 
     suspend fun startConnectorSession(userId: String): ConnectorSessionStartResponse
     suspend fun getConnectorSessionStatus(userId: String, sessionId: String): ConnectorSessionStatusResponse
-    suspend fun resolveSessionConnectRedirect(sessionId: String, state: String): String
+    suspend fun getSessionConnectPage(sessionId: String, state: String): ConnectorConnectPage
     suspend fun finalizeConnectorCallback(state: String, mcpServerUrl: String?): ConnectorSessionCallbackResponse
     fun callbackRedirectUrl(callbackResponse: ConnectorSessionCallbackResponse): String?
 }
@@ -63,7 +63,7 @@ class ConnectorServiceImpl(
 
     private val callbackSuccessUrl: String by lazy { env("CONNECTOR_CALLBACK_SUCCESS_URL") }
     private val callbackFailureUrl: String by lazy { env("CONNECTOR_CALLBACK_FAILURE_URL") }
-    private val zapierConnectUrlTemplate: String by lazy { env("ZAPIER_MCP_CONNECT_URL_TEMPLATE") }
+    private val zapierEmbedId: String by lazy { env("ZAPIER_MCP_EMBED_ID") }
 
     override suspend fun listConnectors(userId: String): List<ConnectorView> {
         return firestoreRepository.listUserConnectorsInternal(userId)
@@ -92,6 +92,7 @@ class ConnectorServiceImpl(
     override suspend fun startConnectorSession(userId: String): ConnectorSessionStartResponse {
         ensureZapierCredentialConfigured()
         ensureSessionSigningConfigured()
+        ensureZapierEmbedConfigured()
 
         val now = Instant.now()
         val expiresAt = now.plusSeconds(sessionTtlSeconds)
@@ -139,9 +140,10 @@ class ConnectorServiceImpl(
         return ConnectorSessionStatusResponse(sessionId = normalized.id, status = normalized.status, error = normalized.error)
     }
 
-    override suspend fun resolveSessionConnectRedirect(sessionId: String, state: String): String {
+    override suspend fun getSessionConnectPage(sessionId: String, state: String): ConnectorConnectPage {
         ensureZapierCredentialConfigured()
         ensureSessionSigningConfigured()
+        val embedId = ensureZapierEmbedConfigured()
 
         val payload = verifyState(state)
         if (payload.sessionId != sessionId) {
@@ -167,14 +169,13 @@ class ConnectorServiceImpl(
         }
 
         val callbackUrl = "$connectorPublicBaseUrl/api/connectors/apps/callback"
-        val redirectUrl = buildZapierConnectRedirect(
-            template = zapierConnectUrlTemplate,
+        logger.info("Prepared connector connect page for sessionId=$sessionId")
+        return ConnectorConnectPage(
+            sessionId = sessionId,
             state = state,
-            callbackUrl = callbackUrl,
-            sessionId = sessionId
+            embedId = embedId,
+            callbackUrl = callbackUrl
         )
-        logger.info("Resolved connector redirect for sessionId=$sessionId")
-        return redirectUrl
     }
 
     override suspend fun finalizeConnectorCallback(state: String, mcpServerUrl: String?): ConnectorSessionCallbackResponse {
@@ -376,32 +377,6 @@ class ConnectorServiceImpl(
         return Instant.now().isAfter(exp)
     }
 
-    private fun buildZapierConnectRedirect(
-        template: String,
-        state: String,
-        callbackUrl: String,
-        sessionId: String
-    ): String {
-        if (template.isBlank()) {
-            throw IllegalStateException("ZAPIER_MCP_CONNECT_URL_TEMPLATE is not configured")
-        }
-        val hasPlaceholders = template.contains("{state}") ||
-            template.contains("{callbackUrl}") ||
-            template.contains("{sessionId}")
-        return if (hasPlaceholders) {
-            template
-                .replace("{state}", urlEncode(state))
-                .replace("{callbackUrl}", urlEncode(callbackUrl))
-                .replace("{sessionId}", urlEncode(sessionId))
-        } else {
-            URLBuilder(template).apply {
-                parameters.append("state", state)
-                parameters.append("callback_url", callbackUrl)
-                parameters.append("session_id", sessionId)
-            }.buildString()
-        }
-    }
-
     private fun signState(payload: SignedStatePayload): String {
         val payloadJson = stateJson.encodeToString(payload)
         val payloadB64 = base64UrlEncode(payloadJson.toByteArray(Charsets.UTF_8))
@@ -453,6 +428,13 @@ class ConnectorServiceImpl(
         if (sessionSigningSecret.isBlank()) {
             throw IllegalStateException("CONNECTOR_SESSION_SIGNING_SECRET is not configured")
         }
+    }
+
+    private fun ensureZapierEmbedConfigured(): String {
+        if (zapierEmbedId.isBlank()) {
+            throw IllegalStateException("ZAPIER_MCP_EMBED_ID is not configured")
+        }
+        return zapierEmbedId
     }
 
     private fun env(key: String): String = dotenv[key] ?: System.getenv(key) ?: ""

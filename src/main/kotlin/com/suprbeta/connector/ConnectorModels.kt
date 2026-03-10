@@ -62,6 +62,13 @@ data class ConnectorSessionCallbackResponse(
     val error: String? = null
 )
 
+data class ConnectorConnectPage(
+    val sessionId: String,
+    val state: String,
+    val embedId: String,
+    val callbackUrl: String
+)
+
 @Serializable
 data class ConnectorSessionInternal(
     val id: String = "",
