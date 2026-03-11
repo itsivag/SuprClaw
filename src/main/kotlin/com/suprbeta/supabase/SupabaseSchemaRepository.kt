@@ -80,6 +80,15 @@ CREATE TABLE IF NOT EXISTS public.agent_actions (
     idempotency_key TEXT UNIQUE,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS public.notifications (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_id UUID REFERENCES public.agents(id) ON DELETE CASCADE,
+    type TEXT NOT NULL DEFAULT '',
+    payload JSONB NOT NULL DEFAULT '{}',
+    acknowledged_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
 """.trimIndent()
 
 class SupabaseSchemaRepository(application: Application) {

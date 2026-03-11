@@ -423,6 +423,38 @@ class SelfHostedSupabaseManagementService(
             FOR EACH ROW EXECUTE FUNCTION public._suprclaw_task_document_notify();
         """.trimIndent())
 
+        val notificationsUrl = "$webhookBaseUrl/webhooks/notifications/$projectRef"
+        val safeNotificationsUrl = notificationsUrl.replace("'", "''")
+
+        runSql(projectRef, """
+            CREATE OR REPLACE FUNCTION public._suprclaw_notification_notify()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS '
+            BEGIN
+              PERFORM net.http_post(
+                url := ''$safeNotificationsUrl'',
+                body := jsonb_build_object(
+                  ''type'', ''INSERT'',
+                  ''table'', TG_TABLE_NAME,
+                  ''record'', to_jsonb(NEW),
+                  ''schema'', TG_TABLE_SCHEMA,
+                  ''old_record'', NULL::jsonb
+                ),
+                headers := ''$headersJson''::jsonb,
+                timeout_milliseconds := 5000
+              );
+              RETURN NEW;
+            END;
+            ';
+        """.trimIndent())
+
+        runSql(projectRef, """
+            CREATE OR REPLACE TRIGGER "notification-hook"
+            AFTER INSERT ON public.notifications
+            FOR EACH ROW EXECUTE FUNCTION public._suprclaw_notification_notify();
+        """.trimIndent())
+
         logger.info("✅ Self-hosted database webhook created for schema $projectRef")
     }
 

@@ -70,4 +70,11 @@ class SupabaseSchemaRepositoryTest {
 
         assertEquals(expectedClauses, actualClauses)
     }
+
+    @Test
+    fun `user project schema defines notifications table for push webhook inserts`() {
+        assertTrue(USER_PROJECT_SQL.contains("CREATE TABLE IF NOT EXISTS public.notifications ("))
+        assertTrue(USER_PROJECT_SQL.contains("type TEXT NOT NULL DEFAULT ''"))
+        assertTrue(USER_PROJECT_SQL.contains("payload JSONB NOT NULL DEFAULT '{}'"))
+    }
 }

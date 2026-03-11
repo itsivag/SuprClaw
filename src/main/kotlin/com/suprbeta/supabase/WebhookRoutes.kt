@@ -2,6 +2,7 @@ package com.suprbeta.supabase
 
 import com.suprbeta.firebase.FcmNotificationService
 import com.suprbeta.firebase.FirestoreRepository
+import com.suprbeta.firebase.PushNotificationSender
 import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
@@ -11,6 +12,8 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -20,9 +23,24 @@ fun Application.configureWebhookRoutes(
     agentRepository: SupabaseAgentRepository,
     httpClient: HttpClient,
     webhookSecret: String
+) = configureWebhookRoutes(
+    firestoreRepository = firestoreRepository,
+    userClientProvider = userClientProvider,
+    agentRepository = agentRepository,
+    httpClient = httpClient,
+    webhookSecret = webhookSecret,
+    pushNotificationSender = FcmNotificationService(this)
+)
+
+internal fun Application.configureWebhookRoutes(
+    firestoreRepository: FirestoreRepository,
+    userClientProvider: UserSupabaseClientProvider,
+    agentRepository: SupabaseAgentRepository,
+    httpClient: HttpClient,
+    webhookSecret: String,
+    pushNotificationSender: PushNotificationSender
 ) {
     val json = Json { ignoreUnknownKeys = true }
-    val fcmService = FcmNotificationService(this)
 
     routing {
         /**
@@ -215,7 +233,7 @@ fun Application.configureWebhookRoutes(
             // Send FCM push notification to the user
             val fcmToken = firestoreRepository.getFcmToken(droplet.userId)
             if (!fcmToken.isNullOrBlank()) {
-                fcmService.sendNotification(
+                pushNotificationSender.sendNotification(
                     fcmToken = fcmToken,
                     title = "New Message",
                     body = if (preview.isNotBlank()) preview else "You have a new message on your task.",
@@ -320,7 +338,7 @@ fun Application.configureWebhookRoutes(
             // Send FCM push notification to the user
             val fcmToken = firestoreRepository.getFcmToken(droplet.userId)
             if (!fcmToken.isNullOrBlank()) {
-                fcmService.sendNotification(
+                pushNotificationSender.sendNotification(
                     fcmToken = fcmToken,
                     title = if (!title.isNullOrBlank()) "📄 $title" else "New Document",
                     body = "An agent created a new document for your task.",
@@ -332,5 +350,113 @@ fun Application.configureWebhookRoutes(
 
             call.respond(HttpStatusCode.OK)
         }
+
+        /**
+         * POST /webhooks/notifications/{projectRef}
+         *
+         * Fires on every notifications INSERT and forwards the inserted notification
+         * to the user's registered FCM token, if any.
+         */
+        post("/webhooks/notifications/{projectRef}") {
+            val projectRef = call.parameters["projectRef"]
+            if (projectRef.isNullOrBlank()) {
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing projectRef"))
+                return@post
+            }
+
+            val authHeader = call.request.header(HttpHeaders.Authorization) ?: ""
+            if (authHeader != "Bearer $webhookSecret") {
+                log.warn("Notification webhook rejected: invalid auth for projectRef=$projectRef")
+                call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "Unauthorized"))
+                return@post
+            }
+
+            val body = call.receiveText()
+            log.info("Notification webhook received for projectRef=$projectRef body=${body.take(300)}")
+
+            val parsed = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull()
+            if (parsed == null) {
+                call.respond(HttpStatusCode.OK)
+                return@post
+            }
+
+            val record = parsed["record"]?.jsonObject
+            val notificationId = record?.get("id")?.jsonPrimitive?.contentOrNull
+            val notificationType = record?.get("type")?.jsonPrimitive?.contentOrNull
+            val payload = record?.get("payload")
+
+            if (notificationId.isNullOrBlank()) {
+                log.warn("Notification webhook ignored: missing notification id for projectRef=$projectRef")
+                call.respond(HttpStatusCode.OK)
+                return@post
+            }
+
+            val droplet = firestoreRepository.getUserDropletInternalByProjectRef(projectRef)
+            if (droplet == null) {
+                log.warn("Notification webhook: no droplet found for projectRef=$projectRef")
+                call.respond(HttpStatusCode.OK)
+                return@post
+            }
+
+            val fcmToken = firestoreRepository.getFcmToken(droplet.userId)
+            if (fcmToken.isNullOrBlank()) {
+                log.debug("No FCM token for userId=${droplet.userId}, skipping notification push")
+                call.respond(HttpStatusCode.OK)
+                return@post
+            }
+
+            val payloadObject = payload as? JsonObject
+            val title = payloadObject?.get("title")?.jsonPrimitive?.contentOrNull
+                ?: notificationType?.toDisplayNotificationTitle()
+                ?: "New Notification"
+            val notificationBody = payloadObject?.get("body")?.jsonPrimitive?.contentOrNull
+                ?: payloadObject?.get("message")?.jsonPrimitive?.contentOrNull
+                ?: payload.toNotificationBody()
+                ?: "You have a new notification."
+            val data = buildMap {
+                put("notificationId", notificationId)
+                notificationType?.let { put("type", it) }
+                payloadObject?.stringValue("taskId")?.let { put("taskId", it) }
+                payloadObject?.stringValue("task_id")?.let { put("taskId", it) }
+                payloadObject?.stringValue("messageId")?.let { put("messageId", it) }
+                payloadObject?.stringValue("message_id")?.let { put("messageId", it) }
+                payloadObject?.stringValue("documentId")?.let { put("documentId", it) }
+                payloadObject?.stringValue("document_id")?.let { put("documentId", it) }
+            }
+
+            pushNotificationSender.sendNotification(
+                fcmToken = fcmToken,
+                title = title,
+                body = notificationBody,
+                data = data
+            )
+
+            call.respond(HttpStatusCode.OK)
+        }
     }
+}
+
+private fun String.toDisplayNotificationTitle(): String =
+    split('_', '-', ' ')
+        .filter { it.isNotBlank() }
+        .joinToString(" ") { token ->
+            token.lowercase().replaceFirstChar { char ->
+                if (char.isLowerCase()) char.titlecase() else char.toString()
+            }
+        }
+        .ifBlank { "New Notification" }
+
+private fun JsonObject.stringValue(key: String): String? =
+    get(key)?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+
+private fun kotlinx.serialization.json.JsonElement?.toNotificationBody(): String? {
+    val element = this ?: return null
+    val text = when (element) {
+        is JsonObject -> element.toString()
+        else -> element.jsonPrimitive.contentOrNull ?: element.toString()
+    }
+    return text
+        .trim()
+        .takeIf { it.isNotBlank() }
+        ?.take(160)
 }

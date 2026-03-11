@@ -7,13 +7,22 @@ import io.ktor.server.application.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-class FcmNotificationService(private val application: Application) {
-
+interface PushNotificationSender {
     suspend fun sendNotification(
         fcmToken: String,
         title: String,
         body: String,
         data: Map<String, String> = emptyMap()
+    )
+}
+
+class FcmNotificationService(private val application: Application) : PushNotificationSender {
+
+    override suspend fun sendNotification(
+        fcmToken: String,
+        title: String,
+        body: String,
+        data: Map<String, String>
     ) {
         withContext(Dispatchers.IO) {
             try {
@@ -35,4 +44,5 @@ class FcmNotificationService(private val application: Application) {
             }
         }
     }
+
 }
