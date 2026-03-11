@@ -2,15 +2,20 @@ package com.suprbeta.supabase
 
 import com.suprbeta.supabase.models.AgentAction
 import com.suprbeta.supabase.models.AgentSummary
+import com.suprbeta.supabase.models.CreateTaskRequest
 import com.suprbeta.supabase.models.Task
 import com.suprbeta.supabase.models.TaskAssignee
 import com.suprbeta.supabase.models.TaskDetailResponse
 import com.suprbeta.supabase.models.TaskDocument
+import com.suprbeta.supabase.models.TaskInsert
 import com.suprbeta.supabase.models.TaskMessage
 import com.suprbeta.supabase.models.TaskStatusHistoryEntry
+import com.suprbeta.supabase.models.TaskUpdate
+import com.suprbeta.supabase.models.UpdateTaskRequest
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.postgrest.from
 import io.ktor.server.application.*
+import java.time.Instant
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 
@@ -107,5 +112,76 @@ class SupabaseTaskRepository(
     suspend fun getDeliverables(client: SupabaseClient): List<TaskDocument> {
         application.log.debug("Fetching task deliverables")
         return client.from("task_documents").select().decodeList<TaskDocument>()
+    }
+
+    suspend fun createTask(client: SupabaseClient, request: CreateTaskRequest): Task {
+        try {
+            application.log.info("Creating task title=${request.title}")
+            return client.from("tasks").insert(
+                TaskInsert(
+                    title = request.title.trim(),
+                    description = request.description,
+                    status = request.status.trim(),
+                    priority = request.priority,
+                    isRecurring = request.isRecurring,
+                    cronExpression = request.cronExpression,
+                    recurrenceInterval = request.recurrenceInterval,
+                    nextRunAt = request.nextRunAt,
+                    lastRunAt = request.lastRunAt
+                )
+            ) {
+                select()
+                single()
+            }.decodeSingle<Task>()
+        } catch (e: Exception) {
+            application.log.error("Failed to create task title=${request.title}", e)
+            throw e
+        }
+    }
+
+    suspend fun updateTask(client: SupabaseClient, id: String, request: UpdateTaskRequest): Task? {
+        try {
+            application.log.info("Updating task id=$id")
+            return client.from("tasks").update(
+                TaskUpdate(
+                    title = request.title.trim(),
+                    description = request.description,
+                    status = request.status.trim(),
+                    priority = request.priority,
+                    updatedAt = Instant.now().toString(),
+                    isRecurring = request.isRecurring,
+                    cronExpression = request.cronExpression,
+                    recurrenceInterval = request.recurrenceInterval,
+                    nextRunAt = request.nextRunAt,
+                    lastRunAt = request.lastRunAt
+                )
+            ) {
+                filter { eq("id", id) }
+                select()
+                single()
+            }.decodeSingleOrNull<Task>()
+        } catch (e: Exception) {
+            application.log.error("Failed to update task id=$id", e)
+            throw e
+        }
+    }
+
+    /**
+     * Deleting a task is intentionally a hard delete on `tasks`.
+     * Dependent rows must be cleaned up or detached by DB foreign-key actions,
+     * not by application-side manual deletes.
+     */
+    suspend fun deleteTask(client: SupabaseClient, id: String): Task? {
+        try {
+            application.log.info("Deleting task id=$id")
+            return client.from("tasks").delete {
+                filter { eq("id", id) }
+                select()
+                single()
+            }.decodeSingleOrNull<Task>()
+        } catch (e: Exception) {
+            application.log.error("Failed to delete task id=$id", e)
+            throw e
+        }
     }
 }

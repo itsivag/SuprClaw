@@ -2,7 +2,7 @@ package com.suprbeta.supabase
 
 import io.ktor.server.application.*
 
-private val USER_PROJECT_SQL = """
+internal val USER_PROJECT_SQL = """
 CREATE TABLE IF NOT EXISTS public.agents (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL UNIQUE,

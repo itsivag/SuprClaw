@@ -25,6 +25,65 @@ data class Task(
 )
 
 @Serializable
+data class CreateTaskRequest(
+    val title: String,
+    val description: String? = null,
+    val status: String = "inbox",
+    val priority: Int = 5,
+    @SerialName("is_recurring") val isRecurring: Boolean = false,
+    @SerialName("cron_expression") val cronExpression: String? = null,
+    @SerialName("recurrence_interval") val recurrenceInterval: String? = null,
+    @SerialName("next_run_at") val nextRunAt: String? = null,
+    @SerialName("last_run_at") val lastRunAt: String? = null,
+)
+
+@Serializable
+data class UpdateTaskRequest(
+    val title: String,
+    val description: String? = null,
+    val status: String = "inbox",
+    val priority: Int = 5,
+    @SerialName("is_recurring") val isRecurring: Boolean = false,
+    @SerialName("cron_expression") val cronExpression: String? = null,
+    @SerialName("recurrence_interval") val recurrenceInterval: String? = null,
+    @SerialName("next_run_at") val nextRunAt: String? = null,
+    @SerialName("last_run_at") val lastRunAt: String? = null,
+)
+
+@Serializable
+data class DeleteTaskResponse(
+    val message: String,
+    val id: String
+)
+
+@Serializable
+internal data class TaskInsert(
+    val title: String,
+    val description: String? = null,
+    val status: String = "inbox",
+    val priority: Int = 5,
+    @SerialName("is_recurring") val isRecurring: Boolean = false,
+    @SerialName("cron_expression") val cronExpression: String? = null,
+    @SerialName("recurrence_interval") val recurrenceInterval: String? = null,
+    @SerialName("next_run_at") val nextRunAt: String? = null,
+    @SerialName("last_run_at") val lastRunAt: String? = null,
+)
+
+@Serializable
+internal data class TaskUpdate(
+    val title: String,
+    val description: String? = null,
+    val status: String = "inbox",
+    val priority: Int = 5,
+    @SerialName("updated_at") val updatedAt: String,
+    @SerialName("is_recurring") val isRecurring: Boolean = false,
+    @SerialName("cron_expression") val cronExpression: String? = null,
+    @SerialName("recurrence_interval") val recurrenceInterval: String? = null,
+    @SerialName("next_run_at") val nextRunAt: String? = null,
+    @SerialName("last_run_at") val lastRunAt: String? = null,
+)
+
+@Serializable
 data class TaskMessage(
     val id: String? = null,
     @SerialName("task_id") val taskId: String = "",
