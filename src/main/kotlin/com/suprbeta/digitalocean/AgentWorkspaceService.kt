@@ -45,6 +45,11 @@ class AgentWorkspaceServiceImpl(
             "IDENTITY.md",
             "USER.md"
         )
+        private val PROFILE_VISIBLE_FILES = listOf(
+            "SOUL.md",
+            "IDENTITY.md",
+            "USER.md"
+        )
         private const val LEAD_AGENT_NAME = "Lead"
         private const val LEAD_WORKSPACE_PATH = "/home/openclaw/.openclaw/workspace"
         private const val WORKSPACE_TYPE_LEAD = "lead"
@@ -69,6 +74,7 @@ class AgentWorkspaceServiceImpl(
             .lines()
             .map { it.trim() }
             .filter { it.isNotBlank() }
+            .filter { it in PROFILE_VISIBLE_FILES }
 
         return AgentFileListResponse(
             dropletId = dropletId,
@@ -186,7 +192,7 @@ class AgentWorkspaceServiceImpl(
     }
 
     private fun buildListCommand(workspacePath: String): String {
-        val fileArgs = ALLOWED_FILES.joinToString(" ") { singleQuote(it) }
+        val fileArgs = PROFILE_VISIBLE_FILES.joinToString(" ") { singleQuote(it) }
         return "if [ -d ${singleQuote(workspacePath)} ]; then " +
             "cd ${singleQuote(workspacePath)} && " +
             "for file in $fileArgs; do [ -f \"\$file\" ] && printf '%s\\n' \"\$file\"; done; " +

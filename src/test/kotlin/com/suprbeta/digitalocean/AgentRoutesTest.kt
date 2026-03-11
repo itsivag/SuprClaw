@@ -63,7 +63,7 @@ class AgentRoutesTest {
             dropletId = 99L,
             agentName = "Lead",
             workspaceType = "lead",
-            files = listOf("AGENTS.md", "TOOLS.md")
+            files = listOf("SOUL.md", "USER.md")
         )
 
         val response = client.get("/api/agents/99/Lead/files") {
@@ -72,7 +72,7 @@ class AgentRoutesTest {
 
         assertEquals(HttpStatusCode.OK, response.status)
         val body = json.decodeFromString<AgentFileListResponse>(response.bodyAsText())
-        assertEquals(listOf("AGENTS.md", "TOOLS.md"), body.files)
+        assertEquals(listOf("SOUL.md", "USER.md"), body.files)
         assertEquals("lead", body.workspaceType)
     }
 

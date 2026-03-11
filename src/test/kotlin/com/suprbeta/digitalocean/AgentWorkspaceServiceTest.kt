@@ -94,15 +94,19 @@ class AgentWorkspaceServiceTest {
         val service = buildService(application)
 
         coEvery { firestoreRepository.getUserDropletInternal("user-1") } returns dockerDroplet
-        every { sshExecutor.runSshCommand("10.0.0.5", capture(commandSlot)) } returns "AGENTS.md\nTOOLS.md\n"
+        every { sshExecutor.runSshCommand("10.0.0.5", capture(commandSlot)) } returns "SOUL.md\nUSER.md\n"
 
         val response = service.listWorkspaceFiles("user-1", 99L, "Lead")
 
-        assertEquals(listOf("AGENTS.md", "TOOLS.md"), response.files)
+        assertEquals(listOf("SOUL.md", "USER.md"), response.files)
         assertEquals("lead", response.workspaceType)
         assertTrue(commandSlot.captured.contains("docker exec"))
         assertTrue(commandSlot.captured.contains("71bb0ef6c173d2db26c6f011f0d2743908f5891a3708def3ea255edbe124c7a8"))
         assertTrue(commandSlot.captured.contains("/home/openclaw/.openclaw/workspace"))
+        assertFalse(commandSlot.captured.contains("AGENTS.md"))
+        assertFalse(commandSlot.captured.contains("TOOLS.md"))
+        assertFalse(commandSlot.captured.contains("HEARTBEAT.md"))
+        assertFalse(commandSlot.captured.contains("BOOTSTRAP.md"))
     }
 
     @Test
@@ -115,14 +119,27 @@ class AgentWorkspaceServiceTest {
         coEvery { agentRepository.getAgents(supabaseClient) } returns listOf(
             com.suprbeta.digitalocean.models.UserAgent(name = "content-writer")
         )
-        every { sshExecutor.runSshCommand("10.0.0.5", capture(commandSlot)) } returns "AGENTS.md\n"
+        every { sshExecutor.runSshCommand("10.0.0.5", capture(commandSlot)) } returns "IDENTITY.md\n"
 
         val response = service.listWorkspaceFiles("user-1", 99L, "content-writer")
 
         assertEquals("marketplace", response.workspaceType)
-        assertEquals(listOf("AGENTS.md"), response.files)
+        assertEquals(listOf("IDENTITY.md"), response.files)
         assertTrue(commandSlot.captured.contains("docker exec"))
         assertTrue(commandSlot.captured.contains("/home/openclaw/.openclaw/workspace-content"))
+    }
+
+    @Test
+    fun `listWorkspaceFiles filters hidden workspace docs from ssh output`() = testApplication {
+        val service = buildService(application)
+
+        coEvery { firestoreRepository.getUserDropletInternal("user-1") } returns dockerDroplet
+        every { sshExecutor.runSshCommand("10.0.0.5", any()) } returns
+            "AGENTS.md\nTOOLS.md\nHEARTBEAT.md\nBOOTSTRAP.md\nSOUL.md\nUSER.md\n"
+
+        val response = service.listWorkspaceFiles("user-1", 99L, "Lead")
+
+        assertEquals(listOf("SOUL.md", "USER.md"), response.files)
     }
 
     @Test
