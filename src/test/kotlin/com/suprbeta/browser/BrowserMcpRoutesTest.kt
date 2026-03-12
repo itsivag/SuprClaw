@@ -4,8 +4,10 @@ import com.suprbeta.configureSerialization
 import com.suprbeta.digitalocean.models.UserDropletInternal
 import com.suprbeta.firebase.FirestoreRepository
 import io.ktor.client.request.header
+import io.ktor.client.request.prepareGet
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
@@ -13,6 +15,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.application.Application
 import io.ktor.server.testing.testApplication
+import io.ktor.utils.io.readLine
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
@@ -71,6 +74,63 @@ class BrowserMcpRoutesTest {
         val tools = body["result"]!!.jsonObject["tools"]!!.jsonArray
         assertTrue(tools.any { it.jsonObject["name"]?.jsonPrimitive?.content == "cloud_browser_open" })
         assertTrue(tools.any { it.jsonObject["name"]?.jsonPrimitive?.content == "cloud_browser_exec" })
+    }
+
+    @Test
+    fun `mcp sse endpoint streams message events`() = testApplication {
+        application { configureTestModule() }
+
+        coEvery { firestoreRepository.getUserDropletInternalByGatewayToken("gw-token") } returns droplet
+
+        client.prepareGet("/api/mcp/cloud-browser") {
+            header(HttpHeaders.Authorization, "Bearer gw-token")
+        }.execute { response ->
+            assertEquals(HttpStatusCode.OK, response.status)
+            assertTrue(response.headers[HttpHeaders.ContentType].orEmpty().startsWith("text/event-stream"))
+
+            val channel = response.bodyAsChannel()
+            assertEquals("event: endpoint", channel.readLine())
+            val endpointLine = channel.readLine()
+            assertEquals("", channel.readLine())
+
+            val endpoint = endpointLine!!.removePrefix("data: ")
+            assertTrue(endpoint.startsWith("/api/mcp/cloud-browser/messages?session_id="))
+
+            val postResponse = client.post(endpoint) {
+                header(HttpHeaders.Authorization, "Bearer gw-token")
+                contentType(ContentType.Application.Json)
+                setBody("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")
+            }
+
+            assertEquals(HttpStatusCode.Accepted, postResponse.status)
+            assertEquals("event: message", channel.readLine())
+            val payloadLine = channel.readLine()
+            assertEquals("", channel.readLine())
+
+            val body = json.parseToJsonElement(payloadLine!!.removePrefix("data: ")).jsonObject
+            val tools = body["result"]!!.jsonObject["tools"]!!.jsonArray
+            assertTrue(tools.any { it.jsonObject["name"]?.jsonPrimitive?.content == "cloud_browser_open" })
+            assertTrue(tools.any { it.jsonObject["name"]?.jsonPrimitive?.content == "cloud_browser_close" })
+        }
+    }
+
+    @Test
+    fun `mcp sse endpoint honors forwarded prefix for proxy clients`() = testApplication {
+        application { configureTestModule() }
+
+        coEvery { firestoreRepository.getUserDropletInternalByGatewayToken("gw-token") } returns droplet
+
+        client.prepareGet("/api/mcp/cloud-browser") {
+            header(HttpHeaders.Authorization, "Bearer gw-token")
+            header("X-Forwarded-Prefix", "/cloud_browser")
+        }.execute { response ->
+            assertEquals(HttpStatusCode.OK, response.status)
+            val channel = response.bodyAsChannel()
+            assertEquals("event: endpoint", channel.readLine())
+            val endpointLine = channel.readLine()
+            assertEquals("", channel.readLine())
+            assertTrue(endpointLine!!.removePrefix("data: ").startsWith("/cloud_browser/messages?session_id="))
+        }
     }
 
     @Test

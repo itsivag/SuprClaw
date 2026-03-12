@@ -204,6 +204,7 @@ function handleRequest(req, res, serverName, remaining, env, route, body) {
   let upstreamPath = upstreamBasePath + normalizedRemaining;
   if (!upstreamPath) upstreamPath = "/";
   const headers = Object.assign({}, req.headers, { host: upstreamUrl.hostname });
+  headers["x-forwarded-prefix"] = "/" + serverName;
 
   if (auth.type === "bearer") {
     headers["authorization"] = "Bearer " + envValue;

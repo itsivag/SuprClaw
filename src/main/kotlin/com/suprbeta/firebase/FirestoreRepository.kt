@@ -1188,6 +1188,9 @@ class FirestoreRepository(
             val snapshot = firestore.collectionGroup(USER_DROPLETS_SUBCOLLECTION).get().await()
             snapshot.documents.firstNotNullOfOrNull { doc ->
                 val raw = runCatching { doc.toObject(UserDropletInternal::class.java) }.getOrNull() ?: return@firstNotNullOfOrNull null
+                if (raw.gatewayToken == gatewayToken) {
+                    return@firstNotNullOfOrNull raw
+                }
                 val decrypted = runCatching { decryptDroplet(raw) }
                     .onFailure { application.log.warn("Failed to decrypt droplet during gateway token lookup: ${doc.reference.path}", it) }
                     .getOrNull()
