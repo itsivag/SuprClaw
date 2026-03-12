@@ -347,7 +347,8 @@ class BrowserServiceImpl(
             droplet,
             notificationType = "browser.takeover.requested",
             browserEventType = "browser.session.takeover_requested",
-            title = "Browser Needs Your Attention"
+            title = "Browser Needs Your Attention",
+            sendPushNotification = false
         )
         startHeartbeat(updated)
         takeoverRequests.incrementAndGet()
@@ -526,7 +527,8 @@ class BrowserServiceImpl(
         droplet: UserDropletInternal,
         notificationType: String,
         browserEventType: String,
-        title: String
+        title: String,
+        sendPushNotification: Boolean = true
     ) {
         val taskId = resolveTaskId(session.userId, session.taskId)
         val client = userClientProvider.getClient(
@@ -553,7 +555,7 @@ class BrowserServiceImpl(
             logger.warn("Failed to persist browser notification for session ${session.id}: ${it.message}")
         }
 
-        val fcmToken = firestoreRepository.getFcmToken(session.userId)
+        val fcmToken = if (sendPushNotification) firestoreRepository.getFcmToken(session.userId) else null
         if (!fcmToken.isNullOrBlank()) {
             pushNotificationSender.sendNotification(
                 fcmToken = fcmToken,

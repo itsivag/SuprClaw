@@ -252,7 +252,7 @@ class BrowserServiceTest {
     }
 
     @Test
-    fun `request takeover persists takeover state and sends high priority notification`() = testApplication {
+    fun `request takeover persists takeover state without sending fcm push`() = testApplication {
         lateinit var service: BrowserServiceImpl
         application { service = newService(this) }
         startApplication()
@@ -301,18 +301,7 @@ class BrowserServiceTest {
                     }
                 )
             }
-            coVerify {
-                pushNotificationSender.sendNotification(
-                    fcmToken = "fcm-token",
-                    title = "Browser Needs Your Attention",
-                    body = "Open the live browser viewer in SuprClaw.",
-                    data = match {
-                        it["browserEventType"] == "browser.session.takeover_requested" &&
-                            it["taskId"] == "task-1"
-                    },
-                    highPriority = true
-                )
-            }
+            coVerify(exactly = 0) { pushNotificationSender.sendNotification(any(), any(), any(), any(), any()) }
         } finally {
             service.shutdown()
         }

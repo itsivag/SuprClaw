@@ -184,4 +184,41 @@ class WebhookRoutesTest {
             )
         }
     }
+
+    @Test
+    fun `notification webhook skips fcm push for browser takeover notifications`() = testApplication {
+        application { configureTestModule() }
+
+        coEvery { firestoreRepository.getUserDropletInternalByProjectRef("project-1") } returns droplet
+        coEvery { firestoreRepository.getFcmToken("user-1") } returns "fcm-token"
+
+        val response = client.post("/webhooks/notifications/project-1") {
+            header(HttpHeaders.Authorization, "Bearer secret")
+            contentType(ContentType.Application.Json)
+            setBody(
+                """
+                {
+                  "type": "INSERT",
+                  "table": "notifications",
+                  "record": {
+                    "id": "notif-browser-2",
+                    "type": "browser.takeover.requested",
+                    "payload": {
+                      "title": "Browser Needs Your Attention",
+                      "taskId": "agent:main:main",
+                      "browserSessionId": "browser_123",
+                      "browserState": "takeover_requested",
+                      "browserEventType": "browser.session.takeover_requested"
+                    }
+                  },
+                  "schema": "public",
+                  "old_record": null
+                }
+                """.trimIndent()
+            )
+        }
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        coVerify(exactly = 0) { pushNotificationSender.sendNotification(any(), any(), any(), any()) }
+    }
 }
