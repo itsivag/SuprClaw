@@ -33,14 +33,6 @@ object McpToolRegistry {
             authEnvVar = "SUPABASE_ACCESS_TOKEN",
             mcporterUrlTemplate = "http://127.0.0.1:18790/supabase/mcp?project_ref={projectRef}"
         ),
-        "firecrawl" to McpToolDefinition(
-            name = "firecrawl",
-            upstream = "https://mcp.firecrawl.dev",
-            authType = "path-prefix",
-            authEnvVar = "FIRECRAWL_API_KEY",
-            authTemplate = "/{key}/v2",
-            mcporterUrlTemplate = "http://127.0.0.1:18790/firecrawl/mcp"
-        ),
         "cloud_browser" to McpToolDefinition(
             name = "cloud_browser",
             upstream = "https://api.suprclaw.com/api/mcp/cloud-browser",

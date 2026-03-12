@@ -24,7 +24,7 @@
       ],
       "source_path": "marketplace/seo",
       "install_path": ".openclaw/workspace-seo",
-      "mcp_tools": ["firecrawl"]
+      "mcp_tools": ["cloud_browser"]
     },
     {
       "id": "content-writer",
@@ -49,8 +49,7 @@
       ],
       "source_path": "marketplace/content",
       "install_path": ".openclaw/workspace-content",
-      "mcp_tools": ["firecrawl"]
+      "mcp_tools": ["cloud_browser"]
     }
   ]
 }
-

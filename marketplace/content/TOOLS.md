@@ -16,56 +16,46 @@ Located in `/skills/`
 
 ## External Tools
 
-### Firecrawl (via mcporter)
+### SuprClaw Cloud Browser (via mcporter)
 
-Web scraping and search powered by Firecrawl MCP server.
+Interactive browsing powered by the SuprClaw cloud browser MCP server.
 
 **Setup:**
 ```bash
 mcporter list  # Show available MCP servers
-mcporter call firecrawl.<tool> key=value  # Call a tool
+mcporter call cloud_browser.<tool> key=value  # Call a tool
 ```
 
-**Available Tools (11):**
+**Available Tools:**
 
 | Tool | Description |
 |------|-------------|
-| `firecrawl_search` | Web search with operators (like Google) |
-| `firecrawl_scrape` | Extract content from URL (markdown/JSON/branding) |
-| `firecrawl_map` | Discover all URLs on a site |
-| `firecrawl_crawl` | Crawl multiple pages |
-| `firecrawl_extract` | Structured data extraction with schema |
-| `firecrawl_agent` | Autonomous research agent |
-| `firecrawl_agent_status` | Check agent job status |
-| `firecrawl_browser_create` | Create browser session (CDP) |
-| `firecrawl_browser_delete` | Destroy browser session |
-| `firecrawl_browser_list` | List active browser sessions |
-| `firecrawl_check_crawl_status` | Check crawl job status |
+| `cloud_browser_open` | Create a SuprClaw-managed browser session |
+| `cloud_browser_exec` | Navigate, inspect, click, type, and capture browser state |
+| `cloud_browser_request_takeover` | Ask the user to take over for CAPTCHA, MFA, login approvals, or sensitive actions |
+| `cloud_browser_resume` | Return control to the agent after user takeover |
+| `cloud_browser_close` | Gracefully close the browser session |
 
 **Usage Examples:**
 
 ```bash
-# Search the web
-mcporter call firecrawl.firecrawl_search query:"AI trends 2024" limit:5
+# Open a browser session for a content research task
+mcporter call cloud_browser.cloud_browser_open taskId:"thread_abc" initialUrl:"https://example.com"
 
-# Scrape a URL (markdown)
-mcporter call firecrawl.firecrawl_scrape url:"https://example.com/article" formats:["markdown"]
+# Navigate and inspect the page
+mcporter call cloud_browser.cloud_browser_exec sessionId:"browser_123" action:"open" url:"https://example.com/article"
 
-# Scrape structured data (JSON)
-mcporter call firecrawl.firecrawl_scrape url:"https://example.com/pricing" formats:[{"type":"json","prompt":"Extract plan names and prices","schema":{"type":"object","properties":{"plans":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"price":{"type":"string"}}}}}}}]
+# Capture a page snapshot after navigation
+mcporter call cloud_browser.cloud_browser_exec sessionId:"browser_123" action:"snapshot"
 
-# Map a site to find URLs
-mcporter call firecrawl.firecrawl_map url:"https://example.com/blog"
-
-# Run autonomous research
-mcporter call firecrawl.firecrawl_agent prompt:"Find top AI tools for content writing"
+# Ask the user to take over for a CAPTCHA or login approval
+mcporter call cloud_browser.cloud_browser_request_takeover sessionId:"browser_123" reason:"CAPTCHA detected"
 ```
 
-**Search Operators:**
-- `"phrase"` — Exact match
-- `site:domain.com` — Limit to domain
-- `-exclude` — Exclude term
-- `intitle:word` — Word in title
+**Research Guidance:**
+- Use built-in web fetch/search tools first for read-only research.
+- Use `cloud_browser_*` when the site requires interaction, authenticated state, or a live browser view for the user.
+- Always request takeover for CAPTCHA, MFA, payments, account changes, or destructive actions.
 
 ---
 
@@ -83,9 +73,9 @@ mcporter call firecrawl.firecrawl_agent prompt:"Find top AI tools for content wr
 
 | Need | Tool/Skill |
 |------|------------|
-| Web research | `mcporter call firecrawl_search` |
+| Interactive web research | `mcporter call cloud_browser_open` + `cloud_browser_exec` |
 | Competitor analysis | `content-gap-analysis` skill |
 | SEO articles | `seo-content-writer` skill |
 | AI citation优化 | `geo-optimizer` skill |
 | UX/marketing copy | `copywriter` skill |
-| Scrape structured data | `mcporter call firecrawl_scrape` (JSON format) |
+| Live browsing with user takeover | `cloud_browser_request_takeover` |

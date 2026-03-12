@@ -15,7 +15,7 @@ object AgentWorkspaceBootstrap {
         - Use `cloud_browser_exec` for navigation, clicks, form fills, and page inspection.
         - Use `cloud_browser_request_takeover` for CAPTCHA, MFA, login approvals, payments, account changes, and destructive actions.
         - Use `cloud_browser_resume` after the user completes takeover, and `cloud_browser_close` when the browser task is done.
-        - Do not use raw `firecrawl_browser_*` tools when `cloud_browser_*` tools are available.
+        - Do not use raw provider browser sandbox tools; use the `cloud_browser_*` tools instead.
         - Prefer search or scrape tools for read-only extraction; use cloud browser only when the site needs interaction or authenticated state.
     """.trimIndent()
 

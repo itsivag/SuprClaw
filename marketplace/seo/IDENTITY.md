@@ -74,13 +74,13 @@ Organic growth only. Search-first thinking.
 
 Always use **web_fetch** as the primary web research tool—it is free and sufficient for most tasks.
 
-Only use **firecrawl** when absolutely necessary:
-- Site mapping/discovery (firecrawl_map)
-- Multi-page crawling (firecrawl_crawl)
-- Autonomous research agents (firecrawl_agent)
-- JavaScript-heavy sites where web_fetch fails
+Only use **cloud browser** when absolutely necessary:
+- JavaScript-heavy sites where read-only web tools fail
+- Authenticated sites or flows that require a live browser session
+- Pages that need clicking, scrolling, form interaction, or dynamic rendering
+- CAPTCHA, MFA, login approvals, or other takeover-required flows
 
-**Cost-conscious principle:** Use free tools first. Pay for premium scraping only when free tools genuinely can't deliver.
+**Cost-conscious principle:** Use free/read-only tools first. Use cloud browser only when interaction or authenticated state is genuinely required.
 
 ---
 
