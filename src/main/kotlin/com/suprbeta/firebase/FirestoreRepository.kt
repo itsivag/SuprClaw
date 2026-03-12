@@ -6,6 +6,9 @@ import com.google.cloud.firestore.DocumentSnapshot
 import com.google.cloud.firestore.FieldValue
 import com.google.cloud.firestore.QuerySnapshot
 import com.google.cloud.firestore.SetOptions
+import com.suprbeta.browser.BrowserProfileInternal
+import com.suprbeta.browser.BrowserSessionInternal
+import com.suprbeta.browser.BrowserSessionState
 import com.suprbeta.connector.ConnectorInternal
 import com.suprbeta.connector.ConnectorSessionInternal
 import com.suprbeta.core.CryptoOperationException
@@ -40,7 +43,9 @@ class FirestoreRepository(
         private const val USER_USAGE_SUBCOLLECTION = "usage"
         private const val USER_MESSAGE_QUEUE_SUBCOLLECTION = "message_queue"
         private const val USER_CONNECTORS_SUBCOLLECTION = "connectors"
+        private const val USER_BROWSER_PROFILES_SUBCOLLECTION = "browser_profiles"
         private const val CONNECTOR_SESSIONS_COLLECTION = "connector_sessions"
+        private const val BROWSER_SESSIONS_COLLECTION = "browser_sessions"
         private const val PROJECT_REFS_COLLECTION = "supabase_project_refs"
         private const val HOSTS_COLLECTION = "hosts"
         private const val USER_HOST_MAPPINGS_COLLECTION = "user_host_mappings"
@@ -430,6 +435,280 @@ class FirestoreRepository(
             application.log.error("Failed to fetch connector session '$sessionId'", e)
             null
         }
+    }
+
+    // ==================== Browser Profile + Session Operations ====================
+
+    private fun encryptBrowserSession(session: BrowserSessionInternal): BrowserSessionInternal {
+        val aadPrefix = "${session.userId}:${session.id}"
+        return session.copy(
+            providerSessionId = cryptoService.encrypt(session.providerSessionId, "$aadPrefix:providerSessionId"),
+            providerLiveViewUrl = cryptoService.encrypt(session.providerLiveViewUrl, "$aadPrefix:providerLiveViewUrl"),
+            providerInteractiveLiveViewUrl = cryptoService.encrypt(session.providerInteractiveLiveViewUrl, "$aadPrefix:providerInteractiveLiveViewUrl"),
+            providerCdpUrl = cryptoService.encrypt(session.providerCdpUrl, "$aadPrefix:providerCdpUrl")
+        )
+    }
+
+    private fun decryptBrowserSession(session: BrowserSessionInternal): BrowserSessionInternal {
+        val aadPrefix = "${session.userId}:${session.id}"
+        return session.copy(
+            providerSessionId = cryptoService.decrypt(session.providerSessionId, "$aadPrefix:providerSessionId"),
+            providerLiveViewUrl = cryptoService.decrypt(session.providerLiveViewUrl, "$aadPrefix:providerLiveViewUrl"),
+            providerInteractiveLiveViewUrl = cryptoService.decrypt(session.providerInteractiveLiveViewUrl, "$aadPrefix:providerInteractiveLiveViewUrl"),
+            providerCdpUrl = cryptoService.decrypt(session.providerCdpUrl, "$aadPrefix:providerCdpUrl")
+        )
+    }
+
+    suspend fun saveBrowserProfile(userId: String, profile: BrowserProfileInternal) {
+        try {
+            firestore.collection(USERS)
+                .document(userId)
+                .collection(USER_BROWSER_PROFILES_SUBCOLLECTION)
+                .document(profile.id)
+                .set(profile)
+                .await()
+            application.log.info("Saved browser profile '${profile.id}' for userId=$userId")
+        } catch (e: Exception) {
+            application.log.error("Failed to save browser profile '${profile.id}' for userId=$userId", e)
+            throw e
+        }
+    }
+
+    suspend fun getBrowserProfile(userId: String, profileId: String): BrowserProfileInternal? {
+        return try {
+            val snapshot = firestore.collection(USERS)
+                .document(userId)
+                .collection(USER_BROWSER_PROFILES_SUBCOLLECTION)
+                .document(profileId)
+                .get()
+                .await()
+            if (!snapshot.exists()) return null
+            snapshot.toObject(BrowserProfileInternal::class.java)
+        } catch (e: Exception) {
+            application.log.error("Failed to get browser profile '$profileId' for userId=$userId", e)
+            null
+        }
+    }
+
+    suspend fun listBrowserProfiles(userId: String): List<BrowserProfileInternal> {
+        return try {
+            firestore.collection(USERS)
+                .document(userId)
+                .collection(USER_BROWSER_PROFILES_SUBCOLLECTION)
+                .get()
+                .await()
+                .documents
+                .mapNotNull { it.toObject(BrowserProfileInternal::class.java) }
+                .filterNot { it.status.equals("deleted", ignoreCase = true) }
+        } catch (e: Exception) {
+            application.log.error("Failed to list browser profiles for userId=$userId", e)
+            emptyList()
+        }
+    }
+
+    suspend fun rotateBrowserProfile(
+        userId: String,
+        profileId: String,
+        newProviderProfileName: String,
+        nowIso: String
+    ): BrowserProfileInternal? {
+        return try {
+            val current = getBrowserProfile(userId, profileId) ?: return null
+            val rotated = current.copy(
+                providerProfileName = newProviderProfileName,
+                generation = current.generation + 1,
+                lockedBySessionId = null,
+                lockedAt = null,
+                lockExpiresAt = null,
+                lastHeartbeatAt = null,
+                lastUsedAt = nowIso,
+                retiredProviderProfileNames = (current.retiredProviderProfileNames + current.providerProfileName).distinct()
+            )
+            saveBrowserProfile(userId, rotated)
+            rotated
+        } catch (e: Exception) {
+            application.log.error("Failed to rotate browser profile '$profileId' for userId=$userId", e)
+            throw e
+        }
+    }
+
+    suspend fun acquireBrowserProfileLockAndCreateSession(
+        userId: String,
+        profileId: String,
+        session: BrowserSessionInternal,
+        lockExpiresAtIso: String,
+        nowIso: String,
+        staleHeartbeatSeconds: Long
+    ) {
+        try {
+            firestore.runTransaction { transaction ->
+                val profileRef = firestore.collection(USERS)
+                    .document(userId)
+                    .collection(USER_BROWSER_PROFILES_SUBCOLLECTION)
+                    .document(profileId)
+                val sessionRef = firestore.collection(BROWSER_SESSIONS_COLLECTION).document(session.id)
+
+                val profileSnapshot = transaction.get(profileRef).get()
+                val profile = profileSnapshot.toObject(BrowserProfileInternal::class.java)
+                    ?: throw IllegalStateException("Browser profile '$profileId' not found")
+
+                val lockedBy = profile.lockedBySessionId
+                val lockExpiresAt = profile.lockExpiresAt
+                val lastHeartbeatAt = profile.lastHeartbeatAt
+                val lockActive = !lockedBy.isNullOrBlank() &&
+                    !isIsoTimestampExpired(lockExpiresAt, nowIso) &&
+                    !isHeartbeatStale(lastHeartbeatAt, nowIso, staleHeartbeatSeconds)
+
+                if (lockActive && lockedBy != session.id) {
+                    throw IllegalStateException("Browser profile '$profileId' is locked")
+                }
+
+                transaction.set(sessionRef, session)
+                transaction.update(
+                    profileRef,
+                    mapOf(
+                        "lockedBySessionId" to session.id,
+                        "lockedAt" to nowIso,
+                        "lockExpiresAt" to lockExpiresAtIso,
+                        "lastHeartbeatAt" to nowIso,
+                        "lastUsedAt" to nowIso
+                    )
+                )
+                null
+            }.await()
+        } catch (e: Exception) {
+            application.log.error("Failed to acquire browser lock for profile '$profileId' userId=$userId", e)
+            throw e
+        }
+    }
+
+    suspend fun saveBrowserSession(session: BrowserSessionInternal) {
+        try {
+            val encrypted = encryptBrowserSession(session)
+            firestore.collection(BROWSER_SESSIONS_COLLECTION)
+                .document(session.id)
+                .set(encrypted)
+                .await()
+            application.log.info("Saved browser session '${session.id}' for userId=${session.userId}")
+        } catch (e: Exception) {
+            application.log.error("Failed to save browser session '${session.id}'", e)
+            throw e
+        }
+    }
+
+    suspend fun getBrowserSessionInternal(sessionId: String): BrowserSessionInternal? {
+        return try {
+            val snapshot = firestore.collection(BROWSER_SESSIONS_COLLECTION)
+                .document(sessionId)
+                .get()
+                .await()
+            if (!snapshot.exists()) return null
+            val session = snapshot.toObject(BrowserSessionInternal::class.java) ?: return null
+            decryptBrowserSession(session)
+        } catch (e: CryptoOperationException) {
+            application.log.error("Failed to decrypt browser session '$sessionId'", e)
+            throw e
+        } catch (e: Exception) {
+            application.log.error("Failed to fetch browser session '$sessionId'", e)
+            null
+        }
+    }
+
+    suspend fun listBrowserSessionsByStates(states: Collection<String>): List<BrowserSessionInternal> {
+        if (states.isEmpty()) return emptyList()
+        return try {
+            firestore.collection(BROWSER_SESSIONS_COLLECTION)
+                .whereIn("state", states.toList())
+                .get()
+                .await()
+                .documents
+                .mapNotNull { doc ->
+                    val session = doc.toObject(BrowserSessionInternal::class.java)
+                    runCatching { decryptBrowserSession(session) }
+                        .onFailure { application.log.error("Failed to decrypt browser session ${doc.id}", it) }
+                        .getOrNull()
+                }
+        } catch (e: Exception) {
+            application.log.error("Failed to list browser sessions by states=${states.joinToString()}", e)
+            emptyList()
+        }
+    }
+
+    suspend fun countActiveBrowserSessions(userId: String? = null): Int {
+        return try {
+            val query = firestore.collection(BROWSER_SESSIONS_COLLECTION)
+                .whereIn("state", BrowserSessionState.liveStates.toList())
+                .let { if (userId == null) it else it.whereEqualTo("userId", userId) }
+            query.get().await().documents.size
+        } catch (e: Exception) {
+            application.log.error("Failed to count active browser sessions for userId=$userId", e)
+            0
+        }
+    }
+
+    suspend fun releaseBrowserProfileLock(userId: String, profileId: String, ownedBySessionId: String? = null) {
+        try {
+            val profileRef = firestore.collection(USERS)
+                .document(userId)
+                .collection(USER_BROWSER_PROFILES_SUBCOLLECTION)
+                .document(profileId)
+            firestore.runTransaction { transaction ->
+                val snapshot = transaction.get(profileRef).get()
+                if (!snapshot.exists()) return@runTransaction null
+                val profile = snapshot.toObject(BrowserProfileInternal::class.java) ?: return@runTransaction null
+                if (!ownedBySessionId.isNullOrBlank() && profile.lockedBySessionId != ownedBySessionId) return@runTransaction null
+                transaction.update(
+                    profileRef,
+                    mapOf(
+                        "lockedBySessionId" to null,
+                        "lockedAt" to null,
+                        "lockExpiresAt" to null
+                    )
+                )
+                null
+            }.await()
+        } catch (e: Exception) {
+            application.log.error("Failed to release browser profile lock '$profileId' userId=$userId", e)
+            throw e
+        }
+    }
+
+    suspend fun heartbeatBrowserSession(sessionId: String, nowIso: String) {
+        try {
+            firestore.collection(BROWSER_SESSIONS_COLLECTION)
+                .document(sessionId)
+                .set(mapOf("lastHeartbeatAt" to nowIso, "updatedAt" to nowIso), SetOptions.merge())
+                .await()
+        } catch (e: Exception) {
+            application.log.error("Failed to heartbeat browser session '$sessionId'", e)
+        }
+    }
+
+    suspend fun heartbeatBrowserProfile(userId: String, profileId: String, nowIso: String) {
+        try {
+            firestore.collection(USERS)
+                .document(userId)
+                .collection(USER_BROWSER_PROFILES_SUBCOLLECTION)
+                .document(profileId)
+                .set(mapOf("lastHeartbeatAt" to nowIso, "lastUsedAt" to nowIso), SetOptions.merge())
+                .await()
+        } catch (e: Exception) {
+            application.log.error("Failed to heartbeat browser profile '$profileId' userId=$userId", e)
+        }
+    }
+
+    private fun isIsoTimestampExpired(isoValue: String?, nowIso: String): Boolean {
+        if (isoValue.isNullOrBlank()) return true
+        val now = runCatching { java.time.Instant.parse(nowIso) }.getOrNull() ?: return true
+        val expiresAt = runCatching { java.time.Instant.parse(isoValue) }.getOrNull() ?: return true
+        return !expiresAt.isAfter(now)
+    }
+
+    private fun isHeartbeatStale(lastHeartbeatAt: String?, nowIso: String, staleHeartbeatSeconds: Long): Boolean {
+        if (lastHeartbeatAt.isNullOrBlank()) return true
+        val now = runCatching { java.time.Instant.parse(nowIso) }.getOrNull() ?: return true
+        val heartbeat = runCatching { java.time.Instant.parse(lastHeartbeatAt) }.getOrNull() ?: return true
+        return heartbeat.plusSeconds(staleHeartbeatSeconds).isBefore(now)
     }
 
     /**
@@ -900,6 +1179,23 @@ class FirestoreRepository(
         } catch (e: Exception) {
             application.log.error("Failed to list all user droplets", e)
             emptyList()
+        }
+    }
+
+    suspend fun getUserDropletInternalByGatewayToken(gatewayToken: String): UserDropletInternal? {
+        if (gatewayToken.isBlank()) return null
+        return try {
+            val snapshot = firestore.collectionGroup(USER_DROPLETS_SUBCOLLECTION).get().await()
+            snapshot.documents.firstNotNullOfOrNull { doc ->
+                val raw = runCatching { doc.toObject(UserDropletInternal::class.java) }.getOrNull() ?: return@firstNotNullOfOrNull null
+                val decrypted = runCatching { decryptDroplet(raw) }
+                    .onFailure { application.log.warn("Failed to decrypt droplet during gateway token lookup: ${doc.reference.path}", it) }
+                    .getOrNull()
+                decrypted?.takeIf { it.gatewayToken == gatewayToken }
+            }
+        } catch (e: Exception) {
+            application.log.error("Failed to lookup user droplet by gateway token", e)
+            null
         }
     }
 }

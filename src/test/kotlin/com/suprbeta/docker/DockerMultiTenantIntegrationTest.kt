@@ -239,6 +239,7 @@ class DockerMultiTenantIntegrationTest {
     fun `McpToolRegistry has expected default tools`() {
         val defaults = McpToolRegistry.defaultTools
         assertTrue(defaults.contains("supabase"))
+        assertTrue(defaults.contains("cloud_browser"))
         val tool = McpToolRegistry.get("supabase")
         assertNotNull(tool)
         assertEquals("supabase", tool!!.name)

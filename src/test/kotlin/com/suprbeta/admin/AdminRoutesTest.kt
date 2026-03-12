@@ -1,5 +1,8 @@
 package com.suprbeta.admin
 
+import com.suprbeta.browser.BrowserAdminCounters
+import com.suprbeta.browser.BrowserAdminSnapshot
+import com.suprbeta.browser.BrowserService
 import com.suprbeta.configureSerialization
 import com.suprbeta.digitalocean.DropletProvisioningService
 import com.suprbeta.digitalocean.models.UserDropletInternal
@@ -30,6 +33,7 @@ class AdminRoutesTest {
     private val firestoreRepository = mockk<FirestoreRepository>()
     private val provisioningService = mockk<DropletProvisioningService>(relaxed = true)
     private val metricsService = mockk<AdminMetricsService>()
+    private val browserService = mockk<BrowserService>()
     private val authService = mockk<FirebaseAuthService>()
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -45,7 +49,7 @@ class AdminRoutesTest {
         install(FirebaseAuthPlugin) {
             authService = this@AdminRoutesTest.authService
         }
-        configureAdminRoutes(firestoreRepository, provisioningService, metricsService)
+        configureAdminRoutes(firestoreRepository, provisioningService, metricsService, browserService)
     }
 
     @Test
@@ -173,6 +177,52 @@ class AdminRoutesTest {
         }
 
         assertEquals(HttpStatusCode.Forbidden, response.status)
+    }
+
+    @Test
+    fun `admin can fetch browser runtime metrics`() = testApplication {
+        application { configureTestModule() }
+
+        coEvery { authService.verifyToken("good-admin-token") } returns adminUser
+        coEvery { browserService.getAdminSnapshot() } returns BrowserAdminSnapshot(
+            capturedAtUtc = "2026-03-12T11:00:00Z",
+            enabled = true,
+            provider = "firecrawl",
+            activeSessionCount = 2,
+            globalActiveSessionLimit = 20,
+            perUserActiveSessionLimit = 2,
+            heartbeatJobCount = 1,
+            circuitOpen = false,
+            circuitOpenUntilUtc = null,
+            consecutiveProviderFailures = 0,
+            lastProviderError = null,
+            lastReconciliationAtUtc = "2026-03-12T10:59:30Z",
+            lastReconciliationError = null,
+            counters = BrowserAdminCounters(
+                sessionsCreated = 3,
+                sessionCreateFailures = 1,
+                takeoverRequests = 1,
+                resumeSuccesses = 1,
+                resumeExpirations = 0,
+                sessionsClosed = 1,
+                sessionsExpired = 0,
+                gracefulCloseExpirations = 0,
+                providerErrors = 1,
+                keepaliveFailures = 0,
+                reconciliationRuns = 4,
+                reconciliationFailures = 0
+            )
+        )
+
+        val response = client.get("/api/admin/browser") {
+            header(HttpHeaders.Authorization, "Bearer good-admin-token")
+        }
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        val body = json.decodeFromString<BrowserAdminSnapshot>(response.bodyAsText())
+        assertEquals("firecrawl", body.provider)
+        assertEquals(2, body.activeSessionCount)
+        assertEquals(3, body.counters.sessionsCreated)
     }
 
     @Test

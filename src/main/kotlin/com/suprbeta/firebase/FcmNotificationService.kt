@@ -1,5 +1,8 @@
 package com.suprbeta.firebase
 
+import com.google.firebase.messaging.AndroidConfig
+import com.google.firebase.messaging.ApnsConfig
+import com.google.firebase.messaging.Aps
 import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.messaging.Message
 import com.google.firebase.messaging.Notification
@@ -12,7 +15,8 @@ interface PushNotificationSender {
         fcmToken: String,
         title: String,
         body: String,
-        data: Map<String, String> = emptyMap()
+        data: Map<String, String> = emptyMap(),
+        highPriority: Boolean = false
     )
 }
 
@@ -22,11 +26,12 @@ class FcmNotificationService(private val application: Application) : PushNotific
         fcmToken: String,
         title: String,
         body: String,
-        data: Map<String, String>
+        data: Map<String, String>,
+        highPriority: Boolean
     ) {
         withContext(Dispatchers.IO) {
             try {
-                val message = Message.builder()
+                val builder = Message.builder()
                     .setToken(fcmToken)
                     .setNotification(
                         Notification.builder()
@@ -35,7 +40,26 @@ class FcmNotificationService(private val application: Application) : PushNotific
                             .build()
                     )
                     .putAllData(data)
-                    .build()
+
+                if (highPriority) {
+                    builder.setAndroidConfig(
+                        AndroidConfig.builder()
+                            .setPriority(AndroidConfig.Priority.HIGH)
+                            .build()
+                    )
+                    builder.setApnsConfig(
+                        ApnsConfig.builder()
+                            .putHeader("apns-priority", "10")
+                            .setAps(
+                                Aps.builder()
+                                    .setContentAvailable(true)
+                                    .build()
+                            )
+                            .build()
+                    )
+                }
+
+                val message = builder.build()
 
                 val messageId = FirebaseMessaging.getInstance().send(message)
                 application.log.info("FCM notification sent: $messageId title=$title")

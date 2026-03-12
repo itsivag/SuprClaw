@@ -139,7 +139,11 @@ open class DropletMcpServiceImpl(
                 else -> """{"type":"${tool.authType}","envVar":"${tool.authEnvVar}"}"""
             }
             val upstream = runtimeConfigByTool[tool.name]?.upstreamOverride?.trim()?.ifBlank { null }
-                ?: if (tool.name == "supabase") env("SUPABASE_MCP_URL").ifBlank { tool.upstream } else tool.upstream
+                ?: when (tool.name) {
+                    "supabase" -> env("SUPABASE_MCP_URL").ifBlank { tool.upstream }
+                    "cloud_browser" -> env("CLOUD_BROWSER_MCP_URL").ifBlank { tool.upstream }
+                    else -> tool.upstream
+                }
             """"${tool.name}":{"upstream":"$upstream","auth":$auth}"""
         }
         writeProtectedFile(droplet, "/etc/suprclaw/mcp-routes.json", "{$routes}")

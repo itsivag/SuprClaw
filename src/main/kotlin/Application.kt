@@ -1,6 +1,11 @@
 package com.suprbeta
 
 import com.suprbeta.admin.configureAdminRoutes
+import com.suprbeta.browser.BrowserService
+import com.suprbeta.browser.BrowserServiceImpl
+import com.suprbeta.browser.FirecrawlBrowserClient
+import com.suprbeta.browser.configureBrowserMcpRoutes
+import com.suprbeta.browser.configureBrowserRoutes
 import com.suprbeta.connector.ConnectorServiceImpl
 import com.suprbeta.connector.configureConnectorRoutes
 import com.suprbeta.config.AppConfig
@@ -22,6 +27,7 @@ import com.suprbeta.firebase.FirebaseAuthPlugin
 import com.suprbeta.firebase.FirebaseAuthService
 import com.suprbeta.firebase.FirebaseService
 import com.suprbeta.firebase.FirestoreRepository
+import com.suprbeta.firebase.FcmNotificationService
 import com.suprbeta.hetzner.HetznerDnsService
 import com.suprbeta.hetzner.HetznerService
 import com.suprbeta.provider.DnsProvider
@@ -103,6 +109,16 @@ fun Application.module() {
     configureNotificationRoutes(notificationRepository, firestoreRepository, userClientProvider)
     configureWebhookRoutes(firestoreRepository, userClientProvider, agentRepository, httpClient, managementService.webhookSecret)
     configureFcmRoutes(firestoreRepository)
+    val browserService = BrowserServiceImpl(
+        firestoreRepository = firestoreRepository,
+        providerClient = FirecrawlBrowserClient(httpClient, com.suprbeta.browser.BrowserConfig.fromEnvironment(this)),
+        notificationRepository = notificationRepository,
+        userClientProvider = userClientProvider,
+        pushNotificationSender = FcmNotificationService(this),
+        application = this
+    )
+    configureBrowserRoutes(browserService)
+    configureBrowserMcpRoutes(browserService, firestoreRepository)
     configureMarketplaceRoutes(provisioningServices.configuringService, marketplaceService)
     val connectorService = ConnectorServiceImpl(
         firestoreRepository = firestoreRepository,
@@ -111,7 +127,8 @@ fun Application.module() {
     )
     configureConnectorRoutes(connectorService)
     configureUsageRoutes(firestoreRepository, remoteConfigService)
-    configureAdminRoutes(firestoreRepository, provisioningServices.provisioningService)
+    configureAdminRoutes(firestoreRepository, provisioningServices.provisioningService, browserService = browserService)
+    monitor.subscribe(ApplicationStopped) { browserService.shutdown() }
     configureRouting()
 }
 

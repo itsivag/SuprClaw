@@ -340,7 +340,7 @@ class DropletProvisioningServiceImplTest {
         val (dropletId, _, password) = service.createAndProvision("mcp-test", "user-mcp")
         service.provisionDroplet(dropletId, password, "user-mcp")
 
-        coVerify { mcpService.configureMcpTools(any(), listOf("supabase")) }
+        coVerify { mcpService.configureMcpTools(any(), listOf("supabase", "cloud_browser")) }
     }
 
     @Test
@@ -378,7 +378,7 @@ class DropletProvisioningServiceImplTest {
 
         assertEquals(ProvisioningStatus.PHASE_COMPLETE, service.getStatus(dropletId)?.phase,
             "Expected PHASE_COMPLETE after successful provision")
-        coVerify { mcpService.configureMcpTools(any(), listOf("supabase")) }
+        coVerify { mcpService.configureMcpTools(any(), listOf("supabase", "cloud_browser")) }
 
         // Phase 2: Wire up teardown mocks using the droplet that was saved to Firestore
         val savedDroplet = captureLastSavedDroplet()

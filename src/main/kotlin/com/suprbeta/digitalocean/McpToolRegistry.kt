@@ -41,6 +41,13 @@ object McpToolRegistry {
             authTemplate = "/{key}/v2",
             mcporterUrlTemplate = "http://127.0.0.1:18790/firecrawl/mcp"
         ),
+        "cloud_browser" to McpToolDefinition(
+            name = "cloud_browser",
+            upstream = "https://api.suprclaw.com/api/mcp/cloud-browser",
+            authType = "bearer",
+            authEnvVar = "OPENCLAW_GATEWAY_TOKEN",
+            mcporterUrlTemplate = "http://127.0.0.1:18790/cloud_browser"
+        ),
         "zapier" to McpToolDefinition(
             name = "zapier",
             upstream = "https://mcp.zapier.com",
@@ -52,7 +59,7 @@ object McpToolRegistry {
     )
 
     /** Tools provisioned on every new VPS by default. */
-    val defaultTools: List<String> = listOf("supabase")
+    val defaultTools: List<String> = listOf("supabase", "cloud_browser")
 
     fun get(name: String): McpToolDefinition? = tools[name]
 }

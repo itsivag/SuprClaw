@@ -1,5 +1,6 @@
 package com.suprbeta.admin
 
+import com.suprbeta.browser.BrowserService
 import com.suprbeta.core.SshCommandExecutorImpl
 import com.suprbeta.digitalocean.DropletProvisioningService
 import com.suprbeta.firebase.FirestoreRepository
@@ -22,7 +23,8 @@ fun Application.configureAdminRoutes(
         firestoreRepository = firestoreRepository,
         sshCommandExecutor = SshCommandExecutorImpl(this),
         application = this
-    )
+    ),
+    browserService: BrowserService? = null
 ) {
     val adminUserService = AdminUserService(firestoreRepository)
     val firebaseConfig = loadFirebaseWebConfig()
@@ -55,6 +57,27 @@ fun Application.configureAdminRoutes(
                             call.respond(
                                 HttpStatusCode.InternalServerError,
                                 mapOf("error" to "Failed to collect metrics")
+                            )
+                        }
+                    }
+
+                    get("/browser") {
+                        if (browserService == null) {
+                            call.respond(
+                                HttpStatusCode.ServiceUnavailable,
+                                mapOf("error" to "Browser service is not configured")
+                            )
+                            return@get
+                        }
+
+                        try {
+                            val response = browserService.getAdminSnapshot()
+                            call.respond(HttpStatusCode.OK, response)
+                        } catch (e: Exception) {
+                            call.application.log.error("Failed to collect browser admin metrics", e)
+                            call.respond(
+                                HttpStatusCode.InternalServerError,
+                                mapOf("error" to "Failed to collect browser metrics")
                             )
                         }
                     }
