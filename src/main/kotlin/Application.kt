@@ -95,7 +95,7 @@ fun Application.module() {
     installSupabaseStartupRepair(managementService)
     val marketplaceService = MarketplaceService(httpClient)
 
-    configureWebSockets(httpClient, firebaseAuthService, firestoreRepository, remoteConfigService)
+    val browserClientBridge = configureWebSockets(httpClient, firebaseAuthService, firestoreRepository, remoteConfigService)
     val provisioningServices = configureProvisioning(
         httpClient,
         firestoreRepository,
@@ -115,7 +115,8 @@ fun Application.module() {
         notificationRepository = notificationRepository,
         userClientProvider = userClientProvider,
         pushNotificationSender = FcmNotificationService(this),
-        application = this
+        application = this,
+        clientBridge = browserClientBridge
     )
     configureBrowserRoutes(browserService)
     configureBrowserMcpRoutes(browserService, firestoreRepository)
@@ -195,7 +196,7 @@ fun Application.configureWebSockets(
     authService: FirebaseAuthService,
     firestoreRepository: FirestoreRepository,
     remoteConfigService: com.suprbeta.firebase.RemoteConfigService
-) {
+): ProxySessionManager {
     // Configure shared JSON serializer
     val json = Json {
         ignoreUnknownKeys = true
@@ -268,6 +269,7 @@ fun Application.configureWebSockets(
     }
 
     log.info("WebSocket proxy initialized and ready")
+    return sessionManager
 }
 
 fun Application.configureProvisioning(

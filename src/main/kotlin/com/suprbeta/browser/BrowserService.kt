@@ -39,11 +39,13 @@ interface BrowserService {
     suspend fun resetProfile(userId: String, profileId: String): BrowserProfileView
     suspend fun createSession(userId: String, request: CreateBrowserSessionRequest): BrowserSessionView
     suspend fun getSession(userId: String, sessionId: String): BrowserSessionView
+    suspend fun getSessionByTaskId(userId: String, taskId: String): BrowserSessionView
     suspend fun executeSession(userId: String, request: BrowserExecRequest): BrowserExecResponse
     suspend fun requestTakeover(userId: String, sessionId: String, request: TakeoverRequest): BrowserSessionView
     suspend fun resumeSession(userId: String, sessionId: String, request: ResumeBrowserSessionRequest): BrowserSessionView
     suspend fun closeSession(userId: String, sessionId: String, closingState: String = BrowserSessionState.CLOSED): BrowserSessionView
     suspend fun getViewerPage(userId: String, sessionId: String, interactive: Boolean): String
+    suspend fun getViewerLaunchUrl(userId: String, sessionId: String, interactive: Boolean): String
     suspend fun getAdminSnapshot(): BrowserAdminSnapshot
     fun shutdown()
 }
@@ -55,7 +57,8 @@ class BrowserServiceImpl(
     private val userClientProvider: UserSupabaseClientProvider,
     private val pushNotificationSender: PushNotificationSender,
     private val application: Application,
-    private val config: BrowserConfig = BrowserConfig.fromEnvironment(application)
+    private val config: BrowserConfig = BrowserConfig.fromEnvironment(application),
+    private val clientBridge: BrowserClientBridge = NoopBrowserClientBridge
 ) : BrowserService {
 
     private val logger = application.log
@@ -83,6 +86,22 @@ class BrowserServiceImpl(
         private const val PROVIDER = "firecrawl"
         private const val PROVIDER_FAILURE_THRESHOLD = 3
         private const val PROVIDER_CIRCUIT_OPEN_MS = 60_000L
+        private val ALLOWED_VIEWER_HOSTS = setOf("liveview.firecrawl.dev", "browser.firecrawl.dev")
+        private val BLOCKED_SHELL_PATTERNS = listOf("&&", "||", ";", "|", "`", "$(", "\n", "\r", ">", "<")
+        private val SENSITIVE_BROWSER_MARKERS = listOf(
+            "password",
+            "otp",
+            "2fa",
+            "mfa",
+            "verification code",
+            "one-time passcode",
+            "checkout",
+            "payment",
+            "billing",
+            "delete account",
+            "remove account",
+            "close account"
+        )
     }
 
     init {
@@ -160,10 +179,11 @@ class BrowserServiceImpl(
         val viewerUrl = "${config.publicBaseUrl}/api/browser/sessions/$sessionId/view"
         val takeoverUrl = "${config.publicBaseUrl}/api/browser/sessions/$sessionId/takeover"
         val lockExpiresAt = now.plusSeconds((takeoverTimeoutSeconds + config.gracefulCloseMarginSeconds).toLong())
+        val taskId = resolveTaskId(userId, request.taskId)
         val stub = BrowserSessionInternal(
             id = sessionId,
             userId = userId,
-            taskId = request.taskId?.trim()?.ifBlank { null },
+            taskId = taskId,
             profileId = profile.id,
             state = BrowserSessionState.CREATING,
             viewerUrl = viewerUrl,
@@ -209,7 +229,14 @@ class BrowserServiceImpl(
             firestoreRepository.saveBrowserSession(activated)
             firestoreRepository.heartbeatBrowserProfile(userId, profile.id, Instant.now().toString())
             startHeartbeat(activated)
-            announceBrowserActivity(activated, droplet, type = "browser.activity.started", title = "Browser Activity Started")
+            publishBrowserEvent(activated, "browser.session.created")
+            announceBrowserActivity(
+                activated,
+                droplet,
+                notificationType = "browser.activity.started",
+                browserEventType = "browser.session.created",
+                title = "Browser Activity Started"
+            )
             sessionsCreated.incrementAndGet()
             return activated.toView()
         } catch (e: Exception) {
@@ -224,19 +251,34 @@ class BrowserServiceImpl(
             )
             firestoreRepository.saveBrowserSession(failed)
             firestoreRepository.releaseBrowserProfileLock(userId, profile.id, sessionId)
+            publishBrowserEvent(failed, "browser.session.failed")
             throw e
         }
     }
 
-    override suspend fun getSession(userId: String, sessionId: String): BrowserSessionView =
-        getOwnedSession(userId, sessionId).normalizeExpired().also {
-            if (it.state == BrowserSessionState.EXPIRED && it.state != getOwnedSession(userId, sessionId).state) {
-                firestoreRepository.saveBrowserSession(it)
-            }
-        }.toView()
+    override suspend fun getSession(userId: String, sessionId: String): BrowserSessionView {
+        val session = getOwnedSession(userId, sessionId)
+        val normalized = normalizeExpiredIfNeeded(session)
+        return normalized.toView()
+    }
+
+    override suspend fun getSessionByTaskId(userId: String, taskId: String): BrowserSessionView {
+        val normalizedTaskId = taskId.trim()
+        if (normalizedTaskId.isBlank()) {
+            throw BrowserValidationException("taskId is required")
+        }
+
+        val session = firestoreRepository.findLatestBrowserSessionByTaskId(
+            userId = userId,
+            taskId = normalizedTaskId,
+            states = BrowserSessionState.liveStates
+        ) ?: throw BrowserNotFoundException("No active browser session found for task '$normalizedTaskId'")
+
+        return normalizeExpiredIfNeeded(session).toView()
+    }
 
     override suspend fun executeSession(userId: String, request: BrowserExecRequest): BrowserExecResponse {
-        val session = getOwnedSession(userId, request.sessionId).normalizeExpired()
+        val session = normalizeExpiredIfNeeded(getOwnedSession(userId, request.sessionId))
         if (session.state !in BrowserSessionState.liveStates) {
             throw BrowserConflictException("Browser session '${request.sessionId}' is not active")
         }
@@ -246,6 +288,7 @@ class BrowserServiceImpl(
 
         val language = request.language.trim().ifBlank { "bash" }
         val normalizedCode = normalizeExecCode(request.code, language)
+        validateExecCommand(normalizedCode)
         val execution = withProviderCall {
             providerClient.executeSession(
                 providerSessionId = session.providerSessionId,
@@ -297,8 +340,15 @@ class BrowserServiceImpl(
             lastError = request.reason?.trim()?.ifBlank { null }
         )
         firestoreRepository.saveBrowserSession(updated)
+        publishBrowserEvent(updated, "browser.session.takeover_requested")
         val droplet = requireUserDroplet(userId)
-        announceBrowserActivity(updated, droplet, type = "browser.takeover.requested", title = "Browser Needs Your Attention")
+        announceBrowserActivity(
+            updated,
+            droplet,
+            notificationType = "browser.takeover.requested",
+            browserEventType = "browser.session.takeover_requested",
+            title = "Browser Needs Your Attention"
+        )
         startHeartbeat(updated)
         takeoverRequests.incrementAndGet()
         return updated.toView()
@@ -309,11 +359,18 @@ class BrowserServiceImpl(
         if (session.state !in setOf(BrowserSessionState.TAKEOVER_REQUESTED, BrowserSessionState.USER_ACTIVE, BrowserSessionState.AGENT_RESUMING)) {
             throw BrowserConflictException("Browser session '$sessionId' is not waiting for takeover")
         }
+        val resuming = session.copy(
+            state = BrowserSessionState.AGENT_RESUMING,
+            updatedAt = Instant.now().toString(),
+            lastError = request.note?.trim()?.ifBlank { null } ?: session.lastError
+        )
+        firestoreRepository.saveBrowserSession(resuming)
+        publishBrowserEvent(resuming, "browser.session.agent_resuming")
         val providerStillLive = withProviderCall {
             providerClient.listActiveSessions().any { it.id == session.providerSessionId }
         }
         if (!providerStillLive) {
-            val expired = session.copy(
+            val expired = resuming.copy(
                 state = BrowserSessionState.EXPIRED,
                 updatedAt = Instant.now().toString(),
                 lastError = "Provider session expired before resume"
@@ -321,16 +378,17 @@ class BrowserServiceImpl(
             firestoreRepository.saveBrowserSession(expired)
             firestoreRepository.releaseBrowserProfileLock(userId, session.profileId, session.id)
             stopHeartbeat(session.id)
+            publishBrowserEvent(expired, "browser.session.expired")
             resumeExpirations.incrementAndGet()
             sessionsExpired.incrementAndGet()
             return expired.toView()
         }
-        val resumed = session.copy(
+        val resumed = resuming.copy(
             state = BrowserSessionState.ACTIVE,
-            updatedAt = Instant.now().toString(),
-            lastError = request.note?.trim()?.ifBlank { null } ?: session.lastError
+            updatedAt = Instant.now().toString()
         )
         firestoreRepository.saveBrowserSession(resumed)
+        publishBrowserEvent(resumed, "browser.session.active")
         startHeartbeat(resumed)
         resumeSuccesses.incrementAndGet()
         return resumed.toView()
@@ -342,30 +400,14 @@ class BrowserServiceImpl(
     }
 
     override suspend fun getViewerPage(userId: String, sessionId: String, interactive: Boolean): String {
-        val session = getOwnedSession(userId, sessionId).normalizeExpired()
-        if (session.state == BrowserSessionState.EXPIRED || session.state == BrowserSessionState.CLOSED || session.state == BrowserSessionState.FAILED) {
-            throw BrowserConflictException("Browser session '$sessionId' is no longer available")
-        }
+        resolveViewerTarget(userId, sessionId, interactive, markInteractiveActive = interactive)
+        val launchPath = "/api/browser/sessions/$sessionId/${if (interactive) "takeover" else "view"}/launch"
+        return buildViewerHtml(launchPath, interactive)
+    }
 
-        val pageSession = if (interactive) {
-            if (session.state !in setOf(BrowserSessionState.TAKEOVER_REQUESTED, BrowserSessionState.USER_ACTIVE, BrowserSessionState.AGENT_RESUMING)) {
-                throw BrowserConflictException("Browser session '$sessionId' is not available for takeover")
-            }
-            val updated = session.copy(
-                state = BrowserSessionState.USER_ACTIVE,
-                updatedAt = Instant.now().toString()
-            )
-            firestoreRepository.saveBrowserSession(updated)
-            startHeartbeat(updated)
-            updated
-        } else {
-            session
-        }
-
-        val providerUrl = if (interactive) pageSession.providerInteractiveLiveViewUrl else pageSession.providerLiveViewUrl
-        if (providerUrl.isBlank()) throw BrowserConflictException("Browser session '$sessionId' viewer is unavailable")
-
-        return buildViewerHtml(providerUrl, interactive)
+    override suspend fun getViewerLaunchUrl(userId: String, sessionId: String, interactive: Boolean): String {
+        val providerUrl = resolveViewerTarget(userId, sessionId, interactive, markInteractiveActive = false)
+        return sanitizeViewerTarget(providerUrl)
     }
 
     override suspend fun getAdminSnapshot(): BrowserAdminSnapshot {
@@ -466,6 +508,7 @@ class BrowserServiceImpl(
         )
         firestoreRepository.saveBrowserSession(closed)
         firestoreRepository.releaseBrowserProfileLock(session.userId, session.profileId, session.id)
+        publishBrowserEvent(closed, browserEventTypeForState(closingState))
         when (closingState) {
             BrowserSessionState.CLOSED -> sessionsClosed.incrementAndGet()
             BrowserSessionState.EXPIRED -> {
@@ -481,26 +524,31 @@ class BrowserServiceImpl(
     private suspend fun announceBrowserActivity(
         session: BrowserSessionInternal,
         droplet: UserDropletInternal,
-        type: String,
+        notificationType: String,
+        browserEventType: String,
         title: String
     ) {
+        val taskId = resolveTaskId(session.userId, session.taskId)
         val client = userClientProvider.getClient(
             droplet.resolveSupabaseUrl(),
             droplet.supabaseServiceKey,
             droplet.supabaseSchema
         )
         val payload = buildJsonObject {
-            put("body", "Browser activity is available for task ${session.taskId ?: "session ${session.id}"}")
+            put("body", "Browser activity is available for task ${taskId ?: "session ${session.id}"}")
             put("sessionId", session.id)
+            put("browserSessionId", session.id)
             put("viewerUrl", session.viewerUrl)
             put("takeoverUrl", session.takeoverUrl)
-            session.taskId?.let { put("taskId", it) }
+            taskId?.let { put("taskId", it) }
             put("state", session.state)
-            put("type", type)
+            put("browserState", session.state)
+            put("type", notificationType)
+            put("browserEventType", browserEventType)
         }
 
         runCatching {
-            notificationRepository.createNotification(client, type = type, payload = payload)
+            notificationRepository.createNotification(client, type = notificationType, payload = payload)
         }.onFailure {
             logger.warn("Failed to persist browser notification for session ${session.id}: ${it.message}")
         }
@@ -516,8 +564,8 @@ class BrowserServiceImpl(
                     "viewerUrl" to session.viewerUrl,
                     "takeoverUrl" to session.takeoverUrl,
                     "browserState" to session.state,
-                    "browserEventType" to type
-                ) + (session.taskId?.let { mapOf("taskId" to it) } ?: emptyMap()),
+                    "browserEventType" to browserEventType
+                ) + (taskId?.let { mapOf("taskId" to it) } ?: emptyMap()),
                 highPriority = true
             )
         }
@@ -577,7 +625,7 @@ class BrowserServiceImpl(
             }
 
             val heartbeat = runCatching { Instant.parse(normalized.lastHeartbeatAt ?: normalized.updatedAt) }.getOrNull()
-            if (heartbeat != null && heartbeat.plusSeconds(config.staleHeartbeatSeconds.toLong()).isBefore(now)) {
+                    if (heartbeat != null && heartbeat.plusSeconds(config.staleHeartbeatSeconds.toLong()).isBefore(now)) {
                 val live = normalized.providerSessionId.isNotBlank() && providerSessionIds.containsKey(normalized.providerSessionId)
                 if (!live) {
                     firestoreRepository.releaseBrowserProfileLock(normalized.userId, normalized.profileId, normalized.id)
@@ -588,6 +636,7 @@ class BrowserServiceImpl(
                     )
                     firestoreRepository.saveBrowserSession(failed)
                     stopHeartbeat(normalized.id)
+                    publishBrowserEvent(failed, "browser.session.failed")
                 }
             }
         }
@@ -645,10 +694,26 @@ class BrowserServiceImpl(
     }
 
     private fun normalizeExecCode(code: String, language: String): String {
-        if (!language.equals("bash", ignoreCase = true)) return code
+        if (!language.equals("bash", ignoreCase = true)) {
+            throw BrowserValidationException("Only bash agent-browser commands are allowed")
+        }
         val trimmed = code.trim()
         if (trimmed.startsWith("agent-browser ")) return trimmed
         return "agent-browser $trimmed"
+    }
+
+    private fun validateExecCommand(code: String) {
+        val normalized = code.trim()
+        if (!normalized.startsWith("agent-browser ")) {
+            throw BrowserValidationException("Only agent-browser commands are allowed")
+        }
+        if (BLOCKED_SHELL_PATTERNS.any { normalized.contains(it) }) {
+            throw BrowserValidationException("Shell operators are not allowed in browser commands")
+        }
+        val lowered = normalized.lowercase()
+        if (SENSITIVE_BROWSER_MARKERS.any { it in lowered }) {
+            throw BrowserConflictException("Sensitive browser action requires takeover")
+        }
     }
 
     private fun inferSignals(
@@ -672,7 +737,7 @@ class BrowserServiceImpl(
     }
 
     private fun inferExecStatus(signals: BrowserSignals, execution: ProviderBrowserExecution): String {
-        if (signals.captchaDetected || signals.mfaDetected) return "takeover_required"
+        if (signals.captchaDetected || signals.mfaDetected || signals.loginDetected) return "takeover_required"
         if (execution.killed || execution.error.orEmpty().contains("timeout", ignoreCase = true)) return "retryable_error"
         if (!execution.success) return "fatal_error"
         if ((execution.exitCode ?: 0) != 0) return "fatal_error"
@@ -702,8 +767,96 @@ class BrowserServiceImpl(
         return "sc:prod:$digest:$generation"
     }
 
-    private fun buildViewerHtml(providerUrl: String, interactive: Boolean): String {
+    private suspend fun resolveViewerTarget(
+        userId: String,
+        sessionId: String,
+        interactive: Boolean,
+        markInteractiveActive: Boolean
+    ): String {
+        val session = normalizeExpiredIfNeeded(getOwnedSession(userId, sessionId))
+        if (session.state == BrowserSessionState.EXPIRED || session.state == BrowserSessionState.CLOSED || session.state == BrowserSessionState.FAILED) {
+            throw BrowserConflictException("Browser session '$sessionId' is no longer available")
+        }
+
+        val pageSession = if (interactive) {
+            if (session.state !in setOf(BrowserSessionState.TAKEOVER_REQUESTED, BrowserSessionState.USER_ACTIVE, BrowserSessionState.AGENT_RESUMING)) {
+                throw BrowserConflictException("Browser session '$sessionId' is not available for takeover")
+            }
+            if (!markInteractiveActive || session.state == BrowserSessionState.USER_ACTIVE) {
+                session
+            } else {
+                val updated = session.copy(
+                    state = BrowserSessionState.USER_ACTIVE,
+                    updatedAt = Instant.now().toString()
+                )
+                firestoreRepository.saveBrowserSession(updated)
+                publishBrowserEvent(updated, "browser.session.user_active")
+                startHeartbeat(updated)
+                updated
+            }
+        } else {
+            session
+        }
+
+        val providerUrl = if (interactive) pageSession.providerInteractiveLiveViewUrl else pageSession.providerLiveViewUrl
+        if (providerUrl.isBlank()) throw BrowserConflictException("Browser session '$sessionId' viewer is unavailable")
+        return providerUrl
+    }
+
+    private suspend fun resolveTaskId(userId: String, requestedTaskId: String?): String? {
+        return requestedTaskId?.trim()?.ifBlank { null }
+            ?: clientBridge.resolveTaskId(userId)?.trim()?.ifBlank { null }
+    }
+
+    private suspend fun normalizeExpiredIfNeeded(session: BrowserSessionInternal): BrowserSessionInternal {
+        val normalized = session.normalizeExpired()
+        if (normalized.state != session.state) {
+            firestoreRepository.saveBrowserSession(normalized)
+            publishBrowserEvent(normalized, browserEventTypeForState(normalized.state))
+        }
+        return normalized
+    }
+
+    private suspend fun publishBrowserEvent(session: BrowserSessionInternal, browserEventType: String) {
+        val taskId = resolveTaskId(session.userId, session.taskId)
+        clientBridge.publishEvent(
+            userId = session.userId,
+            payload = session.toEventPayload(
+                browserEventType = browserEventType,
+                taskIdOverride = taskId
+            )
+        )
+    }
+
+    private fun browserEventTypeForState(state: String): String = when (state) {
+        BrowserSessionState.ACTIVE -> "browser.session.active"
+        BrowserSessionState.TAKEOVER_REQUESTED -> "browser.session.takeover_requested"
+        BrowserSessionState.USER_ACTIVE -> "browser.session.user_active"
+        BrowserSessionState.AGENT_RESUMING -> "browser.session.agent_resuming"
+        BrowserSessionState.CLOSED -> "browser.session.closed"
+        BrowserSessionState.EXPIRED -> "browser.session.expired"
+        BrowserSessionState.FAILED -> "browser.session.failed"
+        else -> "browser.session.updated"
+    }
+
+    private fun sanitizeViewerTarget(providerUrl: String): String {
+        val uri = runCatching { java.net.URI(providerUrl) }
+            .getOrElse { throw BrowserConflictException("Browser viewer target is invalid") }
+        val scheme = uri.scheme?.lowercase()
+        val host = uri.host?.lowercase()
+        if (scheme != "https" || host !in ALLOWED_VIEWER_HOSTS) {
+            throw BrowserConflictException("Browser viewer target is invalid")
+        }
+        return uri.toASCIIString()
+    }
+
+    private fun buildViewerHtml(launchPath: String, interactive: Boolean): String {
         val mode = if (interactive) "Takeover" else "Live View"
+        val sandboxPermissions = if (interactive) {
+            "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-pointer-lock"
+        } else {
+            "allow-scripts allow-same-origin"
+        }
         return """
             <!DOCTYPE html>
             <html lang="en">
@@ -719,7 +872,7 @@ class BrowserServiceImpl(
             </head>
             <body>
               <header>SuprClaw Browser $mode</header>
-              <iframe src="$providerUrl" allow="clipboard-read; clipboard-write"></iframe>
+              <iframe src="${htmlEscape(launchPath)}" sandbox="$sandboxPermissions" referrerpolicy="no-referrer"></iframe>
             </body>
             </html>
         """.trimIndent()
@@ -746,6 +899,19 @@ private fun BrowserSessionInternal.normalizeDeadlines(gracefulCloseMarginSeconds
 }
 
 private fun Instant.coerceAtLeast(other: Instant): Instant = if (isBefore(other)) other else this
+
+private fun htmlEscape(value: String): String = buildString(value.length) {
+    value.forEach { char ->
+        when (char) {
+            '&' -> append("&amp;")
+            '<' -> append("&lt;")
+            '>' -> append("&gt;")
+            '"' -> append("&quot;")
+            '\'' -> append("&#39;")
+            else -> append(char)
+        }
+    }
+}
 
 @kotlinx.serialization.Serializable
 private data class BrowserInspection(

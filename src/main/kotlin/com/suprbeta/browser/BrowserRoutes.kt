@@ -3,12 +3,14 @@ package com.suprbeta.browser
 import com.suprbeta.firebase.authenticated
 import com.suprbeta.firebase.firebaseUserKey
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.application.call
 import io.ktor.server.application.log
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondRedirect
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
@@ -56,6 +58,14 @@ fun Application.configureBrowserRoutes(browserService: BrowserService) {
                         }
                     }
 
+                    get("/by-task/{taskId}") {
+                        val user = call.attributes[firebaseUserKey]
+                        val taskId = call.parameters["taskId"].orEmpty()
+                        call.respondBrowserErrors {
+                            call.respond(HttpStatusCode.OK, browserService.getSessionByTaskId(user.uid, taskId))
+                        }
+                    }
+
                     get("/{sessionId}") {
                         val user = call.attributes[firebaseUserKey]
                         val sessionId = call.parameters["sessionId"].orEmpty()
@@ -94,6 +104,7 @@ fun Application.configureBrowserRoutes(browserService: BrowserService) {
                         val user = call.attributes[firebaseUserKey]
                         val sessionId = call.parameters["sessionId"].orEmpty()
                         call.respondBrowserErrors {
+                            call.applyBrowserViewerHeaders()
                             call.respondText(
                                 text = browserService.getViewerPage(user.uid, sessionId, interactive = false),
                                 contentType = ContentType.Text.Html,
@@ -106,11 +117,30 @@ fun Application.configureBrowserRoutes(browserService: BrowserService) {
                         val user = call.attributes[firebaseUserKey]
                         val sessionId = call.parameters["sessionId"].orEmpty()
                         call.respondBrowserErrors {
+                            call.applyBrowserViewerHeaders()
                             call.respondText(
                                 text = browserService.getViewerPage(user.uid, sessionId, interactive = true),
                                 contentType = ContentType.Text.Html,
                                 status = HttpStatusCode.OK
                             )
+                        }
+                    }
+
+                    get("/{sessionId}/view/launch") {
+                        val user = call.attributes[firebaseUserKey]
+                        val sessionId = call.parameters["sessionId"].orEmpty()
+                        call.respondBrowserErrors {
+                            call.applyBrowserLaunchHeaders()
+                            call.respondRedirect(browserService.getViewerLaunchUrl(user.uid, sessionId, interactive = false), permanent = false)
+                        }
+                    }
+
+                    get("/{sessionId}/takeover/launch") {
+                        val user = call.attributes[firebaseUserKey]
+                        val sessionId = call.parameters["sessionId"].orEmpty()
+                        call.respondBrowserErrors {
+                            call.applyBrowserLaunchHeaders()
+                            call.respondRedirect(browserService.getViewerLaunchUrl(user.uid, sessionId, interactive = true), permanent = false)
                         }
                     }
                 }
@@ -148,4 +178,20 @@ private suspend inline fun io.ktor.server.application.ApplicationCall.respondBro
         application.log.error("Browser provider failure", e)
         respond(HttpStatusCode.BadGateway, mapOf("error" to (e.message ?: "Browser provider failure")))
     }
+}
+
+private fun io.ktor.server.application.ApplicationCall.applyBrowserViewerHeaders() {
+    response.headers.append(HttpHeaders.CacheControl, "no-store, no-cache, must-revalidate")
+    response.headers.append("Referrer-Policy", "no-referrer")
+    response.headers.append("X-Content-Type-Options", "nosniff")
+    response.headers.append(
+        "Content-Security-Policy",
+        "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; connect-src 'none'; script-src 'none'; frame-src 'self' https://liveview.firecrawl.dev https://browser.firecrawl.dev;"
+    )
+}
+
+private fun io.ktor.server.application.ApplicationCall.applyBrowserLaunchHeaders() {
+    response.headers.append(HttpHeaders.CacheControl, "no-store, no-cache, must-revalidate")
+    response.headers.append("Referrer-Policy", "no-referrer")
+    response.headers.append("X-Content-Type-Options", "nosniff")
 }

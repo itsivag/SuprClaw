@@ -104,18 +104,74 @@ class BrowserRoutesTest {
     }
 
     @Test
+    fun `by task route returns active browser session`() = testApplication {
+        application { configureTestModule() }
+
+        val responseBody = BrowserSessionView(
+            sessionId = "browser_123",
+            taskId = "agent:main:main",
+            profileId = "profile-1",
+            state = BrowserSessionState.ACTIVE,
+            viewerUrl = "https://api.example.com/api/browser/sessions/browser_123/view",
+            takeoverUrl = "https://api.example.com/api/browser/sessions/browser_123/takeover",
+            createdAt = "2026-03-12T12:00:00Z",
+            updatedAt = "2026-03-12T12:01:00Z",
+            expiresAt = "2026-03-12T12:30:00Z",
+            activityExpiresAt = "2026-03-12T12:20:00Z",
+            gracefulCloseDeadlineAt = "2026-03-12T12:28:00Z",
+            takeoverDeadlineAt = "2026-03-12T12:10:00Z"
+        )
+
+        coEvery { authService.verifyToken("good-token") } returns FirebaseUser("user-1", "user@example.com", true)
+        coEvery { browserService.getSessionByTaskId("user-1", "agent:main:main") } returns responseBody
+
+        val response = client.get("/api/browser/sessions/by-task/agent:main:main") {
+            header(HttpHeaders.Authorization, "Bearer good-token")
+        }
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        val decoded = json.decodeFromString(BrowserSessionView.serializer(), response.bodyAsText())
+        assertEquals("browser_123", decoded.sessionId)
+        assertEquals("agent:main:main", decoded.taskId)
+    }
+
+    @Test
     fun `viewer route returns html page`() = testApplication {
         application { configureTestModule() }
 
         coEvery { authService.verifyToken("good-token") } returns FirebaseUser("user-1", "user@example.com", true)
-        coEvery { browserService.getViewerPage("user-1", "browser_123", interactive = false) } returns "<html><body>viewer</body></html>"
+        coEvery { browserService.getViewerPage("user-1", "browser_123", interactive = false) } returns "<html><body><iframe src=\"/api/browser/sessions/browser_123/view/launch\"></iframe></body></html>"
 
         val response = client.get("/api/browser/sessions/browser_123/view") {
             header(HttpHeaders.Authorization, "Bearer good-token")
         }
 
         assertEquals(HttpStatusCode.OK, response.status)
-        assertTrue(response.bodyAsText().contains("viewer"))
+        assertTrue(response.bodyAsText().contains("/view/launch"))
+        assertEquals("no-referrer", response.headers["Referrer-Policy"])
+        assertTrue(response.headers["Content-Security-Policy"].orEmpty().contains("frame-src"))
+    }
+
+    @Test
+    fun `viewer launch route redirects after auth`() = testApplication {
+        application { configureTestModule() }
+
+        coEvery { authService.verifyToken("good-token") } returns FirebaseUser("user-1", "user@example.com", true)
+        coEvery {
+            browserService.getViewerLaunchUrl("user-1", "browser_123", interactive = false)
+        } returns "https://liveview.firecrawl.dev/example"
+
+        val noRedirectClient = createClient {
+            followRedirects = false
+        }
+
+        val response = noRedirectClient.get("/api/browser/sessions/browser_123/view/launch") {
+            header(HttpHeaders.Authorization, "Bearer good-token")
+        }
+
+        assertEquals(HttpStatusCode.Found, response.status)
+        assertEquals("https://liveview.firecrawl.dev/example", response.headers[HttpHeaders.Location])
+        assertEquals("no-referrer", response.headers["Referrer-Policy"])
     }
 
     @Test

@@ -614,6 +614,32 @@ class FirestoreRepository(
         }
     }
 
+    suspend fun findLatestBrowserSessionByTaskId(
+        userId: String,
+        taskId: String,
+        states: Collection<String> = emptyList()
+    ): BrowserSessionInternal? {
+        return try {
+            firestore.collection(BROWSER_SESSIONS_COLLECTION)
+                .whereEqualTo("userId", userId)
+                .whereEqualTo("taskId", taskId)
+                .get()
+                .await()
+                .documents
+                .mapNotNull { doc ->
+                    val session = doc.toObject(BrowserSessionInternal::class.java)
+                    runCatching { decryptBrowserSession(session) }
+                        .onFailure { application.log.error("Failed to decrypt browser session ${doc.id}", it) }
+                        .getOrNull()
+                }
+                .filter { states.isEmpty() || it.state in states }
+                .maxByOrNull { it.updatedAt.ifBlank { it.createdAt } }
+        } catch (e: Exception) {
+            application.log.error("Failed to find browser session for userId=$userId taskId=$taskId", e)
+            null
+        }
+    }
+
     suspend fun listBrowserSessionsByStates(states: Collection<String>): List<BrowserSessionInternal> {
         if (states.isEmpty()) return emptyList()
         return try {
@@ -1189,6 +1215,8 @@ class FirestoreRepository(
             snapshot.documents.firstNotNullOfOrNull { doc ->
                 val raw = runCatching { doc.toObject(UserDropletInternal::class.java) }.getOrNull() ?: return@firstNotNullOfOrNull null
                 if (raw.gatewayToken == gatewayToken) {
+                    runCatching { saveUserDroplet(raw) }
+                        .onFailure { application.log.warn("Failed to migrate plaintext gateway token for userId=${raw.userId}", it) }
                     return@firstNotNullOfOrNull raw
                 }
                 val decrypted = runCatching { decryptDroplet(raw) }

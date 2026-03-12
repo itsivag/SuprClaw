@@ -127,6 +127,16 @@ data class BrowserSessionView(
 )
 
 @Serializable
+data class BrowserSessionEventPayload(
+    val browserSessionId: String,
+    val viewerUrl: String,
+    val takeoverUrl: String,
+    val browserState: String,
+    val browserEventType: String,
+    val taskId: String? = null
+)
+
+@Serializable
 data class CreateBrowserSessionRequest(
     val profileId: String,
     val taskId: String? = null,
@@ -266,4 +276,16 @@ fun BrowserSessionInternal.toView(): BrowserSessionView = BrowserSessionView(
     takeoverDeadlineAt = takeoverDeadlineAt,
     lastError = lastError,
     retryAfterSeconds = retryAfterSeconds
+)
+
+fun BrowserSessionInternal.toEventPayload(
+    browserEventType: String,
+    taskIdOverride: String? = taskId
+): BrowserSessionEventPayload = BrowserSessionEventPayload(
+    browserSessionId = id,
+    viewerUrl = viewerUrl,
+    takeoverUrl = takeoverUrl,
+    browserState = state,
+    browserEventType = browserEventType,
+    taskId = taskIdOverride
 )

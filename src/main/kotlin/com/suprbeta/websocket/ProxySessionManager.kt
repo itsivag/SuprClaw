@@ -1,5 +1,7 @@
 package com.suprbeta.websocket
 
+import com.suprbeta.browser.BrowserClientBridge
+import com.suprbeta.browser.BrowserSessionEventPayload
 import com.suprbeta.core.ShellEscaping.requireUuid
 import com.suprbeta.core.ShellEscaping.singleQuote
 import com.suprbeta.core.SshCommandExecutor
@@ -27,7 +29,7 @@ class ProxySessionManager(
     private val json: Json,
     private val firestoreRepository: com.suprbeta.firebase.FirestoreRepository,
     private val sshCommandExecutor: SshCommandExecutor
-) {
+) : BrowserClientBridge {
     private val logger = application.log
 
     private companion object {
@@ -37,6 +39,18 @@ class ProxySessionManager(
     // Map of userId -> ProxySession
     private val sessions = ConcurrentHashMap<String, ProxySession>()
     private val pairingApprovals = ConcurrentHashMap<String, Long>()
+
+    override suspend fun publishEvent(userId: String, payload: BrowserSessionEventPayload) {
+        val session = sessions[userId] ?: return
+        val frame = WebSocketFrame(
+            type = "event",
+            event = payload.browserEventType,
+            payload = json.encodeToJsonElement(BrowserSessionEventPayload.serializer(), payload)
+        )
+        deliverToClient(session, json.encodeToString(frame))
+    }
+
+    override fun resolveTaskId(userId: String): String? = sessions[userId]?.metadata?.getTaskId()
 
     /**
      * Create or resume a proxy session for a mobile client
@@ -273,20 +287,7 @@ class ProxySessionManager(
             when (val result = messagePipeline.processOutbound(frame, session)) {
                 is InterceptorResult.Continue -> {
                     val processedJson = json.encodeToString(result.frame)
-                    val client = session.clientSession
-                    
-                    if (client != null && client.isActive) {
-                        try {
-                            client.send(Frame.Text(processedJson))
-                            session.metadata.incrementSent()
-                        } catch (e: Exception) {
-                            session.offlineQueue.add(processedJson)
-                        }
-                    } else {
-                        // Client offline, queue in memory
-                        session.offlineQueue.add(processedJson)
-                        logger.debug("Client offline, message queued in memory for user ${session.metadata.userId}")
-                    }
+                    deliverToClient(session, processedJson)
                 }
                 is InterceptorResult.Drop -> {}
                 is InterceptorResult.Error -> throw RuntimeException(result.message)
@@ -348,6 +349,24 @@ class ProxySessionManager(
             logger.error("Failed to approve runtime pairing for user ${session.metadata.userId}: ${e.message}")
             false
         }
+    }
+
+    private suspend fun deliverToClient(session: ProxySession, message: String) {
+        val client = session.clientSession
+
+        if (client != null && client.isActive) {
+            try {
+                client.send(Frame.Text(message))
+                session.metadata.incrementSent()
+                return
+            } catch (_: Exception) {
+                session.offlineQueue.add(message)
+                return
+            }
+        }
+
+        session.offlineQueue.add(message)
+        logger.debug("Client offline, message queued in memory for user ${session.metadata.userId}")
     }
 
     private fun evictExpiredPairingApprovals(now: Long) {

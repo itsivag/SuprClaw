@@ -418,6 +418,14 @@ internal fun Application.configureWebhookRoutes(
                 notificationType?.let { put("type", it) }
                 payloadObject?.stringValue("taskId")?.let { put("taskId", it) }
                 payloadObject?.stringValue("task_id")?.let { put("taskId", it) }
+                payloadObject?.stringValue("browserSessionId")?.let { put("browserSessionId", it) }
+                payloadObject?.stringValue("sessionId")?.let { put("browserSessionId", it) }
+                payloadObject?.stringValue("viewerUrl")?.let { put("viewerUrl", it) }
+                payloadObject?.stringValue("takeoverUrl")?.let { put("takeoverUrl", it) }
+                payloadObject?.stringValue("browserState")?.let { put("browserState", it) }
+                payloadObject?.stringValue("state")?.let { put("browserState", it) }
+                payloadObject?.stringValue("browserEventType")?.let { put("browserEventType", it) }
+                payloadObject?.stringValue("type")?.let { put("browserEventType", it) }
                 payloadObject?.stringValue("messageId")?.let { put("messageId", it) }
                 payloadObject?.stringValue("message_id")?.let { put("messageId", it) }
                 payloadObject?.stringValue("documentId")?.let { put("documentId", it) }

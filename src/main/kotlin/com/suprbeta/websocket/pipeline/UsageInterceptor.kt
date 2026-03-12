@@ -74,6 +74,8 @@ class UsageInterceptor(
             return InterceptorResult.Error("Missing userId for session ${session.sessionId}")
         }
 
+        extractSessionKey(frame)?.let { session.metadata.rememberTaskId(it) }
+
         val agentId = extractAgentId(frame) ?: return InterceptorResult.Continue(frame)
 
         val workItem = UsageWorkItem(
@@ -145,9 +147,13 @@ class UsageInterceptor(
         return TokenCalculator.DEFAULT_MODEL
     }
 
-    private fun extractAgentId(frame: WebSocketFrame): String? {
+    private fun extractSessionKey(frame: WebSocketFrame): String? {
         val params = frame.params as? JsonObject ?: return null
-        val sessionKey = params["sessionKey"]?.jsonPrimitive?.contentOrNull ?: return null
+        return params["sessionKey"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+    }
+
+    private fun extractAgentId(frame: WebSocketFrame): String? {
+        val sessionKey = extractSessionKey(frame) ?: return null
 
         val parts = sessionKey.split(":")
         if (parts.size < 3 || parts[0] != "agent") return null
