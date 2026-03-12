@@ -237,6 +237,10 @@ class DropletProvisioningServiceImpl(
 
             sshCommandExecutor.runSshCommand(resolvedIp, "sudo systemctl start mcp-auth-proxy mcporter openclaw-gateway")
             sshCommandExecutor.runSshCommand(resolvedIp, "nohup openclaw doctor --fix > /tmp/openclaw-doctor.log 2>&1 &")
+            sshCommandExecutor.runSshCommand(
+                resolvedIp,
+                AgentWorkspaceBootstrap.buildCloudBrowserToolsCommand("/home/openclaw/.openclaw/workspace")
+            )
             logger.info("MCP credentials written and services started for droplet $dropletId")
 
             val subdomain = if (AppConfig.sslEnabled) {

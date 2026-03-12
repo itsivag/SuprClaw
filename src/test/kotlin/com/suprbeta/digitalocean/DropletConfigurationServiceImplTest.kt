@@ -32,7 +32,7 @@ class DropletConfigurationServiceImplTest {
     @Test
     fun `createAgent executes inside the tenant container for docker deployments`() = testApplication {
         val service = buildService(application)
-        val commandSlot = slot<String>()
+        val commands = mutableListOf<String>()
         val dockerDroplet = UserDropletInternal(
             userId = "user-1",
             dropletId = 99L,
@@ -46,7 +46,10 @@ class DropletConfigurationServiceImplTest {
         )
 
         coEvery { firestoreRepository.getUserDropletInternal("user-1") } returns dockerDroplet
-        every { sshExecutor.runSshCommand("10.0.0.5", capture(commandSlot)) } returns "created"
+        every { sshExecutor.runSshCommand("10.0.0.5", any()) } answers {
+            commands += secondArg<String>()
+            "created"
+        }
         every { userClientProvider.getClient(any(), any(), any()) } returns mockk(relaxed = true)
         coEvery { agentRepository.saveAgent(any(), any()) } just Runs
 
@@ -58,9 +61,11 @@ class DropletConfigurationServiceImplTest {
         )
 
         assertEquals("created", result)
-        assertTrue(commandSlot.captured.contains("docker exec 'abcdef1234567890'"))
-        assertTrue(commandSlot.captured.contains("su - openclaw -s /bin/sh -lc"))
-        assertTrue(commandSlot.captured.contains("openclaw agents add"))
+        assertTrue(commands.any { it.contains("docker exec 'abcdef1234567890'") })
+        assertTrue(commands.any { it.contains("su - openclaw -s /bin/sh -lc") })
+        assertTrue(commands.any { it.contains("openclaw agents add") })
+        assertTrue(commands.any { it.contains("/home/openclaw/.openclaw/workspace-writer/TOOLS.md") })
+        assertTrue(commands.any { it.contains("SUPRCLAW_CLOUD_BROWSER_TOOLS_V1") })
     }
 
     @Test

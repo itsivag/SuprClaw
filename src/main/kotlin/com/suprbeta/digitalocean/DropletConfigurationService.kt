@@ -43,6 +43,7 @@ class DropletConfigurationServiceImpl(
             "openclaw agents add ${singleQuote(name)} --workspace ${singleQuote(workspacePath)} --model ${singleQuote(selectedModel)}"
         logger.info("Creating OpenClaw agent '$name' on droplet ${userDroplet.dropletId}")
         val output = runAgentCommand(userDroplet, command)
+        runAgentCommand(userDroplet, AgentWorkspaceBootstrap.buildCloudBrowserToolsCommand(workspacePath))
 
         val client = userClientProvider.getClient(userDroplet.resolveSupabaseUrl(), userDroplet.supabaseServiceKey, userDroplet.supabaseSchema)
         agentRepository.saveAgent(
@@ -99,6 +100,7 @@ class DropletConfigurationServiceImpl(
                     " && cp -rf ${singleQuote("$tmpDir/$safeSourcePath/.")} ${singleQuote("$workspacePath/")}" +
                     " && rm -rf ${singleQuote(tmpDir)}"
             )
+            runAgentCommand(userDroplet, AgentWorkspaceBootstrap.buildCloudBrowserToolsCommand(workspacePath))
             logger.info("Marketplace config applied to $workspacePath for agent '${agent.id}'")
 
             // Step 3: Save to user's Supabase project

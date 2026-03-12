@@ -361,6 +361,28 @@ class DropletProvisioningServiceImplTest {
         assertEquals("1.2.3.4", dropletSlot.captured.ipAddress)
     }
 
+    @Test
+    fun `provisionDroplet writes cloud browser guidance into lead workspace tools file`() = testApplication {
+        val service = buildService(application)
+        setupHappyPath(
+            projectRef = "proj_browsertools",
+            endpoint = "https://supabase.suprclaw.com",
+            schema = "proj_browsertools"
+        )
+        val commands = mutableListOf<String>()
+        every { sshExecutor.runSshCommand(any(), any()) } answers {
+            commands += secondArg<String>()
+            ""
+        }
+        every { sshExecutor.runSshCommandOnce(any(), any()) } returns ""
+
+        val (dropletId, _, password) = service.createAndProvision("browser-tools", "user-browser-tools")
+        service.provisionDroplet(dropletId, password, "user-browser-tools")
+
+        assertTrue(commands.any { it.contains("/home/openclaw/.openclaw/workspace/TOOLS.md") })
+        assertTrue(commands.any { it.contains("SUPRCLAW_CLOUD_BROWSER_TOOLS_V1") })
+    }
+
     // ── Full lifecycle: provision → MCP configured → teardown ─────────────────
 
     @Test
