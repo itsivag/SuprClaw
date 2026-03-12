@@ -406,6 +406,16 @@ internal fun Application.configureWebhookRoutes(
             }
 
             val payloadObject = payload as? JsonObject
+            val browserEventType = payloadObject?.stringValue("browserEventType")
+                ?: payloadObject?.stringValue("type")
+            if (
+                notificationType == "browser.takeover.requested" ||
+                browserEventType == "browser.session.takeover_requested"
+            ) {
+                log.info("Notification webhook skipping FCM push for browser takeover notificationId=$notificationId")
+                call.respond(HttpStatusCode.OK)
+                return@post
+            }
             val title = payloadObject?.get("title")?.jsonPrimitive?.contentOrNull
                 ?: notificationType?.toDisplayNotificationTitle()
                 ?: "New Notification"
