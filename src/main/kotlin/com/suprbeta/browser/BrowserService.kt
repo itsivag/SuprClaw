@@ -240,7 +240,8 @@ class BrowserServiceImpl(
                 droplet,
                 notificationType = "browser.activity.started",
                 browserEventType = "browser.session.created",
-                title = "Browser Activity Started"
+                title = "Browser Activity Started",
+                sendPushNotification = false
             )
             sessionsCreated.incrementAndGet()
             return activated.toView()
@@ -869,16 +870,38 @@ class BrowserServiceImpl(
             <html lang="en">
             <head>
               <meta charset="utf-8" />
-              <meta name="viewport" content="width=device-width, initial-scale=1" />
+              <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
               <title>SuprClaw Browser $mode</title>
               <style>
-                html, body { margin: 0; padding: 0; height: 100%; background: #0b1020; color: #f5f7ff; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
-                header { padding: 12px 16px; background: rgba(9, 14, 28, 0.92); font-size: 14px; letter-spacing: 0.03em; }
-                iframe { width: 100%; height: calc(100% - 45px); border: 0; background: #111827; }
+                html, body {
+                  margin: 0;
+                  padding: 0;
+                  width: 100%;
+                  height: 100%;
+                  min-width: 100%;
+                  min-height: 100dvh;
+                  overflow: hidden;
+                  background: #0b1020;
+                  color: #f5f7ff;
+                  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                }
+                body {
+                  display: flex;
+                  flex-direction: column;
+                }
+                iframe {
+                  display: block;
+                  flex: 1 1 auto;
+                  width: 100%;
+                  height: 100%;
+                  min-width: 0;
+                  min-height: 0;
+                  border: 0;
+                  background: #111827;
+                }
               </style>
             </head>
             <body>
-              <header>SuprClaw Browser $mode</header>
               <iframe src="${htmlEscape(launchPath)}" sandbox="$sandboxPermissions" referrerpolicy="no-referrer"></iframe>
             </body>
             </html>

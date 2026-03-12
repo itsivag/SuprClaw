@@ -409,10 +409,12 @@ internal fun Application.configureWebhookRoutes(
             val browserEventType = payloadObject?.stringValue("browserEventType")
                 ?: payloadObject?.stringValue("type")
             if (
+                notificationType == "browser.activity.started" ||
+                browserEventType == "browser.session.created" ||
                 notificationType == "browser.takeover.requested" ||
                 browserEventType == "browser.session.takeover_requested"
             ) {
-                log.info("Notification webhook skipping FCM push for browser takeover notificationId=$notificationId")
+                log.info("Notification webhook skipping FCM push for browser activity notificationId=$notificationId")
                 call.respond(HttpStatusCode.OK)
                 return@post
             }

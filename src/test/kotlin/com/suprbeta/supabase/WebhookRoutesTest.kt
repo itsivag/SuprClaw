@@ -129,7 +129,7 @@ class WebhookRoutesTest {
     }
 
     @Test
-    fun `notification webhook preserves browser payload fields for push delivery`() = testApplication {
+    fun `notification webhook skips fcm push for browser started notifications`() = testApplication {
         application { configureTestModule() }
 
         coEvery { firestoreRepository.getUserDropletInternalByProjectRef("project-1") } returns droplet
@@ -166,23 +166,7 @@ class WebhookRoutesTest {
         }
 
         assertEquals(HttpStatusCode.OK, response.status)
-        coVerify(exactly = 1) {
-            pushNotificationSender.sendNotification(
-                fcmToken = "fcm-token",
-                title = "Browser Activity Started",
-                body = "Open the live browser viewer in SuprClaw.",
-                data = match { data ->
-                    data["notificationId"] == "notif-browser-1" &&
-                        data["type"] == "browser.activity.started" &&
-                        data["taskId"] == "agent:main:main" &&
-                        data["browserSessionId"] == "browser_123" &&
-                        data["viewerUrl"]?.contains("/view") == true &&
-                        data["takeoverUrl"]?.contains("/takeover") == true &&
-                        data["browserState"] == "active" &&
-                        data["browserEventType"] == "browser.session.created"
-                }
-            )
-        }
+        coVerify(exactly = 0) { pushNotificationSender.sendNotification(any(), any(), any(), any()) }
     }
 
     @Test

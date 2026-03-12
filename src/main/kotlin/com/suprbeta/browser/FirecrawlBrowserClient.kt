@@ -197,7 +197,7 @@ class FirecrawlBrowserClient(
         val session = httpClient.webSocketSession(cdpUrl)
         try {
             val pageTarget = attachToPageTarget(session)
-            resizeBrowserWindow(session, pageTarget.targetId)
+            resizeBrowserViewport(session, pageTarget.targetId)
             sendCdpCommand(
                 session = session,
                 id = 1,
@@ -359,7 +359,7 @@ class FirecrawlBrowserClient(
         return AttachedPageTarget(targetId = pageId, sessionId = sessionId)
     }
 
-    private suspend fun resizeBrowserWindow(
+    private suspend fun resizeBrowserViewport(
         session: io.ktor.client.plugins.websocket.DefaultClientWebSocketSession,
         targetId: String
     ) {
@@ -381,11 +381,20 @@ class FirecrawlBrowserClient(
             params = buildJsonObject {
                 put("windowId", windowId)
                 put("bounds", buildJsonObject {
-                    put("left", 0)
-                    put("top", 0)
+                    put("windowState", "normal")
                     put("width", MOBILE_WINDOW_WIDTH)
                     put("height", MOBILE_WINDOW_HEIGHT)
                 })
+            }
+        )
+        sendCdpCommand(
+            session = session,
+            id = 505,
+            method = "Browser.setContentsSize",
+            params = buildJsonObject {
+                put("windowId", windowId)
+                put("width", MOBILE_VIEWPORT_WIDTH)
+                put("height", MOBILE_VIEWPORT_HEIGHT)
             }
         )
     }

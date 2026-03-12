@@ -179,17 +179,13 @@ class BrowserServiceTest {
             }
             assertEquals("browser.session.created", publishedEvent.captured.browserEventType)
             assertEquals("agent:main:main", publishedEvent.captured.taskId)
-            coVerify {
+            coVerify(exactly = 0) {
                 pushNotificationSender.sendNotification(
-                    fcmToken = "fcm-token",
-                    title = "Browser Activity Started",
-                    body = "Open the live browser viewer in SuprClaw.",
-                    data = match {
-                        it["browserState"] == BrowserSessionState.ACTIVE &&
-                            it["taskId"] == "agent:main:main" &&
-                            it["browserEventType"] == "browser.session.created"
-                    },
-                    highPriority = true
+                    any(),
+                    "Browser Activity Started",
+                    any(),
+                    any(),
+                    any()
                 )
             }
         } finally {
@@ -612,6 +608,8 @@ class BrowserServiceTest {
             }
 
             assertTrue(html.contains("/api/browser/sessions/browser-1/view/launch"))
+            assertTrue(html.contains("viewport-fit=cover"))
+            assertTrue(!html.contains("<header>"))
             assertTrue(!html.contains("https://liveview.firecrawl.dev/opaque"))
             assertEquals("https://liveview.firecrawl.dev/opaque", launchUrl)
         } finally {
