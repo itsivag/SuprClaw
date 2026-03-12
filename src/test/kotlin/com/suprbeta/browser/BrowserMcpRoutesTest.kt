@@ -72,6 +72,8 @@ class BrowserMcpRoutesTest {
         assertEquals(HttpStatusCode.OK, response.status)
         val body = json.parseToJsonElement(response.bodyAsText()).jsonObject
         val tools = body["result"]!!.jsonObject["tools"]!!.jsonArray
+        assertTrue(tools.any { it.jsonObject["name"]?.jsonPrimitive?.content == "cloud_browser_list_profiles" })
+        assertTrue(tools.any { it.jsonObject["name"]?.jsonPrimitive?.content == "cloud_browser_create_profile" })
         assertTrue(tools.any { it.jsonObject["name"]?.jsonPrimitive?.content == "cloud_browser_open" })
         assertTrue(tools.any { it.jsonObject["name"]?.jsonPrimitive?.content == "cloud_browser_exec" })
     }
@@ -195,6 +197,90 @@ class BrowserMcpRoutesTest {
         assertEquals(false, result["isError"]!!.jsonPrimitive.booleanOrNull)
         assertTrue(result["structuredContent"]!!.toString().contains("browser_123"))
         coVerify(exactly = 1) { browserService.createSession("user-1", any()) }
+    }
+
+    @Test
+    fun `mcp tool open auto creates default profile when omitted`() = testApplication {
+        application { configureTestModule() }
+
+        val profile = BrowserProfileView(
+            id = "browser_profile_123",
+            label = "Default Browser",
+            generation = 1,
+            status = "active",
+            createdAt = "2026-03-12T11:58:00Z",
+            lastUsedAt = "2026-03-12T11:58:00Z"
+        )
+        val session = BrowserSessionView(
+            sessionId = "browser_123",
+            taskId = "task-1",
+            profileId = profile.id,
+            state = BrowserSessionState.ACTIVE,
+            viewerUrl = "https://api.example.com/api/browser/sessions/browser_123/view",
+            takeoverUrl = "https://api.example.com/api/browser/sessions/browser_123/takeover",
+            initialUrl = "https://example.com",
+            createdAt = "2026-03-12T12:00:00Z",
+            updatedAt = "2026-03-12T12:00:00Z",
+            expiresAt = "2026-03-12T12:30:00Z",
+            activityExpiresAt = "2026-03-12T12:20:00Z",
+            gracefulCloseDeadlineAt = "2026-03-12T12:28:00Z",
+            takeoverDeadlineAt = "2026-03-12T12:10:00Z"
+        )
+
+        coEvery { firestoreRepository.getUserDropletInternalByGatewayToken("gw-token") } returns droplet
+        coEvery { browserService.listProfiles("user-1") } returns BrowserProfileListResponse(count = 0, profiles = emptyList())
+        coEvery { browserService.createProfile("user-1", CreateBrowserProfileRequest(label = "Default Browser")) } returns profile
+        coEvery {
+            browserService.createSession(
+                "user-1",
+                CreateBrowserSessionRequest(
+                    profileId = profile.id,
+                    taskId = "task-1",
+                    initialUrl = "https://example.com",
+                    takeoverTimeoutSeconds = null
+                )
+            )
+        } returns session
+
+        val response = client.post("/api/mcp/cloud-browser") {
+            header(HttpHeaders.Authorization, "Bearer gw-token")
+            contentType(ContentType.Application.Json)
+            setBody(
+                """
+                {
+                  "jsonrpc":"2.0",
+                  "id":3,
+                  "method":"tools/call",
+                  "params":{
+                    "name":"cloud_browser_open",
+                    "arguments":{
+                      "taskId":"task-1",
+                      "initialUrl":"https://example.com"
+                    }
+                  }
+                }
+                """.trimIndent()
+            )
+        }
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        val body = json.parseToJsonElement(response.bodyAsText()).jsonObject
+        val result = body["result"]!!.jsonObject
+        assertEquals(false, result["isError"]!!.jsonPrimitive.booleanOrNull)
+        assertTrue(result["structuredContent"]!!.toString().contains(profile.id))
+        coVerify(exactly = 1) { browserService.listProfiles("user-1") }
+        coVerify(exactly = 1) { browserService.createProfile("user-1", CreateBrowserProfileRequest(label = "Default Browser")) }
+        coVerify(exactly = 1) {
+            browserService.createSession(
+                "user-1",
+                CreateBrowserSessionRequest(
+                    profileId = profile.id,
+                    taskId = "task-1",
+                    initialUrl = "https://example.com",
+                    takeoverTimeoutSeconds = null
+                )
+            )
+        }
     }
 
     @Test

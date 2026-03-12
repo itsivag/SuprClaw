@@ -11,7 +11,8 @@ object AgentWorkspaceBootstrap {
         ## SuprClaw Cloud Browser
         <!-- $CLOUD_BROWSER_MARKER -->
         Use the SuprClaw cloud browser tools for interactive browsing and authenticated sessions.
-        - Start interactive browser work with `cloud_browser_open`.
+        - Start interactive browser work with `cloud_browser_open`. If no profile exists yet, it will create and reuse a default browser profile automatically.
+        - Use `cloud_browser_list_profiles`, `cloud_browser_create_profile`, and `cloud_browser_reset_profile` when you need explicit profile management.
         - Use `cloud_browser_exec` for navigation, clicks, form fills, and page inspection.
         - Use `cloud_browser_request_takeover` for CAPTCHA, MFA, login approvals, payments, account changes, and destructive actions.
         - Use `cloud_browser_resume` after the user completes takeover, and `cloud_browser_close` when the browser task is done.

@@ -30,7 +30,10 @@ mcporter call cloud_browser.<tool> key=value  # Call a tool
 
 | Tool | Description |
 |------|-------------|
+| `cloud_browser_list_profiles` | List available SuprClaw browser profiles |
+| `cloud_browser_create_profile` | Create a SuprClaw browser profile explicitly |
 | `cloud_browser_open` | Create a SuprClaw-managed browser session |
+| `cloud_browser_reset_profile` | Reset a browser profile to a clean identity |
 | `cloud_browser_exec` | Navigate, inspect, click, type, and capture browser state |
 | `cloud_browser_request_takeover` | Ask the user to take over for CAPTCHA, MFA, login approvals, or sensitive actions |
 | `cloud_browser_resume` | Return control to the agent after user takeover |
@@ -39,8 +42,13 @@ mcporter call cloud_browser.<tool> key=value  # Call a tool
 **Usage Examples:**
 
 ```bash
-# Open a browser session for a content research task
+# Open a browser session for a content research task.
+# If no profile exists yet, a default browser profile is created automatically.
 mcporter call cloud_browser.cloud_browser_open taskId:"thread_abc" initialUrl:"https://example.com"
+
+# List or create profiles explicitly when you need stable named browser identities
+mcporter call cloud_browser.cloud_browser_list_profiles
+mcporter call cloud_browser.cloud_browser_create_profile label:"Research Browser"
 
 # Navigate and inspect the page
 mcporter call cloud_browser.cloud_browser_exec sessionId:"browser_123" action:"open" url:"https://example.com/article"
@@ -73,9 +81,9 @@ mcporter call cloud_browser.cloud_browser_request_takeover sessionId:"browser_12
 
 | Need | Tool/Skill |
 |------|------------|
-| Interactive web research | `mcporter call cloud_browser_open` + `cloud_browser_exec` |
+| Interactive web research | `mcporter call cloud_browser.cloud_browser_open` + `cloud_browser.cloud_browser_exec` |
 | Competitor analysis | `content-gap-analysis` skill |
 | SEO articles | `seo-content-writer` skill |
 | AI citation优化 | `geo-optimizer` skill |
 | UX/marketing copy | `copywriter` skill |
-| Live browsing with user takeover | `cloud_browser_request_takeover` |
+| Live browsing with user takeover | `cloud_browser.cloud_browser_request_takeover` |

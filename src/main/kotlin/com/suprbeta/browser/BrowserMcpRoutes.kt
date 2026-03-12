@@ -41,6 +41,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 private const val MCP_PROTOCOL_VERSION = "2024-11-05"
 private const val MCP_SERVER_NAME = "cloud_browser"
 private const val SSE_KEEPALIVE_SECONDS = 15L
+private const val DEFAULT_MCP_BROWSER_PROFILE_LABEL = "Default Browser"
 
 private data class BrowserMcpSseSession(
     val userId: String,
@@ -257,9 +258,28 @@ private suspend fun handleToolCall(
     val args = params["arguments"]?.jsonObject ?: buildJsonObject {}
 
     return when (toolName) {
+        "cloud_browser_list_profiles" -> {
+            val payload = browserService.listProfiles(droplet.userId)
+            toolSuccess(id, json.encodeToJsonElement(BrowserProfileListResponse.serializer(), payload))
+        }
+        "cloud_browser_create_profile" -> {
+            val label = args["label"]?.jsonPrimitive?.contentOrNull?.trim()
+                ?.ifBlank { null }
+                ?: DEFAULT_MCP_BROWSER_PROFILE_LABEL
+            val payload = browserService.createProfile(
+                droplet.userId,
+                CreateBrowserProfileRequest(label = label)
+            )
+            toolSuccess(id, json.encodeToJsonElement(BrowserProfileView.serializer(), payload))
+        }
         "cloud_browser_open" -> {
-            val profileId = args["profileId"]?.jsonPrimitive?.contentOrNull.orEmpty()
-            if (profileId.isBlank()) return toolError(id, "profileId is required", "invalid_params")
+            val explicitProfileId = args["profileId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val profileId = resolveProfileIdForOpen(
+                browserService = browserService,
+                userId = droplet.userId,
+                explicitProfileId = explicitProfileId,
+                requestedLabel = args["profileLabel"]?.jsonPrimitive?.contentOrNull
+            )
             val payload = browserService.createSession(
                 droplet.userId,
                 CreateBrowserSessionRequest(
@@ -270,6 +290,12 @@ private suspend fun handleToolCall(
                 )
             )
             toolSuccess(id, json.encodeToJsonElement(BrowserSessionView.serializer(), payload))
+        }
+        "cloud_browser_reset_profile" -> {
+            val profileId = args["profileId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            if (profileId.isBlank()) return toolError(id, "profileId is required", "invalid_params")
+            val payload = browserService.resetProfile(droplet.userId, profileId)
+            toolSuccess(id, json.encodeToJsonElement(BrowserProfileView.serializer(), payload))
         }
         "cloud_browser_exec" -> {
             val sessionId = args["sessionId"]?.jsonPrimitive?.contentOrNull.orEmpty()
@@ -320,6 +346,27 @@ private suspend fun handleToolCall(
     }
 }
 
+private suspend fun resolveProfileIdForOpen(
+    browserService: BrowserService,
+    userId: String,
+    explicitProfileId: String,
+    requestedLabel: String?
+): String {
+    if (explicitProfileId.isNotBlank()) return explicitProfileId
+
+    val existingProfiles = browserService.listProfiles(userId).profiles
+    val selected = existingProfiles.firstOrNull()
+    if (selected != null) return selected.id
+
+    val created = browserService.createProfile(
+        userId,
+        CreateBrowserProfileRequest(
+            label = requestedLabel?.trim()?.ifBlank { null } ?: DEFAULT_MCP_BROWSER_PROFILE_LABEL
+        )
+    )
+    return created.id
+}
+
 private suspend fun io.ktor.server.application.ApplicationCall.requireGatewayDroplet(
     firestoreRepository: FirestoreRepository
 ): UserDropletInternal? {
@@ -339,13 +386,30 @@ private suspend fun io.ktor.server.application.ApplicationCall.requireGatewayDro
 }
 
 private fun cloudBrowserTools() = buildJsonArray {
-    add(toolDefinition("cloud_browser_open", "Create a new SuprClaw cloud browser session.", buildJsonObject {
+    add(toolDefinition("cloud_browser_list_profiles", "List SuprClaw browser profiles available to the current agent.", buildJsonObject {
+        put("type", "object")
+        putJsonObject("properties") {}
+    }))
+    add(toolDefinition("cloud_browser_create_profile", "Create a SuprClaw browser profile for persistent browser identity.", buildJsonObject {
+        put("type", "object")
+        putJsonObject("properties") {
+            putJsonObject("label") { put("type", "string") }
+        }
+    }))
+    add(toolDefinition("cloud_browser_open", "Create a new SuprClaw cloud browser session. If profileId is omitted, the newest profile is reused or a default profile is created automatically.", buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("profileId") { put("type", "string") }
+            putJsonObject("profileLabel") { put("type", "string") }
             putJsonObject("taskId") { put("type", "string") }
             putJsonObject("initialUrl") { put("type", "string") }
             putJsonObject("takeoverTimeoutSeconds") { put("type", "integer") }
+        }
+    }))
+    add(toolDefinition("cloud_browser_reset_profile", "Rotate a browser profile to a fresh browser identity.", buildJsonObject {
+        put("type", "object")
+        putJsonObject("properties") {
+            putJsonObject("profileId") { put("type", "string") }
         }
         put("required", buildJsonArray { add(JsonPrimitive("profileId")) })
     }))
