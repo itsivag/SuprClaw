@@ -210,10 +210,15 @@ class BrowserServiceImpl(
         var providerSession: ProviderBrowserSession? = null
         try {
             providerSession = withProviderCall {
-                providerClient.createSession(profile.providerProfileName, stub.initialUrl, ttlSeconds, activityTtlSeconds)
+                providerClient.createSession(profile.providerProfileName, null, ttlSeconds, activityTtlSeconds)
             }
             withProviderCall {
                 providerClient.applyMobileEmulation(providerSession.cdpUrl)
+            }
+            stub.initialUrl?.let { initialUrl ->
+                withProviderCall {
+                    providerClient.navigateToUrl(providerSession.cdpUrl, initialUrl)
+                }
             }
 
             val activated = stub.copy(

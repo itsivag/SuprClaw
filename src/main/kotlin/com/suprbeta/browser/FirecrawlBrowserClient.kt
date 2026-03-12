@@ -42,6 +42,7 @@ interface BrowserProviderClient {
     suspend fun listActiveSessions(): List<ProviderBrowserSessionSummary>
     suspend fun executeSession(providerSessionId: String, code: String, language: String, timeoutSeconds: Int? = null): ProviderBrowserExecution
     suspend fun applyMobileEmulation(cdpUrl: String)
+    suspend fun navigateToUrl(cdpUrl: String, url: String)
     suspend fun sendKeepalive(cdpUrl: String)
 }
 
@@ -259,6 +260,33 @@ class FirecrawlBrowserClient(
                 params = buildJsonObject {
                     put("expression", "1+1")
                     put("returnByValue", true)
+                }
+            )
+        } finally {
+            runCatching { session.close() }
+        }
+    }
+
+    override suspend fun navigateToUrl(cdpUrl: String, url: String) {
+        if (url.isBlank()) return
+
+        val session = httpClient.webSocketSession(cdpUrl)
+        try {
+            val pageSessionId = attachToPageTarget(session)
+            sendCdpCommand(
+                session = session,
+                id = 110,
+                method = "Page.enable",
+                sessionId = pageSessionId,
+                params = buildJsonObject {}
+            )
+            sendCdpCommand(
+                session = session,
+                id = 111,
+                method = "Page.navigate",
+                sessionId = pageSessionId,
+                params = buildJsonObject {
+                    put("url", url)
                 }
             )
         } finally {

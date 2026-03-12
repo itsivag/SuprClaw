@@ -113,7 +113,7 @@ class BrowserServiceTest {
             coEvery {
                 providerClient.createSession(
                     profileName = "sc:prod:abc123:1",
-                    initialUrl = "https://example.com",
+                    initialUrl = null,
                     ttlSeconds = 1800,
                     activityTtlSeconds = 1800
                 )
@@ -125,6 +125,7 @@ class BrowserServiceTest {
                 expiresAt = "2026-03-12T10:30:00Z"
             )
             coEvery { providerClient.applyMobileEmulation("wss://cdp.example.com/1") } returns Unit
+            coEvery { providerClient.navigateToUrl("wss://cdp.example.com/1", "https://example.com") } returns Unit
             coEvery { firestoreRepository.saveBrowserSession(capture(savedSession)) } returns Unit
             coEvery { firestoreRepository.heartbeatBrowserProfile("user-1", "profile-1", any()) } returns Unit
             coEvery { firestoreRepository.getFcmToken("user-1") } returns "fcm-token"
@@ -155,8 +156,9 @@ class BrowserServiceTest {
                 firestoreRepository.acquireBrowserProfileLockAndCreateSession(
                     "user-1", "profile-1", any(), any(), any(), 45
                 )
-                providerClient.createSession("sc:prod:abc123:1", "https://example.com", 1800, 1800)
+                providerClient.createSession("sc:prod:abc123:1", null, 1800, 1800)
                 providerClient.applyMobileEmulation("wss://cdp.example.com/1")
+                providerClient.navigateToUrl("wss://cdp.example.com/1", "https://example.com")
                 firestoreRepository.saveBrowserSession(any())
             }
             coVerify {
