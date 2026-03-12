@@ -301,7 +301,7 @@ class BrowserMcpRoutesTest {
                 primaryActions = listOf("More information...")
             ),
             execution = BrowserExecutionOutput(
-                language = "node",
+                language = "bash",
                 stdout = "{\"title\":\"Example Domain\"}",
                 exitCode = 0
             )
@@ -313,8 +313,8 @@ class BrowserMcpRoutesTest {
                 "user-1",
                 BrowserExecRequest(
                     sessionId = "browser_123",
-                    code = "console.log('hello')",
-                    language = "node",
+                    code = "snapshot",
+                    language = "bash",
                     timeoutSeconds = 45
                 )
             )
@@ -333,8 +333,7 @@ class BrowserMcpRoutesTest {
                     "name":"cloud_browser_exec",
                     "arguments":{
                       "sessionId":"browser_123",
-                      "code":"console.log('hello')",
-                      "language":"node",
+                      "action":"snapshot",
                       "timeoutSeconds":45
                     }
                   }
@@ -358,8 +357,8 @@ class BrowserMcpRoutesTest {
                 "user-1",
                 BrowserExecRequest(
                     sessionId = "browser_123",
-                    code = "console.log('hello')",
-                    language = "node",
+                    code = "snapshot",
+                    language = "bash",
                     timeoutSeconds = 45
                 )
             )

@@ -299,9 +299,7 @@ private suspend fun handleToolCall(
         }
         "cloud_browser_exec" -> {
             val sessionId = args["sessionId"]?.jsonPrimitive?.contentOrNull.orEmpty()
-            val code = args["code"]?.jsonPrimitive?.contentOrNull
-                ?: args["command"]?.jsonPrimitive?.contentOrNull
-                ?: ""
+            val code = resolveBrowserExecCommand(args)
             if (sessionId.isBlank() || code.isBlank()) {
                 return toolError(id, "sessionId and code are required", "invalid_params")
             }
@@ -310,7 +308,7 @@ private suspend fun handleToolCall(
                 BrowserExecRequest(
                     sessionId = sessionId,
                     code = code,
-                    language = args["language"]?.jsonPrimitive?.contentOrNull ?: "bash",
+                    language = "bash",
                     timeoutSeconds = args["timeoutSeconds"]?.jsonPrimitive?.intOrNull
                 )
             )
@@ -344,6 +342,26 @@ private suspend fun handleToolCall(
         }
         else -> toolError(id, "Unknown tool '$toolName'", "tool_not_found")
     }
+}
+
+private fun resolveBrowserExecCommand(args: JsonObject): String {
+    val action = args["action"]?.jsonPrimitive?.contentOrNull?.trim()?.lowercase()
+    if (!action.isNullOrBlank()) {
+        return when (action) {
+            "open" -> {
+                val url = args["url"]?.jsonPrimitive?.contentOrNull.orEmpty().trim()
+                if (!url.startsWith("https://") && !url.startsWith("http://")) {
+                    throw BrowserValidationException("action=open requires an http or https url")
+                }
+                "open $url"
+            }
+            "snapshot" -> "snapshot"
+            else -> throw BrowserValidationException("Unsupported browser action '$action'")
+        }
+    }
+    return args["code"]?.jsonPrimitive?.contentOrNull
+        ?: args["command"]?.jsonPrimitive?.contentOrNull
+        ?: ""
 }
 
 private suspend fun resolveProfileIdForOpen(
@@ -413,18 +431,18 @@ private fun cloudBrowserTools() = buildJsonArray {
         }
         put("required", buildJsonArray { add(JsonPrimitive("profileId")) })
     }))
-    add(toolDefinition("cloud_browser_exec", "Execute a browser command in the active Firecrawl sandbox session and return structured page state.", buildJsonObject {
+    add(toolDefinition("cloud_browser_exec", "Execute a safe bash agent-browser command in the active Firecrawl sandbox session and return structured page state.", buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("sessionId") { put("type", "string") }
             putJsonObject("code") { put("type", "string") }
             putJsonObject("command") { put("type", "string") }
-            putJsonObject("language") { put("type", "string") }
+            putJsonObject("action") { put("type", "string") }
+            putJsonObject("url") { put("type", "string") }
             putJsonObject("timeoutSeconds") { put("type", "integer") }
         }
         put("required", buildJsonArray {
             add(JsonPrimitive("sessionId"))
-            add(JsonPrimitive("code"))
         })
     }))
     add(toolDefinition("cloud_browser_request_takeover", "Request human takeover for CAPTCHA, MFA, or sensitive browser steps.", buildJsonObject {
