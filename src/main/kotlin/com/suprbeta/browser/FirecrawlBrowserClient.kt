@@ -52,6 +52,13 @@ class FirecrawlBrowserClient(
     private val json: Json = Json { ignoreUnknownKeys = true }
 ) : BrowserProviderClient {
 
+    private companion object {
+        const val MOBILE_VIEWPORT_WIDTH = 390
+        const val MOBILE_VIEWPORT_HEIGHT = 844
+        const val MOBILE_WINDOW_WIDTH = 430
+        const val MOBILE_WINDOW_HEIGHT = 980
+    }
+
     override suspend fun createSession(
         profileName: String,
         initialUrl: String?,
@@ -189,40 +196,41 @@ class FirecrawlBrowserClient(
     override suspend fun applyMobileEmulation(cdpUrl: String) {
         val session = httpClient.webSocketSession(cdpUrl)
         try {
-            val pageSessionId = attachToPageTarget(session)
+            val pageTarget = attachToPageTarget(session)
+            resizeBrowserWindow(session, pageTarget.targetId)
             sendCdpCommand(
                 session = session,
                 id = 1,
                 method = "Page.enable",
-                sessionId = pageSessionId,
+                sessionId = pageTarget.sessionId,
                 params = buildJsonObject {}
             )
             sendCdpCommand(
                 session = session,
                 id = 2,
                 method = "Network.enable",
-                sessionId = pageSessionId,
+                sessionId = pageTarget.sessionId,
                 params = buildJsonObject {}
             )
             sendCdpCommand(
                 session = session,
                 id = 3,
                 method = "Emulation.setDeviceMetricsOverride",
-                sessionId = pageSessionId,
+                sessionId = pageTarget.sessionId,
                 params = buildJsonObject {
-                    put("width", 390)
-                    put("height", 844)
+                    put("width", MOBILE_VIEWPORT_WIDTH)
+                    put("height", MOBILE_VIEWPORT_HEIGHT)
                     put("deviceScaleFactor", 3)
                     put("mobile", true)
-                    put("screenWidth", 390)
-                    put("screenHeight", 844)
+                    put("screenWidth", MOBILE_VIEWPORT_WIDTH)
+                    put("screenHeight", MOBILE_VIEWPORT_HEIGHT)
                 }
             )
             sendCdpCommand(
                 session = session,
                 id = 4,
                 method = "Network.setUserAgentOverride",
-                sessionId = pageSessionId,
+                sessionId = pageTarget.sessionId,
                 params = buildJsonObject {
                     put(
                         "userAgent",
@@ -237,7 +245,7 @@ class FirecrawlBrowserClient(
                 session = session,
                 id = 5,
                 method = "Emulation.setTouchEmulationEnabled",
-                sessionId = pageSessionId,
+                sessionId = pageTarget.sessionId,
                 params = buildJsonObject {
                     put("enabled", true)
                     put("maxTouchPoints", 5)
@@ -251,7 +259,7 @@ class FirecrawlBrowserClient(
     override suspend fun sendKeepalive(cdpUrl: String) {
         val session = httpClient.webSocketSession(cdpUrl)
         try {
-            val pageSessionId = attachToPageTarget(session)
+            val pageSessionId = attachToPageTarget(session).sessionId
             sendCdpCommand(
                 session = session,
                 id = 99,
@@ -272,7 +280,7 @@ class FirecrawlBrowserClient(
 
         val session = httpClient.webSocketSession(cdpUrl)
         try {
-            val pageSessionId = attachToPageTarget(session)
+            val pageSessionId = attachToPageTarget(session).sessionId
             sendCdpCommand(
                 session = session,
                 id = 110,
@@ -323,7 +331,7 @@ class FirecrawlBrowserClient(
 
     private suspend fun attachToPageTarget(
         session: io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
-    ): String {
+    ): AttachedPageTarget {
         val targets = sendCdpCommandForResult(
             session = session,
             id = 501,
@@ -346,8 +354,40 @@ class FirecrawlBrowserClient(
                 put("flatten", true)
             }
         )
-        return attached["sessionId"]?.jsonPrimitive?.contentOrNull
+        val sessionId = attached["sessionId"]?.jsonPrimitive?.contentOrNull
             ?: throw BrowserProviderException("CDP Target.attachToTarget returned no sessionId")
+        return AttachedPageTarget(targetId = pageId, sessionId = sessionId)
+    }
+
+    private suspend fun resizeBrowserWindow(
+        session: io.ktor.client.plugins.websocket.DefaultClientWebSocketSession,
+        targetId: String
+    ) {
+        val window = sendCdpCommandForResult(
+            session = session,
+            id = 503,
+            method = "Browser.getWindowForTarget",
+            params = buildJsonObject {
+                put("targetId", targetId)
+            }
+        )
+        val windowId = window["windowId"]?.jsonPrimitive?.intOrNull
+            ?: throw BrowserProviderException("CDP Browser.getWindowForTarget returned no windowId")
+
+        sendCdpCommand(
+            session = session,
+            id = 504,
+            method = "Browser.setWindowBounds",
+            params = buildJsonObject {
+                put("windowId", windowId)
+                put("bounds", buildJsonObject {
+                    put("left", 0)
+                    put("top", 0)
+                    put("width", MOBILE_WINDOW_WIDTH)
+                    put("height", MOBILE_WINDOW_HEIGHT)
+                })
+            }
+        )
     }
 
     private suspend fun sendCdpCommandForResult(
@@ -515,6 +555,11 @@ private data class CdpMessage(
     val method: String,
     val params: JsonObject,
     val sessionId: String? = null
+)
+
+private data class AttachedPageTarget(
+    val targetId: String,
+    val sessionId: String
 )
 
 private fun elementToText(element: kotlinx.serialization.json.JsonElement): String? {
