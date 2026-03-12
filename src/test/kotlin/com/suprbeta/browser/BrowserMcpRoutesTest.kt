@@ -293,7 +293,7 @@ class BrowserMcpRoutesTest {
             page = BrowserPageInfo(
                 url = "https://example.com",
                 title = "Example Domain",
-                viewportMode = "mobile"
+                viewportMode = "desktop"
             ),
             signals = BrowserSignals(loginDetected = true),
             summary = BrowserSummary(

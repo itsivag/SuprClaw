@@ -166,7 +166,7 @@ data class BrowserExecRequest(
 data class BrowserPageInfo(
     val url: String? = null,
     val title: String? = null,
-    val viewportMode: String = "mobile"
+    val viewportMode: String = "desktop"
 )
 
 @Serializable
