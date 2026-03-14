@@ -29,9 +29,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN useradd -m -s /bin/bash picoclaw && mkdir -p /home/picoclaw/.picoclaw
 
 COPY --from=builder /src/build/picoclaw /usr/local/bin/picoclaw
-COPY containers/picoclaw-container/entrypoint.sh /entrypoint.sh
-COPY containers/picoclaw-container/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
-COPY --chown=picoclaw:picoclaw containers/picoclaw-container/workspace/ /opt/suprclaw/workspace/
+COPY entrypoint.sh /entrypoint.sh
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY --chown=picoclaw:picoclaw workspace/ /opt/suprclaw/workspace/
 
 RUN chmod 755 /entrypoint.sh /usr/local/bin/picoclaw
 

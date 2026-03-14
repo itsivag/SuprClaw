@@ -94,12 +94,12 @@ class SshCommandExecutorImpl(
         throw IllegalStateException("SSH auth not available at $ipAddress after ${SSH_AUTH_TIMEOUT_MS / 1000}s")
     }
 
-    override fun runSshCommand(ipAddress: String, command: String): String {
+    override fun runSshCommand(ipAddress: String, command: String, timeoutSeconds: Long): String {
         var lastException: Exception? = null
 
         repeat(SSH_MAX_RETRIES) { attempt ->
             try {
-                return runSshCommandOnce(ipAddress, command)
+                return runSshCommandOnce(ipAddress, command, timeoutSeconds)
             } catch (e: Exception) {
                 lastException = e
                 if (attempt < SSH_MAX_RETRIES - 1) {
@@ -113,7 +113,10 @@ class SshCommandExecutorImpl(
         throw lastException ?: RuntimeException("SSH command failed after $SSH_MAX_RETRIES attempts")
     }
 
-    override fun runSshCommandOnce(ipAddress: String, command: String): String {
+    override fun runSshCommandOnce(ipAddress: String, command: String): String =
+        runSshCommandOnce(ipAddress, command, SSH_COMMAND_TIMEOUT_SECONDS)
+
+    override fun runSshCommandOnce(ipAddress: String, command: String, timeoutSeconds: Long): String {
         var result = ""
         withKeyFile { keyFile ->
             val ssh = SSHClient()
@@ -126,7 +129,7 @@ class SshCommandExecutorImpl(
                 val session = ssh.startSession()
                 try {
                     val cmd = session.exec("bash -l -c '${command.replace("'", "'\\''")}'")
-                    cmd.join(SSH_COMMAND_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                    cmd.join(timeoutSeconds, TimeUnit.SECONDS)
 
                     val stdout = cmd.inputStream.bufferedReader().readText()
                     val stderr = cmd.errorStream.bufferedReader().readText()
@@ -138,7 +141,7 @@ class SshCommandExecutorImpl(
                     }
 
                     if (exitStatus == null) {
-                        throw RuntimeException("SSH command timed out after ${SSH_COMMAND_TIMEOUT_SECONDS}s: ${command.take(100)}")
+                        throw RuntimeException("SSH command timed out after ${timeoutSeconds}s: ${command.take(100)}")
                     }
 
                     if (exitStatus != 0) {

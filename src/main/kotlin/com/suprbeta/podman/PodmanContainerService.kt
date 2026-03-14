@@ -28,6 +28,7 @@ class PodmanContainerService(
     
     companion object {
         private const val CONTAINER_PORT = 18790
+        private const val IMAGE_BUILD_TIMEOUT_SECONDS = 900L
     }
     
     /**
@@ -242,7 +243,8 @@ class PodmanContainerService(
                         image = quotedImage,
                         buildContext = quotedBuildContext,
                         containerfilePath = buildContainerfile
-                    )
+                    ),
+                    IMAGE_BUILD_TIMEOUT_SECONDS
                 )
             }
             return
@@ -265,7 +267,8 @@ class PodmanContainerService(
                         image = quotedImage,
                         buildContext = quotedBuildContext,
                         containerfilePath = buildContainerfile
-                    )
+                    ),
+                    IMAGE_BUILD_TIMEOUT_SECONDS
                 )
             }
         }
@@ -291,6 +294,30 @@ class PodmanContainerService(
         buildContext: String,
         containerfilePath: String
     ): String {
+        parseGitBuildContext(buildContext)?.let { context ->
+            val repoUrl = singleQuote(context.repoUrl)
+            val ref = singleQuote(context.ref)
+            val subdir = singleQuote(context.subdir)
+            val containerfileName = singleQuote(Path.of(containerfilePath).fileName.toString())
+            return buildString {
+                append("tmpdir=$(mktemp -d) && ")
+                append("trap 'rm -rf \"${'$'}tmpdir\"' EXIT && ")
+                append("git clone --depth 1 --branch ")
+                append(ref)
+                append(" ")
+                append(repoUrl)
+                append(" \"${'$'}tmpdir/repo\" && ")
+                append("cd \"${'$'}tmpdir/repo/")
+                append(context.subdir)
+                append("\" && ")
+                append("podman build -t ")
+                append(image)
+                append(" -f ")
+                append(containerfileName)
+                append(" .")
+            }
+        }
+
         val containerfile = Files.readString(Path.of(containerfilePath)).trimEnd()
         return buildString {
             append("podman build -t ")
@@ -302,6 +329,33 @@ class PodmanContainerService(
             append("\nSUPRCLAW_CONTAINERFILE")
         }
     }
+
+    private fun parseGitBuildContext(buildContext: String): GitBuildContext? {
+        if (!buildContext.contains(".git#")) {
+            return null
+        }
+        val (repoUrl, suffix) = buildContext.split("#", limit = 2).let {
+            if (it.size != 2) return null
+            it[0] to it[1]
+        }
+        val (ref, subdir) = suffix.split(":", limit = 2).let {
+            when (it.size) {
+                1 -> it[0] to ""
+                2 -> it[0] to it[1]
+                else -> return null
+            }
+        }
+        if (repoUrl.isBlank() || ref.isBlank()) {
+            return null
+        }
+        return GitBuildContext(repoUrl = repoUrl, ref = ref, subdir = subdir.trim('/'))
+    }
+
+    private data class GitBuildContext(
+        val repoUrl: String,
+        val ref: String,
+        val subdir: String
+    )
     
     /**
      * Builds environment variable arguments for podman run.

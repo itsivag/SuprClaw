@@ -22,7 +22,7 @@ object AppConfig {
     val podmanPicoclawBuildContext: String =
         dotenv["PODMAN_PICOCLAW_BUILD_CONTEXT"]
             ?: System.getenv("PODMAN_PICOCLAW_BUILD_CONTEXT")
-            ?: "https://github.com/itsivag/suprclaw.git#main"
+            ?: "https://github.com/itsivag/suprclaw.git#main:containers/picoclaw-container"
     val podmanPicoclawContainerfile: String =
         dotenv["PODMAN_PICOCLAW_CONTAINERFILE"]
             ?: System.getenv("PODMAN_PICOCLAW_CONTAINERFILE")

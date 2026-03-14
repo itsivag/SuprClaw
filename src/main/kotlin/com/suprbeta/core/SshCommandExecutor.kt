@@ -5,7 +5,12 @@ interface SshCommandExecutor {
 
     suspend fun waitForSshAuth(ipAddress: String)
 
-    fun runSshCommand(ipAddress: String, command: String): String
+    fun runSshCommand(ipAddress: String, command: String): String =
+        runSshCommand(ipAddress, command, 120L)
+
+    fun runSshCommand(ipAddress: String, command: String, timeoutSeconds: Long): String
 
     fun runSshCommandOnce(ipAddress: String, command: String): String
+
+    fun runSshCommandOnce(ipAddress: String, command: String, timeoutSeconds: Long): String
 }
