@@ -145,17 +145,19 @@ jobs:
           backend_env.write_text("\\n".join(rewritten) + "\\n")
           PY
 
-          firebase_credentials_path="$(grep -E '^FIREBASE_CREDENTIALS_PATH=' deploy-bundle/backend.env | tail -n1 | cut -d= -f2-)"
+          firebase_credentials_b64="$(grep -E '^FIREBASE_CREDENTIALS_JSON_B64=' .deploy.env | tail -n1 | cut -d= -f2-)"
+          firebase_credentials_json="$(grep -E '^FIREBASE_CREDENTIALS_JSON=' .deploy.env | tail -n1 | cut -d= -f2-)"
           source_credentials_path="$(grep -E '^FIREBASE_CREDENTIALS_PATH=' .deploy.env | tail -n1 | cut -d= -f2-)"
-          if [ -z "$source_credentials_path" ]; then
-            echo "Missing FIREBASE_CREDENTIALS_PATH in ENV_FILE"
+          if [ -n "$firebase_credentials_b64" ]; then
+            printf '%s' "$firebase_credentials_b64" | base64 -d > deploy-bundle/firebase-credentials.json
+          elif [ -n "$firebase_credentials_json" ]; then
+            printf '%s' "$firebase_credentials_json" > deploy-bundle/firebase-credentials.json
+          elif [ -n "$source_credentials_path" ] && [ -f "$source_credentials_path" ]; then
+            cp "$source_credentials_path" deploy-bundle/firebase-credentials.json
+          else
+            echo "Missing Firebase credentials in ENV_FILE. Set FIREBASE_CREDENTIALS_JSON_B64, FIREBASE_CREDENTIALS_JSON, or a valid FIREBASE_CREDENTIALS_PATH."
             exit 1
           fi
-          if [ ! -f "$source_credentials_path" ]; then
-            echo "Firebase credentials file not found at $source_credentials_path"
-            exit 1
-          fi
-          cp "$source_credentials_path" deploy-bundle/firebase-credentials.json
 
           cat > deploy-bundle/stack.env <<EOF
           BACKEND_IMAGE=${IMAGE_NAME}:${IMAGE_TAG}
