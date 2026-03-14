@@ -111,10 +111,10 @@ jobs:
           printf '%s' "$LITELLM_CONFIG_YAML" > deploy-bundle/litellm-config.yaml
 
           cat > deploy-bundle/stack.env <<EOF
-BACKEND_IMAGE=${IMAGE_NAME}:${IMAGE_TAG}
-LITELLM_IMAGE=${LITELLM_IMAGE:-ghcr.io/berriai/litellm:main-stable}
-SUPRCLAW_API_HOST=${SUPRCLAW_API_HOST:-api.suprclaw.com}
-EOF
+          BACKEND_IMAGE=${IMAGE_NAME}:${IMAGE_TAG}
+          LITELLM_IMAGE=${LITELLM_IMAGE:-ghcr.io/berriai/litellm:main-stable}
+          SUPRCLAW_API_HOST=${SUPRCLAW_API_HOST:-api.suprclaw.com}
+          EOF
 
           tar -czf suprclaw-podman-deploy.tar.gz -C deploy-bundle .
 
