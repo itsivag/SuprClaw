@@ -149,6 +149,15 @@ jobs:
               "HETZNER_DEPLOY_USER",
               "HETZNER_SERVER_IP",
               "SSH_PRIVATE_KEY",
+              # Retired provider/runtime keys should not reach the current backend container.
+              "DIGITALOCEAN_API_KEY",
+              "DIGITALOCEAN_SSH_KEYS",
+              "GEMINI_API_KEY",
+              "SUPRCLAW_DEVICE_PRIVATE_KEY_B64",
+              "SUPRCLAW_DEVICE_PUBLIC_KEY_B64",
+              "SUPRCLAW_STATIC_DEVICE_ID",
+              "SUPABASE_MCP_URL",
+              "DOCKER_OPENCLAW_IMAGE",
               # Firebase credentials are mounted as a file instead of injected inline.
               "FIREBASE_CREDENTIALS_JSON",
               "FIREBASE_CREDENTIALS_JSON_B64",
