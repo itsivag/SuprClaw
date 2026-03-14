@@ -226,6 +226,10 @@ class PodmanContainerService(
         val quotedImage = singleQuote(image)
         val quotedBuildContext = singleQuote(buildContext)
 
+        if (image.startsWith("ghcr.io/", ignoreCase = true)) {
+            loginToGhcrIfConfigured(hostIp)
+        }
+
         if (refreshLatestTag) {
             logger.info("Refreshing PicoClaw image $image on $hostIp")
             runCatching {
@@ -265,6 +269,21 @@ class PodmanContainerService(
                 )
             }
         }
+    }
+
+    private suspend fun loginToGhcrIfConfigured(hostIp: String) {
+        val username = AppConfig.ghcrPullUsername.trim()
+        val token = AppConfig.ghcrPullToken.trim()
+        if (username.isBlank() || token.isBlank()) {
+            return
+        }
+
+        val quotedUsername = singleQuote(username)
+        val quotedToken = singleQuote(token)
+        sshCommandExecutor.runSshCommand(
+            hostIp,
+            "printf %s $quotedToken | podman login ghcr.io --username $quotedUsername --password-stdin >/dev/null 2>&1 || true"
+        )
     }
 
     private fun buildRemoteContextCommand(

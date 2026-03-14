@@ -27,6 +27,14 @@ object AppConfig {
         dotenv["PODMAN_PICOCLAW_CONTAINERFILE"]
             ?: System.getenv("PODMAN_PICOCLAW_CONTAINERFILE")
             ?: "containers/picoclaw-container/Containerfile"
+    val ghcrPullUsername: String =
+        dotenv["GHCR_PULL_USERNAME"]
+            ?: System.getenv("GHCR_PULL_USERNAME")
+            ?: ""
+    val ghcrPullToken: String =
+        dotenv["GHCR_PULL_TOKEN"]
+            ?: System.getenv("GHCR_PULL_TOKEN")
+            ?: ""
     val defaultAgentRuntime: AgentRuntime = AgentRuntime.PICOCLAW
     val podmanHostCapacity: Int =
         (dotenv["PODMAN_HOST_CAPACITY"]
