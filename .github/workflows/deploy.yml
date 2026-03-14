@@ -31,11 +31,7 @@ jobs:
             exit 1
           fi
 
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-          Path(".deploy.env").write_text(os.environ["ENV_FILE"].replace("\\n", "\n"))
-          PY
+          printf '%b' "$ENV_FILE" > .deploy.env
 
           required_env_keys=(
             HETZNER_SERVER_IP
@@ -118,13 +114,9 @@ jobs:
           cp deploy/podman/Caddyfile deploy-bundle/
           cp deploy/podman/suprclaw-stack.service deploy-bundle/
 
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-          Path("deploy-bundle/backend.env").write_text(os.environ["ENV_FILE"].replace("\\n", "\n"))
-          Path("deploy-bundle/litellm.env").write_text(os.environ.get("LITELLM_ENV_FILE", "").replace("\\n", "\n"))
-          Path("deploy-bundle/litellm-config.yaml").write_text(os.environ.get("LITELLM_CONFIG_YAML", "").replace("\\n", "\n"))
-          PY
+          printf '%b' "$ENV_FILE" > deploy-bundle/backend.env
+          printf '%b' "$LITELLM_ENV_FILE" > deploy-bundle/litellm.env
+          printf '%b' "$LITELLM_CONFIG_YAML" > deploy-bundle/litellm-config.yaml
 
           python3 - <<'PY'
           from pathlib import Path
