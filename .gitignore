@@ -41,7 +41,6 @@ out/
 .env.*.local
 *.pem
 *.key
-deploy/
 
 ### Firebase Credentials ###
 google-services.json
