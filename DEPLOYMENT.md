@@ -40,8 +40,20 @@ On each push to `main` or manual dispatch:
 
 1. Gradle builds `SuprClaw-all.jar`
 2. GitHub Actions builds and pushes `ghcr.io/<owner>/suprclaw-backend`
-3. The workflow uploads the Podman deployment bundle
-4. The host restarts `suprclaw-stack.service`
+3. The workflow reads Hetzner and GHCR deploy credentials from `ENV_FILE`
+4. The workflow uploads the Podman deployment bundle
+5. The host restarts `suprclaw-stack.service`
+
+Deployment-related keys expected inside `ENV_FILE`:
+
+```env
+HETZNER_SERVER_IP=...
+HETZNER_DEPLOY_USER=suprclaw
+GHCR_PULL_USERNAME=...
+GHCR_PULL_TOKEN=...
+SSH_PRIVATE_KEY=...
+SUPRCLAW_API_HOST=api.suprclaw.com
+```
 
 ## Stack files on the host
 

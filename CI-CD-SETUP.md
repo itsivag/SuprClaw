@@ -18,17 +18,26 @@ The stack contains:
 
 ## Required GitHub secrets
 
-Add these repository secrets:
+Required repository secret:
 
 | Secret | Purpose |
 | --- | --- |
-| `SSH_PRIVATE_KEY` | Base64-encoded deploy private key used by GitHub Actions |
-| `HETZNER_SERVER_IP` | Public IP of the Hetzner VPS |
-| `HETZNER_DEPLOY_USER` | SSH user on the VPS, usually `suprclaw` |
-| `GHCR_PULL_USERNAME` | Username used on the VPS to pull from GHCR |
-| `GHCR_PULL_TOKEN` | Token used on the VPS to pull from GHCR |
-| `ENV_FILE` | Full backend `.env` file content |
-| `SUPRCLAW_API_HOST` | Public API hostname, usually `api.suprclaw.com` |
+| `ENV_FILE` | Full backend `.env` file content, including deploy variables |
+
+These deployment variables must now live inside `ENV_FILE`:
+
+```env
+HETZNER_SERVER_IP=...
+HETZNER_DEPLOY_USER=suprclaw
+GHCR_PULL_USERNAME=...
+GHCR_PULL_TOKEN=...
+SSH_PRIVATE_KEY=...
+SUPRCLAW_API_HOST=api.suprclaw.com
+```
+
+Notes:
+- `SSH_PRIVATE_KEY` should remain the base64-encoded deploy private key, because the workflow decodes it before SSH use.
+- `SUPRCLAW_API_HOST` is optional. If omitted, the workflow defaults to `api.suprclaw.com`.
 
 Optional LiteLLM secrets:
 
@@ -59,7 +68,7 @@ The script installs Podman, creates the `suprclaw` user, opens `22/80/443`, and 
 ## First deployment checklist
 
 1. Point `api.suprclaw.com` to the Hetzner VPS IP.
-2. Add all required GitHub secrets.
+2. Put the deploy variables into `ENV_FILE`.
 3. Make sure the deploy SSH public key is present on the host.
 4. Trigger the deploy workflow from GitHub Actions.
 
