@@ -182,22 +182,32 @@ class ProxySessionManager(
         droplet: UserDropletInternal,
         frame: WebSocketFrame
     ) {
-        if (frame.type == "req" && frame.method == "chat.send") {
+        if (frame.type == "req") {
             val sessionKey = extractSessionKey(frame) ?: session.metadata.getSessionKey() ?: "agent:main:main"
-            val message = extractInboundText(frame) ?: return
-            session.metadata.rememberSessionKey(sessionKey)
-            val responseFrame = picoClawChatBridge.runChat(
-                droplet = droplet,
-                sessionKey = sessionKey,
-                message = message,
-                requestId = frame.id
-            )
-            runCatching { chatHistoryService.captureOutbound(responseFrame, session) }
-                .onFailure {
-                    logger.error("Failed to capture outbound chat history for user ${session.metadata.userId}", it)
+            when (frame.method) {
+                "chat.send" -> {
+                    val message = extractInboundText(frame) ?: return
+                    session.metadata.rememberSessionKey(sessionKey)
+                    val responseFrame = picoClawChatBridge.runChat(
+                        droplet = droplet,
+                        sessionKey = sessionKey,
+                        message = message,
+                        requestId = frame.id
+                    )
+                    runCatching { chatHistoryService.captureOutbound(responseFrame, session) }
+                        .onFailure {
+                            logger.error("Failed to capture outbound chat history for user ${session.metadata.userId}", it)
+                        }
+                    deliverToClient(session, json.encodeToString(responseFrame))
+                    return
                 }
-            deliverToClient(session, json.encodeToString(responseFrame))
-            return
+
+                "chat.abort" -> {
+                    session.metadata.rememberSessionKey(sessionKey)
+                    deliverToClient(session, json.encodeToString(buildPicoClawAbortAck(frame.id, sessionKey)))
+                    return
+                }
+            }
         }
 
         val errorFrame = WebSocketFrame(
@@ -330,3 +340,16 @@ class ProxySessionManager(
         }
     }
 }
+
+internal fun buildPicoClawAbortAck(requestId: String?, sessionKey: String): WebSocketFrame =
+    WebSocketFrame(
+        type = "res",
+        id = requestId,
+        ok = true,
+        result = buildJsonObject {
+            put("sessionKey", sessionKey)
+            put("accepted", true)
+            put("cancelled", false)
+            put("message", "Abort acknowledged; the current picoclaw CLI bridge cannot interrupt an in-flight run")
+        }
+    )
