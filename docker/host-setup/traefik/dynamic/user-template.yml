@@ -7,7 +7,7 @@
 
 http:
   routers:
-    # Router for user's OpenClaw gateway
+    # Router for the user's PicoClaw gateway
     {{SUBDOMAIN}}-router:
       rule: "Host(`{{SUBDOMAIN}}`)"
       service: {{SUBDOMAIN}}-service

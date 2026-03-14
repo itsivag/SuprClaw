@@ -16,15 +16,9 @@ Located in `/skills/`
 
 ## External Tools
 
-### SuprClaw Cloud Browser (via mcporter)
+### SuprClaw Cloud Browser
 
-Interactive browsing powered by the SuprClaw cloud browser MCP server.
-
-**Setup:**
-```bash
-mcporter list  # Show available MCP servers
-mcporter call cloud_browser.<tool> key=value  # Call a tool
-```
+Interactive browsing powered by the SuprClaw cloud browser runtime tools.
 
 **Available Tools:**
 
@@ -41,24 +35,11 @@ mcporter call cloud_browser.<tool> key=value  # Call a tool
 
 **Usage Examples:**
 
-```bash
-# Open a browser session for a content research task.
-# If no profile exists yet, a default browser profile is created automatically.
-mcporter call cloud_browser.cloud_browser_open taskId:"thread_abc" initialUrl:"https://example.com"
-
-# List or create profiles explicitly when you need stable named browser identities
-mcporter call cloud_browser.cloud_browser_list_profiles
-mcporter call cloud_browser.cloud_browser_create_profile label:"Research Browser"
-
-# Navigate and inspect the page
-mcporter call cloud_browser.cloud_browser_exec sessionId:"browser_123" action:"open" url:"https://example.com/article"
-
-# Capture a page snapshot after navigation
-mcporter call cloud_browser.cloud_browser_exec sessionId:"browser_123" action:"snapshot"
-
-# Ask the user to take over for a CAPTCHA or login approval
-mcporter call cloud_browser.cloud_browser_request_takeover sessionId:"browser_123" reason:"CAPTCHA detected"
-```
+Example workflow:
+- Open a browser session for the current research task.
+- List or create profiles when you need stable named browser identities.
+- Navigate, inspect, and snapshot pages with `cloud_browser_exec`.
+- Ask the user to take over for CAPTCHA, MFA, login approval, or destructive actions.
 
 **Research Guidance:**
 - Use built-in web fetch/search tools first for read-only research.
@@ -81,7 +62,7 @@ mcporter call cloud_browser.cloud_browser_request_takeover sessionId:"browser_12
 
 | Need | Tool/Skill |
 |------|------------|
-| Interactive web research | `mcporter call cloud_browser.cloud_browser_open` + `cloud_browser.cloud_browser_exec` |
+| Interactive web research | `cloud_browser_open` + `cloud_browser_exec` |
 | Competitor analysis | `content-gap-analysis` skill |
 | SEO articles | `seo-content-writer` skill |
 | AI citation优化 | `geo-optimizer` skill |

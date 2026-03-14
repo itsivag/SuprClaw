@@ -137,11 +137,39 @@ class HostPoolManager(
      */
     private suspend fun findHostWithCapacity(): HostInfo? {
         val hosts = firestoreRepository.listHosts()
-        
-        // Sort by most available capacity (fill hosts evenly)
-        return hosts
+
+        // Only schedule onto hosts that still accept the provisioning SSH key.
+        val candidates = hosts
             .filter { it.status == HostInfo.STATUS_ACTIVE && !it.isFull }
-            .maxByOrNull { it.availableCapacity }
+            .sortedByDescending { it.availableCapacity }
+
+        for (host in candidates) {
+            if (isHostProvisioningReady(host)) {
+                return host
+            }
+            markHostUnhealthy(host)
+        }
+
+        return null
+    }
+
+    private fun isHostProvisioningReady(host: HostInfo): Boolean {
+        return try {
+            val output = sshCommandExecutor.runSshCommand(
+                host.hostIp,
+                "id -u picoclaw >/dev/null 2>&1 && test -f $SENTINEL_PATH && echo READY || echo NOT_READY"
+            ).trim()
+            output == "READY"
+        } catch (e: Exception) {
+            logger.warn("Skipping host ${host.hostId} at ${host.hostIp}: ${e.message}")
+            false
+        }
+    }
+
+    private suspend fun markHostUnhealthy(host: HostInfo) {
+        val updatedHost = host.copy(status = HostInfo.STATUS_ERROR)
+        firestoreRepository.saveHostInfo(updatedHost)
+        logger.warn("Marked host ${host.hostId} at ${host.hostIp} as ${HostInfo.STATUS_ERROR}")
     }
     
     /**
@@ -153,7 +181,7 @@ class HostPoolManager(
         val sshPublicKey = dotenv["PROVISIONING_SSH_PUBLIC_KEY"]
             ?: System.getenv("PROVISIONING_SSH_PUBLIC_KEY") ?: ""
         if (sshPublicKey.isBlank()) {
-            logger.warn("PROVISIONING_SSH_PUBLIC_KEY not set — openclaw SSH key auth will not work on new host")
+            logger.warn("PROVISIONING_SSH_PUBLIC_KEY not set — runtime SSH key auth will not work on new host")
         }
 
         logger.info("Creating new Docker host VPS: $hostName")
@@ -244,5 +272,3 @@ class HostPoolManager(
         return (1..20).map { chars.random() }.joinToString("")
     }
 }
-
-

@@ -43,7 +43,7 @@ class AgentWorkspaceServiceTest {
     )
 
     private val vpsDroplet = dockerDroplet.copy(
-        dropletName = "openclaw-vps",
+        dropletName = "picoclaw-vps",
         deploymentMode = "vps"
     )
 
@@ -60,7 +60,7 @@ class AgentWorkspaceServiceTest {
               "capabilities": [],
               "best_with": [],
               "source_path": "marketplace/content",
-              "install_path": ".openclaw/workspace-content",
+              "install_path": ".picoclaw/workspace-content",
               "mcp_tools": []
             }
           ]
@@ -102,7 +102,7 @@ class AgentWorkspaceServiceTest {
         assertEquals("lead", response.workspaceType)
         assertTrue(commandSlot.captured.contains("docker exec"))
         assertTrue(commandSlot.captured.contains("71bb0ef6c173d2db26c6f011f0d2743908f5891a3708def3ea255edbe124c7a8"))
-        assertTrue(commandSlot.captured.contains("/home/openclaw/.openclaw/workspace"))
+        assertTrue(commandSlot.captured.contains("/home/picoclaw/.picoclaw/workspace"))
         assertFalse(commandSlot.captured.contains("AGENTS.md"))
         assertFalse(commandSlot.captured.contains("TOOLS.md"))
         assertFalse(commandSlot.captured.contains("HEARTBEAT.md"))
@@ -126,7 +126,7 @@ class AgentWorkspaceServiceTest {
         assertEquals("marketplace", response.workspaceType)
         assertEquals(listOf("IDENTITY.md"), response.files)
         assertTrue(commandSlot.captured.contains("docker exec"))
-        assertTrue(commandSlot.captured.contains("/home/openclaw/.openclaw/workspace-content"))
+        assertTrue(commandSlot.captured.contains("/home/picoclaw/.picoclaw/workspace-content"))
     }
 
     @Test
@@ -156,7 +156,7 @@ class AgentWorkspaceServiceTest {
         assertEquals("AGENTS.md", response.fileName)
         assertEquals("# AGENTS.md\n\nHello", response.content)
         assertTrue(commandSlot.captured.contains("base64 -w0"))
-        assertTrue(commandSlot.captured.contains("/home/openclaw/.openclaw/workspace/AGENTS.md"))
+        assertTrue(commandSlot.captured.contains("/home/picoclaw/.picoclaw/workspace/AGENTS.md"))
         assertTrue(commandSlot.captured.contains("docker exec"))
     }
 
@@ -200,6 +200,6 @@ class AgentWorkspaceServiceTest {
 
         assertEquals("Lead body", response.content)
         assertFalse(commandSlot.captured.contains("docker exec"))
-        assertTrue(commandSlot.captured.contains("base64 -w0 '/home/openclaw/.openclaw/workspace/AGENTS.md'"))
+        assertTrue(commandSlot.captured.contains("base64 -w0 '/home/picoclaw/.picoclaw/workspace/AGENTS.md'"))
     }
 }

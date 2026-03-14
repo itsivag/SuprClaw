@@ -25,7 +25,7 @@ object UserDataGenerator {
     }
 
     /**
-     * Generates bootstrap cloud-config user-data that ONLY creates the openclaw user
+     * Generates bootstrap cloud-config user-data that ONLY creates the runtime user
      * with the given password. No onboarding happens here — that's done via SSH later.
      */
     fun generateBootstrapUserData(
@@ -46,7 +46,7 @@ object UserDataGenerator {
 
     /**
      * Generates cloud-init user-data for a Docker host VPS.
-     * This installs Docker, Traefik, creates the openclaw user with the provisioning SSH key,
+     * This installs Docker, Traefik, creates the runtime user with the provisioning SSH key,
      * and writes a sentinel file /var/run/suprclaw-host-ready when setup is complete.
      */
     fun generateDockerHostUserData(

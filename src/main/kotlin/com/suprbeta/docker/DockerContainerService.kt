@@ -4,15 +4,18 @@ import com.suprbeta.config.AppConfig
 import com.suprbeta.core.ShellEscaping.singleQuote
 import com.suprbeta.core.SshCommandExecutor
 import com.suprbeta.docker.models.*
+import com.suprbeta.runtime.RuntimePaths
 import io.ktor.server.application.*
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.nio.file.Files
+import java.nio.file.Path
 import java.time.Instant
 
 /**
  * Service for managing Docker containers on host VPS instances.
  * 
- * This service creates, configures, and manages OpenClaw containers
+ * This service creates, configures, and manages PicoClaw containers
  * via SSH commands to the host VPS.
  */
 class DockerContainerService(
@@ -24,16 +27,15 @@ class DockerContainerService(
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
     
     companion object {
-        private const val CONTAINER_PORT = 18789
+        private const val CONTAINER_PORT = 18790
     }
     
     /**
-     * Creates a new OpenClaw container on the specified host.
+     * Creates a new PicoClaw container on the specified host.
      * 
      * @param hostIp The host VPS IP address
      * @param userId The user ID for this container
-     * @param gatewayToken OpenClaw gateway authentication token
-     * @param hookToken Webhook token for task notifications
+     * @param gatewayToken Runtime authentication token
      * @param supabaseConfig User's Supabase configuration
      * @param mcpTools List of MCP tools to configure
      * @param hostPort The allocated host port (from ContainerPortAllocator)
@@ -44,7 +46,6 @@ class DockerContainerService(
         userId: String,
         subdomain: String,
         gatewayToken: String,
-        hookToken: String,
         supabaseConfig: SupabaseConfig,
         mcpTools: List<McpToolConfig>,
         hostPort: Int,
@@ -54,7 +55,10 @@ class DockerContainerService(
         awsAccessKeyId: String = "",
         awsSecretAccessKey: String = "",
         awsRegion: String = "us-east-1",
-        awsBearerTokenBedrock: String = ""
+        awsBearerTokenBedrock: String = "",
+        liteLlmApiBase: String = "",
+        liteLlmApiKey: String = "",
+        liteLlmModelId: String = ""
     ): ContainerInfo {
         logger.info("Creating container for user $userId on host $hostIp with port $hostPort")
 
@@ -65,12 +69,12 @@ class DockerContainerService(
         // Add random suffix to avoid collisions on retry after failed provisioning
         val sanitizedUserId = userId.lowercase().replace(Regex("[^a-z0-9-]"), "-").take(20)
         val randomSuffix = (100000..999999).random()
-        val containerName = "openclaw-$sanitizedUserId-${System.currentTimeMillis()}-$randomSuffix"
+        val containerName = "picoclaw-$sanitizedUserId-${System.currentTimeMillis()}-$randomSuffix"
 
         // Remove any stale containers for this user left from failed provisioning attempts
         sshCommandExecutor.runSshCommand(
             hostIp,
-            "docker ps -a --filter 'name=openclaw-$sanitizedUserId-' --format '{{.ID}}' | xargs -r docker rm -f 2>/dev/null || true"
+            "docker ps -a --filter 'name=picoclaw-$sanitizedUserId-' --format '{{.ID}}' | xargs -r docker rm -f 2>/dev/null || true"
         )
         
         // Prepare MCP config JSON
@@ -79,7 +83,6 @@ class DockerContainerService(
         // Build environment variables
         val envVars = buildEnvironmentVariables(
             gatewayToken = gatewayToken,
-            hookToken = hookToken,
             supabaseConfig = supabaseConfig,
             mcpConfigJson = mcpConfigJson,
             userId = userId,
@@ -89,7 +92,10 @@ class DockerContainerService(
             awsAccessKeyId = awsAccessKeyId,
             awsSecretAccessKey = awsSecretAccessKey,
             awsRegion = awsRegion,
-            awsBearerTokenBedrock = awsBearerTokenBedrock
+            awsBearerTokenBedrock = awsBearerTokenBedrock,
+            liteLlmApiBase = liteLlmApiBase,
+            liteLlmApiKey = liteLlmApiKey,
+            liteLlmModelId = liteLlmModelId
         )
         
         // Build docker run command
@@ -130,7 +136,8 @@ class DockerContainerService(
             gatewayToken = gatewayToken,
             supabaseProjectRef = supabaseConfig.projectRef,
             createdAt = Instant.now().toString(),
-            status = ContainerInfo.STATUS_RUNNING
+            status = ContainerInfo.STATUS_RUNNING,
+            agentRuntime = "picoclaw"
         )
     }
     
@@ -209,16 +216,31 @@ class DockerContainerService(
     }
     
     /**
-     * Checks if the configured OpenClaw image exists on the host, pulls it if not.
+     * Checks if the configured PicoClaw image exists on the host, pulls it if not.
      */
     private suspend fun ensureImageExists(hostIp: String) {
-        val image = AppConfig.dockerOpenclawImage
+        val image = AppConfig.dockerPicoclawImage
+        val buildContext = AppConfig.dockerPicoclawBuildContext
+        val buildDockerfile = AppConfig.dockerPicoclawBuildDockerfile
         val refreshLatestTag = image.substringAfterLast(':', "").equals("latest", ignoreCase = true) && !image.contains("@sha256:")
         val quotedImage = singleQuote(image)
+        val quotedBuildContext = singleQuote(buildContext)
 
         if (refreshLatestTag) {
-            logger.info("Refreshing latest OpenClaw image $image on $hostIp")
-            sshCommandExecutor.runSshCommand(hostIp, "docker pull $image")
+            logger.info("Refreshing PicoClaw image $image on $hostIp")
+            runCatching {
+                sshCommandExecutor.runSshCommand(hostIp, "docker pull $image")
+            }.onFailure { error ->
+                logger.warn("docker pull for $image failed on $hostIp: ${error.message}. Falling back to docker build from $buildContext")
+                sshCommandExecutor.runSshCommand(
+                    hostIp,
+                    buildRemoteContextCommand(
+                        image = quotedImage,
+                        buildContext = quotedBuildContext,
+                        dockerfilePath = buildDockerfile
+                    )
+                )
+            }
             return
         }
 
@@ -228,8 +250,37 @@ class DockerContainerService(
         ).trim()
 
         if (imageCheck == "NOT_FOUND") {
-            logger.info("OpenClaw image $image not found on $hostIp. Pulling...")
-            sshCommandExecutor.runSshCommand(hostIp, "docker pull $image")
+            logger.info("PicoClaw image $image not found on $hostIp. Pulling...")
+            runCatching {
+                sshCommandExecutor.runSshCommand(hostIp, "docker pull $image")
+            }.onFailure { error ->
+                logger.warn("docker pull for $image failed on $hostIp: ${error.message}. Falling back to docker build from $buildContext")
+                sshCommandExecutor.runSshCommand(
+                    hostIp,
+                    buildRemoteContextCommand(
+                        image = quotedImage,
+                        buildContext = quotedBuildContext,
+                        dockerfilePath = buildDockerfile
+                    )
+                )
+            }
+        }
+    }
+
+    private fun buildRemoteContextCommand(
+        image: String,
+        buildContext: String,
+        dockerfilePath: String
+    ): String {
+        val dockerfile = Files.readString(Path.of(dockerfilePath)).trimEnd()
+        return buildString {
+            append("docker build -t ")
+            append(image)
+            append(" -f- ")
+            append(buildContext)
+            append(" <<'SUPRCLAW_DOCKERFILE'\n")
+            append(dockerfile)
+            append("\nSUPRCLAW_DOCKERFILE")
         }
     }
     
@@ -238,7 +289,6 @@ class DockerContainerService(
      */
     private fun buildEnvironmentVariables(
         gatewayToken: String,
-        hookToken: String,
         supabaseConfig: SupabaseConfig,
         mcpConfigJson: String,
         userId: String,
@@ -248,11 +298,13 @@ class DockerContainerService(
         awsAccessKeyId: String,
         awsSecretAccessKey: String,
         awsRegion: String,
-        awsBearerTokenBedrock: String
+        awsBearerTokenBedrock: String,
+        liteLlmApiBase: String,
+        liteLlmApiKey: String,
+        liteLlmModelId: String
     ): Map<String, String> {
         return mapOf(
             "GATEWAY_TOKEN" to gatewayToken,
-            "HOOK_TOKEN" to hookToken,
             "SUPABASE_URL" to supabaseConfig.url,
             "SUPABASE_SERVICE_KEY" to supabaseConfig.serviceKey,
             "SUPABASE_PROJECT_REF" to supabaseConfig.projectRef,
@@ -266,7 +318,12 @@ class DockerContainerService(
             "AWS_SECRET_ACCESS_KEY" to awsSecretAccessKey,
             "AWS_REGION" to awsRegion,
             "AWS_BEARER_TOKEN_BEDROCK" to awsBearerTokenBedrock,
-            "USER_ID" to userId
+            "LITELLM_API_BASE" to liteLlmApiBase,
+            "LITELLM_API_KEY" to liteLlmApiKey,
+            "LITELLM_MODEL_ID" to liteLlmModelId,
+            "USER_ID" to userId,
+            "PICOCLAW_HOME" to RuntimePaths.runtimeHome,
+            "PICOCLAW_CONFIG" to RuntimePaths.picoclawConfig
         )
     }
     
@@ -289,14 +346,13 @@ class DockerContainerService(
             append(" --name $containerName")
             append(" --restart unless-stopped")
             append(" -p 127.0.0.1:$hostPort:$CONTAINER_PORT")
-            append(" -v openclaw-devices-$sanitizedUserId:/home/openclaw/.openclaw/devices")
             append(" --memory=${AppConfig.dockerContainerMemory}")
             append(" --cpus=${AppConfig.dockerContainerCpu}")
             append(" --log-driver json-file")
             append(" --log-opt max-size=10m")
             append(" --log-opt max-file=3")
             append(" $envArgs")
-            append(" ${AppConfig.dockerOpenclawImage}")
+            append(" ${AppConfig.dockerPicoclawImage}")
         }
     }
     

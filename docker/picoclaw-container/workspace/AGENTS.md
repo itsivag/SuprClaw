@@ -151,7 +151,10 @@ Speak if:
 
 All DB actions = RPC via `execute_sql`.
 Never write tables directly.
-See `TOOLS.md` for exact SQL.
+Load `skills/suprclaw-supabase/SKILL.md` for the canonical SQL/RPC contract.
+Use `skills/suprclaw-cloud-browser/SKILL.md` for browser workflow.
+Use `skills/suprclaw-marketplace/SKILL.md` for install/workspace conventions.
+Treat `TOOLS.md` as a temporary compatibility mirror only.
 
 ---
 

@@ -1,5 +1,6 @@
 package com.suprbeta.docker.models
 
+import com.google.cloud.firestore.annotation.Exclude
 import kotlinx.serialization.Serializable
 
 /**
@@ -14,7 +15,8 @@ data class ContainerInfo(
     val gatewayToken: String,
     val supabaseProjectRef: String,
     val createdAt: String,
-    val status: String
+    val status: String,
+    val agentRuntime: String = "picoclaw"
 ) {
     companion object {
         const val STATUS_RUNNING = "running"
@@ -42,7 +44,6 @@ data class SupabaseConfig(
 data class ContainerCreateRequest(
     val userId: String,
     val gatewayToken: String,
-    val hookToken: String,
     val supabaseConfig: SupabaseConfig,
     val mcpTools: List<McpToolConfig>,
     val hostPort: Int
@@ -80,11 +81,23 @@ data class HostInfo(
         const val STATUS_ERROR = "error"
     }
 
-    val availableCapacity: Int
+    // Firestore legacy compatibility: older documents may contain this field.
+    var availableCapacity: Int = 0
         get() = totalCapacity - currentContainers
+        set(value) {
+            field = value
+        }
 
-    val isFull: Boolean
+    // Firestore maps Kotlin `isFull` to the bean property name `full`.
+    var full: Boolean = false
         get() = currentContainers >= totalCapacity
+        set(value) {
+            field = value
+        }
+
+    @get:Exclude
+    val isFull: Boolean
+        get() = full
 }
 
 /**
@@ -112,14 +125,14 @@ data class UserHostDroplet(
     val gatewayUrl: String,
     val vpsGatewayUrl: String,
     val gatewayToken: String,
-    val hookToken: String? = null,
     val supabaseProjectRef: String,
     val supabaseServiceKey: String,
     val supabaseUrl: String,
     val supabaseSchema: String = "public",
     val createdAt: String,
     val status: String = "active",
-    val configuredMcpTools: List<String> = emptyList()
+    val configuredMcpTools: List<String> = emptyList(),
+    val agentRuntime: String = "picoclaw"
 ) {
     /**
      * Convert to client-safe UserDroplet (without sensitive/internal fields).

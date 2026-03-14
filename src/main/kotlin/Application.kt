@@ -6,6 +6,8 @@ import com.suprbeta.browser.BrowserServiceImpl
 import com.suprbeta.browser.FirecrawlBrowserClient
 import com.suprbeta.browser.configureBrowserMcpRoutes
 import com.suprbeta.browser.configureBrowserRoutes
+import com.suprbeta.chat.ChatHistoryServiceImpl
+import com.suprbeta.chat.configureChatRoutes
 import com.suprbeta.connector.ConnectorServiceImpl
 import com.suprbeta.connector.configureConnectorRoutes
 import com.suprbeta.config.AppConfig
@@ -42,11 +44,14 @@ import com.suprbeta.supabase.UserSupabaseClientProvider
 import com.suprbeta.supabase.configureNotificationRoutes
 import com.suprbeta.supabase.configureTaskRoutes
 import com.suprbeta.marketplace.MarketplaceService
+import com.suprbeta.runtime.AgentRuntimeRegistry
+import com.suprbeta.runtime.PicoClawChatBridge
+import com.suprbeta.runtime.RuntimeCommandExecutor
+import com.suprbeta.runtime.RuntimeWakeDispatcher
 import com.suprbeta.marketplace.configureMarketplaceRoutes
 import com.suprbeta.firebase.configureFcmRoutes
 import com.suprbeta.supabase.configureWebhookRoutes
 import com.suprbeta.usage.configureUsageRoutes
-import com.suprbeta.websocket.OpenClawConnector
 import com.suprbeta.websocket.ProxySessionManager
 import com.suprbeta.websocket.configureWebSocketRoutes
 import com.suprbeta.websocket.pipeline.AuthInterceptor
@@ -86,16 +91,27 @@ fun Application.module() {
     val notificationRepository = NotificationRepository(this)
     val schemaRepository = SupabaseSchemaRepository(this)
     val userClientProvider = UserSupabaseClientProvider()
+    val sshCommandExecutor = SshCommandExecutorImpl(this)
+    val runtimeRegistry = AgentRuntimeRegistry()
 
     // Create shared HttpClient for API calls
     val httpClient = createHttpClient()
+    val runtimeCommandExecutor = RuntimeCommandExecutor(sshCommandExecutor)
+    val picoClawChatBridge = PicoClawChatBridge(runtimeRegistry, runtimeCommandExecutor)
+    val wakeDispatcher = RuntimeWakeDispatcher(runtimeRegistry, runtimeCommandExecutor, this)
 
     val managementService: SupabaseManagementService = SelfHostedSupabaseManagementService(httpClient, this)
     log.info("Supabase mode: self-hosted")
     installSupabaseStartupRepair(managementService)
     val marketplaceService = MarketplaceService(httpClient)
 
-    val browserClientBridge = configureWebSockets(httpClient, firebaseAuthService, firestoreRepository, remoteConfigService)
+    val webSocketComponents = configureWebSockets(
+        httpClient = httpClient,
+        authService = firebaseAuthService,
+        firestoreRepository = firestoreRepository,
+        remoteConfigService = remoteConfigService,
+        picoClawChatBridge = picoClawChatBridge
+    )
     val provisioningServices = configureProvisioning(
         httpClient,
         firestoreRepository,
@@ -103,11 +119,19 @@ fun Application.module() {
         schemaRepository,
         managementService,
         userClientProvider,
-        marketplaceService
+        marketplaceService,
+        sshCommandExecutor,
+        runtimeRegistry
     )
     configureTaskRoutes(taskRepository, firestoreRepository, userClientProvider)
     configureNotificationRoutes(notificationRepository, firestoreRepository, userClientProvider)
-    configureWebhookRoutes(firestoreRepository, userClientProvider, agentRepository, httpClient, managementService.webhookSecret)
+    configureWebhookRoutes(
+        firestoreRepository,
+        userClientProvider,
+        agentRepository,
+        managementService.webhookSecret,
+        wakeDispatcher
+    )
     configureFcmRoutes(firestoreRepository)
     val browserService = BrowserServiceImpl(
         firestoreRepository = firestoreRepository,
@@ -116,7 +140,7 @@ fun Application.module() {
         userClientProvider = userClientProvider,
         pushNotificationSender = FcmNotificationService(this),
         application = this,
-        clientBridge = browserClientBridge
+        clientBridge = webSocketComponents.sessionManager
     )
     configureBrowserRoutes(browserService)
     configureBrowserMcpRoutes(browserService, firestoreRepository)
@@ -128,6 +152,7 @@ fun Application.module() {
     )
     configureConnectorRoutes(connectorService)
     configureUsageRoutes(firestoreRepository, remoteConfigService)
+    configureChatRoutes(webSocketComponents.chatHistoryService)
     configureAdminRoutes(firestoreRepository, provisioningServices.provisioningService, browserService = browserService)
     monitor.subscribe(ApplicationStopped) { browserService.shutdown() }
     configureRouting()
@@ -157,7 +182,6 @@ fun Application.configureSerialization() {
 fun createHttpClient(): HttpClient {
     return HttpClient(CIO) {
         engine {
-            // Keep engine-level retries deterministic; OpenClawConnector already retries 3 times.
             endpoint {
                 connectTimeout = 20_000
                 connectAttempts = 1
@@ -169,10 +193,7 @@ fun createHttpClient(): HttpClient {
             requestTimeoutMillis = 30_000
             socketTimeoutMillis = 30_000
         }
-        install(WebSockets) {
-            // Keep upstream OpenClaw WebSocket sessions alive across idle periods.
-            pingIntervalMillis = 15_000
-        }
+        install(WebSockets) { pingIntervalMillis = 15_000 }
         install(ClientContentNegotiation) {
             json(Json {
                 ignoreUnknownKeys = true
@@ -195,8 +216,9 @@ fun Application.configureWebSockets(
     httpClient: HttpClient,
     authService: FirebaseAuthService,
     firestoreRepository: FirestoreRepository,
-    remoteConfigService: com.suprbeta.firebase.RemoteConfigService
-): ProxySessionManager {
+    remoteConfigService: com.suprbeta.firebase.RemoteConfigService,
+    picoClawChatBridge: PicoClawChatBridge
+): WebSocketComponents {
     // Configure shared JSON serializer
     val json = Json {
         ignoreUnknownKeys = true
@@ -214,6 +236,11 @@ fun Application.configureWebSockets(
         application = this,
         json = json
     )
+    val chatHistoryService = ChatHistoryServiceImpl(
+        firestoreRepository = firestoreRepository,
+        json = json,
+        application = this
+    )
     val usageInterceptor = UsageInterceptor(
         firestoreRepository = firestoreRepository,
         tokenCalculator = tokenCalculator,
@@ -222,7 +249,8 @@ fun Application.configureWebSockets(
     
     val rateLimitInterceptor = com.suprbeta.websocket.pipeline.RateLimitInterceptor(
         application = this,
-        remoteConfigService = remoteConfigService
+        remoteConfigService = remoteConfigService,
+        chatHistoryService = chatHistoryService
     )
 
     // Initialize pipeline with interceptors
@@ -236,23 +264,15 @@ fun Application.configureWebSockets(
         )
     )
 
-    // Initialize OpenClaw connector
-    val openClawConnector = OpenClawConnector(
-        application = this,
-        httpClient = httpClient,
-        json = json
-    )
-    val sshCommandExecutor = SshCommandExecutorImpl(this)
-
-    // Initialize session manager with Firestore for VPS routing
+    // Initialize session manager with Firestore for tenant runtime routing
     val sessionManager = ProxySessionManager(
         application = this,
-        openClawConnector = openClawConnector,
         messagePipeline = messagePipeline,
         usageInterceptor = usageInterceptor,
         json = json,
+        chatHistoryService = chatHistoryService,
         firestoreRepository = firestoreRepository,
-        sshCommandExecutor = sshCommandExecutor
+        picoClawChatBridge = picoClawChatBridge
     )
 
     // Configure WebSocket routes
@@ -269,8 +289,16 @@ fun Application.configureWebSockets(
     }
 
     log.info("WebSocket proxy initialized and ready")
-    return sessionManager
+    return WebSocketComponents(
+        sessionManager = sessionManager,
+        chatHistoryService = chatHistoryService
+    )
 }
+
+data class WebSocketComponents(
+    val sessionManager: ProxySessionManager,
+    val chatHistoryService: com.suprbeta.chat.ChatHistoryService
+)
 
 fun Application.configureProvisioning(
     httpClient: HttpClient,
@@ -279,10 +307,11 @@ fun Application.configureProvisioning(
     schemaRepository: SupabaseSchemaRepository,
     managementService: SupabaseManagementService,
     userClientProvider: UserSupabaseClientProvider,
-    marketplaceService: MarketplaceService
+    marketplaceService: MarketplaceService,
+    sshCommandExecutor: com.suprbeta.core.SshCommandExecutor,
+    runtimeRegistry: AgentRuntimeRegistry
 ): ProvisioningServices {
     val dotenv = io.github.cdimascio.dotenv.dotenv { ignoreIfMissing = true; directory = "." }
-    val sshCommandExecutor = SshCommandExecutorImpl(this)
     val dropletMcpService = DropletMcpServiceImpl(
         managementService = managementService,
         sshCommandExecutor = sshCommandExecutor,
@@ -316,9 +345,7 @@ fun Application.configureProvisioning(
         managementService = managementService,
         agentRepository = agentRepository,
         userClientProvider = userClientProvider,
-        openClawConnector = OpenClawConnector(this, httpClient, Json { ignoreUnknownKeys = true }),
         sshCommandExecutor = sshCommandExecutor,
-        dropletMcpService = dropletMcpService,
         application = this
     )
 
@@ -331,7 +358,7 @@ fun Application.configureProvisioning(
                     try {
                         val portsOutput = sshCommandExecutor.runSshCommand(
                             host.hostIp,
-                            "docker ps --filter 'name=openclaw-' --format '{{.Ports}}' 2>/dev/null || echo ''"
+                            "docker ps --filter 'name=picoclaw-' --format '{{.Ports}}' 2>/dev/null || echo ''"
                         )
                         val usedPorts = portsOutput.lines()
                             .filter { it.isNotBlank() }
@@ -357,6 +384,7 @@ fun Application.configureProvisioning(
         userClientProvider = userClientProvider,
         sshCommandExecutor = sshCommandExecutor,
         dropletMcpService = dropletMcpService,
+        runtimeRegistry = runtimeRegistry,
         application = this
     )
     val workspaceService = AgentWorkspaceServiceImpl(

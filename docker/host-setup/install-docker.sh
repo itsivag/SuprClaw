@@ -117,26 +117,26 @@ install_docker() {
 setup_docker_users() {
     log_step "Setting up Docker access..."
 
-    # Create openclaw user for managing containers via SSH key auth
-    if ! id "openclaw" &>/dev/null; then
-        useradd -m -s /bin/bash openclaw
-        log_info "Created openclaw user"
+    # Create picoclaw user for managing containers via SSH key auth
+    if ! id "picoclaw" &>/dev/null; then
+        useradd -m -s /bin/bash picoclaw
+        log_info "Created picoclaw user"
     fi
-    usermod -aG docker openclaw
+    usermod -aG docker picoclaw
 
     # Inject provisioning SSH public key so SshCommandExecutorImpl can connect
     if [[ -n "$PROVISIONING_SSH_PUBLIC_KEY" ]]; then
-        mkdir -p /home/openclaw/.ssh
+        mkdir -p /home/picoclaw/.ssh
         # Append only if not already present
-        if ! grep -qF "$PROVISIONING_SSH_PUBLIC_KEY" /home/openclaw/.ssh/authorized_keys 2>/dev/null; then
-            echo "$PROVISIONING_SSH_PUBLIC_KEY" >> /home/openclaw/.ssh/authorized_keys
+        if ! grep -qF "$PROVISIONING_SSH_PUBLIC_KEY" /home/picoclaw/.ssh/authorized_keys 2>/dev/null; then
+            echo "$PROVISIONING_SSH_PUBLIC_KEY" >> /home/picoclaw/.ssh/authorized_keys
         fi
-        chmod 700 /home/openclaw/.ssh
-        chmod 600 /home/openclaw/.ssh/authorized_keys
-        chown -R openclaw:openclaw /home/openclaw/.ssh
-        log_info "SSH public key installed for openclaw"
+        chmod 700 /home/picoclaw/.ssh
+        chmod 600 /home/picoclaw/.ssh/authorized_keys
+        chown -R picoclaw:picoclaw /home/picoclaw/.ssh
+        log_info "SSH public key installed for picoclaw"
     else
-        log_warn "PROVISIONING_SSH_PUBLIC_KEY not set — openclaw SSH key auth will NOT work"
+        log_warn "PROVISIONING_SSH_PUBLIC_KEY not set — picoclaw SSH key auth will NOT work"
     fi
 }
 
@@ -226,8 +226,8 @@ EOF
     touch "$TRAEFIK_DIR/certs/acme.json"
     chmod 600 "$TRAEFIK_DIR/certs/acme.json"
     
-    # Set permissions — openclaw needs write access to add/remove route files
-    chown -R openclaw:openclaw "$TRAEFIK_DIR"
+    # Set permissions — picoclaw needs write access to add/remove route files
+    chown -R picoclaw:picoclaw "$TRAEFIK_DIR"
     
     log_info "Traefik configuration created"
 }
@@ -280,7 +280,7 @@ install_scripts() {
     # Container management script
     cat > "$SUPRCLAW_DIR/bin/manage-container" <<'EOF'
 #!/bin/bash
-# Utility script for managing OpenClaw containers on this host
+# Utility script for managing PicoClaw containers on this host
 
 COMMAND=$1
 CONTAINER_ID=$2
@@ -331,12 +331,12 @@ setup_logrotate() {
     delaycompress
     missingok
     notifempty
-    create 0644 openclaw openclaw
+    create 0644 picoclaw picoclaw
 }
 EOF
 
     mkdir -p /var/log/suprclaw
-    chown openclaw:openclaw /var/log/suprclaw
+    chown picoclaw:picoclaw /var/log/suprclaw
     
     log_info "Log rotation configured"
 }
@@ -355,7 +355,7 @@ print_summary() {
     log_info "Docker Version: $(docker --version)"
     log_info ""
     log_info "Next steps:"
-    log_info "  1. Pull OpenClaw image: docker pull suprclaw/openclaw:latest"
+    log_info "  1. Pull PicoClaw image: docker pull suprclaw/picoclaw:latest"
     log_info "  2. Configure DNS to point to: $ip_address"
     log_info "  3. Start creating user containers!"
     echo ""

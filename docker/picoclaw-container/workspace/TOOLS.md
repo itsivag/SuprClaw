@@ -1,4 +1,7 @@
-# TOOLS.md - Your Tools & How To Use Them
+# TOOLS.md - Legacy Runtime Mirror
+
+The canonical SuprClaw runtime contract now lives in `AGENTS.md` and `skills/`.
+Keep this file only as a temporary compatibility mirror. PicoClaw workspaces should rely on skills first.
 
 Tools extend your reach. Use them with precision.
 

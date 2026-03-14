@@ -16,7 +16,7 @@ data class SessionMetadata(
     val userTier: String,          // "free", "pro", "max", etc.
     val connectedAt: Instant = Instant.now(),
     val platform: String? = null,
-    val activeTaskId: AtomicReference<String?> = AtomicReference(null),
+    val lastSessionKey: AtomicReference<String?> = AtomicReference(null),
     val currentWeeklyCredits: AtomicLong = AtomicLong(0L),
     val messagesSent: AtomicLong = AtomicLong(0),
     val messagesReceived: AtomicLong = AtomicLong(0)
@@ -24,8 +24,12 @@ data class SessionMetadata(
     fun incrementSent() = messagesSent.incrementAndGet()
     fun incrementReceived() = messagesReceived.incrementAndGet()
 
-    fun rememberTaskId(taskId: String) = activeTaskId.set(taskId)
-    fun getTaskId(): String? = activeTaskId.get()
+    fun rememberSessionKey(sessionKey: String) = lastSessionKey.set(sessionKey)
+    fun getSessionKey(): String? = lastSessionKey.get()
+
+    // Legacy naming kept for existing browser/task bridge callers.
+    fun rememberTaskId(taskId: String) = rememberSessionKey(taskId)
+    fun getTaskId(): String? = getSessionKey()
 
     fun incrementWeeklyCredits(amount: Long) = currentWeeklyCredits.addAndGet(amount)
 

@@ -61,12 +61,12 @@ fun Application.configureWebSocketRoutes(
             var clientCloseReason: CloseReason? = null
 
             try {
-                // Establish connection to OpenClaw VPS (noop if already connected)
-                val connected = sessionManager.establishOpenClawConnection(session)
+                // Establish runtime connection or direct bridge (noop if already connected)
+                val connected = sessionManager.establishRuntimeConnection(session)
 
                 if (!connected) {
-                    logger.error("Failed to establish OpenClaw connection for user $userId")
-                    close(CloseReason(CloseReason.Codes.INTERNAL_ERROR, "Failed to connect to OpenClaw VPS"))
+                    logger.error("Failed to establish runtime connection for user $userId")
+                    close(CloseReason(CloseReason.Codes.INTERNAL_ERROR, "Failed to connect to tenant runtime"))
                     sessionManager.closeSession(userId)
                     return@webSocket
                 }

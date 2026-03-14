@@ -4,9 +4,7 @@ import com.suprbeta.configureSerialization
 import com.suprbeta.digitalocean.models.UserDropletInternal
 import com.suprbeta.firebase.FirestoreRepository
 import com.suprbeta.firebase.PushNotificationSender
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.mock.MockEngine
-import io.ktor.client.engine.mock.respond
+import com.suprbeta.runtime.RuntimeWakeDispatcher
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -27,9 +25,7 @@ class WebhookRoutesTest {
     private val userClientProvider = mockk<UserSupabaseClientProvider>(relaxed = true)
     private val agentRepository = mockk<SupabaseAgentRepository>(relaxed = true)
     private val pushNotificationSender = mockk<PushNotificationSender>()
-    private val httpClient = HttpClient(MockEngine {
-        respond("ok")
-    })
+    private val wakeDispatcher = mockk<RuntimeWakeDispatcher>(relaxed = true)
 
     private val droplet = UserDropletInternal(
         userId = "user-1",
@@ -44,8 +40,8 @@ class WebhookRoutesTest {
             firestoreRepository = firestoreRepository,
             userClientProvider = userClientProvider,
             agentRepository = agentRepository,
-            httpClient = httpClient,
             webhookSecret = "secret",
+            wakeDispatcher = wakeDispatcher,
             pushNotificationSender = pushNotificationSender
         )
     }

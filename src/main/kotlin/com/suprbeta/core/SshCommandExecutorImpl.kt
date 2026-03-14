@@ -28,7 +28,7 @@ class SshCommandExecutorImpl(
     }
 
     companion object {
-        private const val SSH_USER = "openclaw"
+        private const val SSH_USER = "picoclaw"
         private const val SSH_PORT = 22
         private const val SSH_PROBE_TIMEOUT_MS = 120_000L
         private const val SSH_AUTH_TIMEOUT_MS = 180_000L

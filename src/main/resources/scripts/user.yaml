@@ -16,7 +16,7 @@ write_files:
 chpasswd:
   expire: false
   list:
-    - openclaw:{{PASSWORD}}
+    - picoclaw:{{PASSWORD}}
 
 runcmd:
   - systemctl restart ssh || systemctl restart sshd || true

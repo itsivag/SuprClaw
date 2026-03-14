@@ -7,8 +7,8 @@ import com.suprbeta.websocket.models.WebSocketFrame
  * Direction of message flow through the proxy
  */
 enum class MessageDirection {
-    INBOUND,  // Mobile client → OpenClaw VPS
-    OUTBOUND  // OpenClaw VPS → Mobile client
+    INBOUND,  // Mobile client → runtime bridge
+    OUTBOUND  // Runtime bridge → mobile client
 }
 
 /**

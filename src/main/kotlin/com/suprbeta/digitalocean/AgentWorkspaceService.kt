@@ -7,6 +7,7 @@ import com.suprbeta.digitalocean.models.AgentFileListResponse
 import com.suprbeta.digitalocean.models.UserDropletInternal
 import com.suprbeta.firebase.FirestoreRepository
 import com.suprbeta.marketplace.MarketplaceService
+import com.suprbeta.runtime.RuntimePaths
 import com.suprbeta.supabase.SupabaseAgentRepository
 import com.suprbeta.supabase.UserSupabaseClientProvider
 import io.ktor.server.application.*
@@ -51,7 +52,6 @@ class AgentWorkspaceServiceImpl(
             "USER.md"
         )
         private const val LEAD_AGENT_NAME = "Lead"
-        private const val LEAD_WORKSPACE_PATH = "/home/openclaw/.openclaw/workspace"
         private const val WORKSPACE_TYPE_LEAD = "lead"
         private const val WORKSPACE_TYPE_MARKETPLACE = "marketplace"
         private const val MISSING_WORKSPACE_MARKER = "__SUPRCLAW_WORKSPACE_MISSING__"
@@ -140,7 +140,7 @@ class AgentWorkspaceServiceImpl(
                 droplet = droplet,
                 agentName = agentName,
                 workspaceType = WORKSPACE_TYPE_LEAD,
-                workspacePath = LEAD_WORKSPACE_PATH
+                workspacePath = RuntimePaths.leadWorkspace
             )
         }
 
@@ -162,7 +162,7 @@ class AgentWorkspaceServiceImpl(
             droplet = droplet,
             agentName = agentName,
             workspaceType = WORKSPACE_TYPE_MARKETPLACE,
-            workspacePath = "/home/openclaw/${validateRelativePath(marketplaceAgent.installPath)}"
+            workspacePath = "/home/${RuntimePaths.runtimeUser}/${validateRelativePath(marketplaceAgent.installPath)}"
         )
     }
 

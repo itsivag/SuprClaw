@@ -3,6 +3,8 @@ package com.suprbeta.digitalocean
 import com.suprbeta.core.SshCommandExecutor
 import com.suprbeta.digitalocean.models.UserDropletInternal
 import com.suprbeta.firebase.FirestoreRepository
+import com.suprbeta.runtime.AgentRuntime
+import com.suprbeta.runtime.AgentRuntimeRegistry
 import com.suprbeta.supabase.SupabaseAgentRepository
 import com.suprbeta.supabase.UserSupabaseClientProvider
 import io.ktor.server.application.*
@@ -26,6 +28,7 @@ class DropletConfigurationServiceImplTest {
         userClientProvider = userClientProvider,
         sshCommandExecutor = sshExecutor,
         dropletMcpService = dropletMcpService,
+        runtimeRegistry = AgentRuntimeRegistry(),
         application = application
     )
 
@@ -62,10 +65,11 @@ class DropletConfigurationServiceImplTest {
 
         assertEquals("created", result)
         assertTrue(commands.any { it.contains("docker exec 'abcdef1234567890'") })
-        assertTrue(commands.any { it.contains("su - openclaw -s /bin/sh -lc") })
-        assertTrue(commands.any { it.contains("openclaw agents add") })
-        assertTrue(commands.any { it.contains("/home/openclaw/.openclaw/workspace-writer/TOOLS.md") })
-        assertTrue(commands.any { it.contains("SUPRCLAW_CLOUD_BROWSER_TOOLS_V1") })
+        assertTrue(commands.any { it.contains("su - picoclaw -s /bin/sh -lc") })
+        assertTrue(commands.any { it.contains("picoclaw.json") })
+        assertTrue(commands.any { it.contains("/home/picoclaw/.picoclaw/workspace-writer/AGENTS.md") })
+        assertTrue(commands.any { it.contains("SUPRCLAW_SKILL_BOOTSTRAP_V2") })
+        assertTrue(commands.any { it.contains("/skills/suprclaw-cloud-browser/SKILL.md") })
     }
 
     @Test
@@ -93,5 +97,73 @@ class DropletConfigurationServiceImplTest {
 
         verify(exactly = 0) { sshExecutor.runSshCommand(any(), any()) }
         coVerify(exactly = 0) { agentRepository.saveAgent(any(), any()) }
+    }
+
+    @Test
+    fun `deleteAgent removes remote workspace without deleting user droplet`() = testApplication {
+        val service = buildService(application)
+        val commands = mutableListOf<String>()
+        val userDroplet = UserDropletInternal(
+            userId = "user-3",
+            dropletId = 101L,
+            dropletName = "droplet-3",
+            ipAddress = "10.0.0.7",
+            status = "active",
+            supabaseUrl = "https://supabase.suprclaw.com",
+            supabaseServiceKey = "service-key",
+            supabaseSchema = "proj_user3"
+        )
+        val supabaseClient = mockk<io.github.jan.supabase.SupabaseClient>(relaxed = true)
+
+        coEvery { firestoreRepository.getUserDropletInternal("user-3") } returns userDroplet
+        every { sshExecutor.runSshCommandOnce("10.0.0.7", any()) } answers {
+            commands += secondArg<String>()
+            "deleted"
+        }
+        every { sshExecutor.runSshCommand("10.0.0.7", any()) } answers {
+            commands += secondArg<String>()
+            "workspace removed"
+        }
+        every { userClientProvider.getClient(any(), any(), any()) } returns supabaseClient
+        coEvery { agentRepository.deleteAgent(supabaseClient, "writer") } just Runs
+
+        val result = service.deleteAgent("user-3", "writer")
+
+        assertEquals("deleted", result)
+        assertTrue(commands.any { it.contains("picoclaw.json") })
+        assertTrue(commands.any { it.contains("rm -rf '/home/picoclaw/.picoclaw/workspace-writer'") })
+        coVerify(exactly = 0) { firestoreRepository.deleteUserDroplet(any()) }
+    }
+
+    @Test
+    fun `createAgent mutates picoclaw config for picoclaw tenants`() = testApplication {
+        val service = buildService(application)
+        val commands = mutableListOf<String>()
+        val droplet = UserDropletInternal(
+            userId = "user-4",
+            dropletId = 102L,
+            dropletName = "abcdef1234567890",
+            ipAddress = "10.0.0.8",
+            status = "active",
+            supabaseUrl = "https://supabase.suprclaw.com",
+            supabaseServiceKey = "service-key",
+            supabaseSchema = "proj_user4",
+            deploymentMode = "docker",
+            agentRuntime = AgentRuntime.PICOCLAW.wireValue
+        )
+
+        coEvery { firestoreRepository.getUserDropletInternal("user-4") } returns droplet
+        every { sshExecutor.runSshCommand("10.0.0.8", any()) } answers {
+            commands += secondArg<String>()
+            "ok"
+        }
+        every { userClientProvider.getClient(any(), any(), any()) } returns mockk(relaxed = true)
+        coEvery { agentRepository.saveAgent(any(), any()) } just Runs
+
+        service.createAgent("user-4", "writer", "Writes content", null)
+
+        assertTrue(commands.any { it.contains("picoclaw.json") })
+        assertTrue(commands.any { it.contains("picoclaw agent") }.not())
+        assertTrue(commands.any { it.contains("supervisorctl restart picoclaw-gateway") })
     }
 }

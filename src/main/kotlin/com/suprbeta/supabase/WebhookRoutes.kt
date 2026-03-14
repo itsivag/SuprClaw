@@ -3,9 +3,6 @@ package com.suprbeta.supabase
 import com.suprbeta.firebase.FcmNotificationService
 import com.suprbeta.firebase.FirestoreRepository
 import com.suprbeta.firebase.PushNotificationSender
-import io.ktor.client.*
-import io.ktor.client.request.*
-import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.request.*
@@ -16,19 +13,20 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import com.suprbeta.runtime.RuntimeWakeDispatcher
 
 fun Application.configureWebhookRoutes(
     firestoreRepository: FirestoreRepository,
     userClientProvider: UserSupabaseClientProvider,
     agentRepository: SupabaseAgentRepository,
-    httpClient: HttpClient,
-    webhookSecret: String
+    webhookSecret: String,
+    wakeDispatcher: RuntimeWakeDispatcher
 ) = configureWebhookRoutes(
     firestoreRepository = firestoreRepository,
     userClientProvider = userClientProvider,
     agentRepository = agentRepository,
-    httpClient = httpClient,
     webhookSecret = webhookSecret,
+    wakeDispatcher = wakeDispatcher,
     pushNotificationSender = FcmNotificationService(this)
 )
 
@@ -36,8 +34,8 @@ internal fun Application.configureWebhookRoutes(
     firestoreRepository: FirestoreRepository,
     userClientProvider: UserSupabaseClientProvider,
     agentRepository: SupabaseAgentRepository,
-    httpClient: HttpClient,
     webhookSecret: String,
+    wakeDispatcher: RuntimeWakeDispatcher,
     pushNotificationSender: PushNotificationSender
 ) {
     val json = Json { ignoreUnknownKeys = true }
@@ -116,24 +114,23 @@ internal fun Application.configureWebhookRoutes(
                 return@post
             }
 
-            // Derive the openclaw agent ID from session_key (format: "agent:{openclawId}:...")
-            // Using agent.name would break for the lead agent ("Lead" in DB vs "main" in openclaw).
-            val openclawAgentId = agent.sessionKey.split(":").getOrNull(1)?.ifBlank { null } ?: agent.name
-            log.info("Webhook resolved agent=${agent.name} openclawId=$openclawAgentId sessionKey=${agent.sessionKey} vpsUrl=${droplet.vpsGatewayUrl}")
+            // Derive the runtime agent ID from session_key (format: "agent:{agentId}:...").
+            // Using agent.name would break for the lead agent ("Lead" in DB vs "main" in runtime config).
+            val runtimeAgentId = agent.sessionKey.split(":").getOrNull(1)?.ifBlank { null } ?: agent.name
+            log.info("Webhook resolved agent=${agent.name} runtimeAgentId=$runtimeAgentId sessionKey=${agent.sessionKey} vpsUrl=${droplet.vpsGatewayUrl}")
 
-            // Forward task assignment to openclaw hooks endpoint
-            val notifyUrl = "${droplet.vpsGatewayUrl}/hooks/agent"
+            // Dispatch the task assignment through the runtime wake bridge.
             val hookSessionKey = "hook:task:$taskId"
             try {
-                val response: HttpResponse = httpClient.post(notifyUrl) {
-                    header(HttpHeaders.Authorization, "Bearer ${droplet.hookToken}")
-                    contentType(ContentType.Application.Json)
-                    setBody("""{"message":"Task $taskId has been assigned to you","agentId":"$openclawAgentId","sessionKey":"$hookSessionKey"}""")
-                }
-                val responseBody = response.bodyAsText()
-                log.info("Webhook forwarded task=$taskId agent=${agent.name} openclawId=$openclawAgentId sessionKey=$hookSessionKey to VPS status=${response.status} body=$responseBody")
+                wakeDispatcher.dispatch(
+                    droplet = droplet,
+                    agentId = runtimeAgentId,
+                    sessionKey = hookSessionKey,
+                    message = "Task $taskId has been assigned to you"
+                )
+                log.info("Webhook forwarded task=$taskId agent=${agent.name} runtimeAgentId=$runtimeAgentId sessionKey=$hookSessionKey")
             } catch (e: Exception) {
-                log.error("Webhook: failed to notify VPS hooks endpoint for task=$taskId agent=${agent.name} url=$notifyUrl", e)
+                log.error("Webhook: failed to dispatch runtime wake for task=$taskId agent=${agent.name}", e)
             }
 
             call.respond(HttpStatusCode.OK)
@@ -212,22 +209,21 @@ internal fun Application.configureWebhookRoutes(
                 return@post
             }
 
-            val openclawAgentId = leadAgent.sessionKey.split(":").getOrNull(1)?.ifBlank { null } ?: leadAgent.name
-            log.info("Message webhook routing to lead=${leadAgent.name} openclawId=$openclawAgentId task=$taskId message=$messageId")
+            val runtimeAgentId = leadAgent.sessionKey.split(":").getOrNull(1)?.ifBlank { null } ?: leadAgent.name
+            log.info("Message webhook routing to lead=${leadAgent.name} runtimeAgentId=$runtimeAgentId task=$taskId message=$messageId")
 
-            val notifyUrl = "${droplet.vpsGatewayUrl}/hooks/agent"
             val hookSessionKey = "hook:task:$taskId"
             val preview = content?.take(120)?.replace("\"", "\\\"") ?: ""
             try {
-                val response: HttpResponse = httpClient.post(notifyUrl) {
-                    header(HttpHeaders.Authorization, "Bearer ${droplet.hookToken}")
-                    contentType(ContentType.Application.Json)
-                    setBody("""{"message":"New message on task $taskId: $preview","agentId":"$openclawAgentId","sessionKey":"$hookSessionKey"}""")
-                }
-                val responseBody = response.bodyAsText()
-                log.info("Message webhook forwarded task=$taskId message=$messageId to lead openclawId=$openclawAgentId status=${response.status} body=$responseBody")
+                wakeDispatcher.dispatch(
+                    droplet = droplet,
+                    agentId = runtimeAgentId,
+                    sessionKey = hookSessionKey,
+                    message = "New message on task $taskId: $preview"
+                )
+                log.info("Message webhook forwarded task=$taskId message=$messageId to lead runtimeAgentId=$runtimeAgentId")
             } catch (e: Exception) {
-                log.error("Message webhook: failed to notify VPS for task=$taskId message=$messageId url=$notifyUrl", e)
+                log.error("Message webhook: failed to dispatch runtime wake for task=$taskId message=$messageId", e)
             }
 
             // Send FCM push notification to the user
@@ -317,22 +313,21 @@ internal fun Application.configureWebhookRoutes(
                 return@post
             }
 
-            val openclawAgentId = leadAgent.sessionKey.split(":").getOrNull(1)?.ifBlank { null } ?: leadAgent.name
-            log.info("Document webhook routing to lead=${leadAgent.name} openclawId=$openclawAgentId task=$taskId document=$documentId")
+            val runtimeAgentId = leadAgent.sessionKey.split(":").getOrNull(1)?.ifBlank { null } ?: leadAgent.name
+            log.info("Document webhook routing to lead=${leadAgent.name} runtimeAgentId=$runtimeAgentId task=$taskId document=$documentId")
 
-            val notifyUrl = "${droplet.vpsGatewayUrl}/hooks/agent"
             val hookSessionKey = "hook:task:$taskId"
             val safeTitle = title?.replace("\"", "\\\"") ?: ""
             try {
-                val response: HttpResponse = httpClient.post(notifyUrl) {
-                    header(HttpHeaders.Authorization, "Bearer ${droplet.hookToken}")
-                    contentType(ContentType.Application.Json)
-                    setBody("""{"message":"New document on task $taskId: $safeTitle","agentId":"$openclawAgentId","sessionKey":"$hookSessionKey"}""")
-                }
-                val responseBody = response.bodyAsText()
-                log.info("Document webhook forwarded task=$taskId document=$documentId to lead openclawId=$openclawAgentId status=${response.status} body=$responseBody")
+                wakeDispatcher.dispatch(
+                    droplet = droplet,
+                    agentId = runtimeAgentId,
+                    sessionKey = hookSessionKey,
+                    message = "New document on task $taskId: $safeTitle"
+                )
+                log.info("Document webhook forwarded task=$taskId document=$documentId to lead runtimeAgentId=$runtimeAgentId")
             } catch (e: Exception) {
-                log.error("Document webhook: failed to notify VPS for task=$taskId document=$documentId url=$notifyUrl", e)
+                log.error("Document webhook: failed to dispatch runtime wake for task=$taskId document=$documentId", e)
             }
 
             // Send FCM push notification to the user

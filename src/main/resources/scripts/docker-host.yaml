@@ -1,10 +1,10 @@
 #cloud-config
 # Docker multi-tenant host setup
-# Installs Docker + Traefik, creates openclaw user with provisioning SSH key.
+# Installs Docker + Traefik, creates picoclaw user with provisioning SSH key.
 # Writes /var/run/suprclaw-host-ready when complete.
 
 users:
-  - name: openclaw
+  - name: picoclaw
     shell: /bin/bash
     lock_passwd: true
     ssh_authorized_keys:
@@ -79,16 +79,16 @@ runcmd:
   - DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   - systemctl enable docker
   - systemctl start docker
-  # Add openclaw to docker group (group created by Docker install)
-  - usermod -aG docker openclaw
+  # Add picoclaw to docker group (group created by Docker install)
+  - usermod -aG docker picoclaw
   # Setup Traefik directories and permissions
   - mkdir -p /opt/traefik/dynamic /opt/traefik/certs
   - touch /opt/traefik/certs/acme.json
   - chmod 600 /opt/traefik/certs/acme.json
-  - chown -R openclaw:openclaw /opt/traefik
+  - chown -R picoclaw:picoclaw /opt/traefik
   # Setup log directory
   - mkdir -p /var/log/suprclaw
-  - chown openclaw:openclaw /var/log/suprclaw
+  - chown picoclaw:picoclaw /var/log/suprclaw
   # Configure firewall
   - ufw --force reset
   - ufw default deny incoming

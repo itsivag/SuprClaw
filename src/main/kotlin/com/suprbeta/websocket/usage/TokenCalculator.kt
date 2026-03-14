@@ -6,8 +6,7 @@ import io.ktor.server.application.*
 import kotlinx.serialization.json.*
 
 /**
- * Extracts perfect token usage metadata from Bedrock models.
- * It strictly follows the OpenClaw WebSocket API Schemas.
+ * Extracts token usage metadata from runtime chat events.
  */
 class TokenCalculator(
     application: Application,
@@ -21,8 +20,7 @@ class TokenCalculator(
 
     /**
      * Inspects the frame for usage metadata.
-     * According to OpenClaw schemas, token usage is primarily sent in the 
-     * 'chat' event payload.
+     * Usage is primarily sent in the `chat` event payload.
      */
     fun extractTokenUsage(frame: WebSocketFrame, model: String): TokenUsageDelta {
         var inputTokens = 0L

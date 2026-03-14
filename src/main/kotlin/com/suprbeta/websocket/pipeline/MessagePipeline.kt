@@ -14,14 +14,14 @@ class MessagePipeline(
     private val logger = application.log
 
     /**
-     * Process an inbound message (Mobile client → OpenClaw VPS)
+     * Process an inbound message (mobile client to runtime bridge).
      */
     suspend fun processInbound(frame: WebSocketFrame, session: ProxySession): InterceptorResult {
         return processMessage(frame, MessageDirection.INBOUND, session)
     }
 
     /**
-     * Process an outbound message (OpenClaw VPS → Mobile client)
+     * Process an outbound message (runtime bridge to mobile client).
      */
     suspend fun processOutbound(frame: WebSocketFrame, session: ProxySession): InterceptorResult {
         return processMessage(frame, MessageDirection.OUTBOUND, session)

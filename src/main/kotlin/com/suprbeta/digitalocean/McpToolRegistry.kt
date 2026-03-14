@@ -1,21 +1,16 @@
 package com.suprbeta.digitalocean
 
 /**
- * Defines an MCP server that the universal proxy knows how to route to.
+ * Defines an MCP server that PicoClaw can connect to directly.
  *
  * authType values:
- *   "bearer"      — injects Authorization: Bearer <envVar> header
- *   "path-prefix" — prepends authTemplate (with {key} replaced) to the upstream path
- *
- * mcporterUrlTemplate supports {projectRef} substitution.
+ *   "bearer" — inject Authorization: Bearer <envVar> into the remote HTTP transport
  */
 data class McpToolDefinition(
     val name: String,
     val upstream: String,
     val authType: String,
-    val authEnvVar: String,
-    val authTemplate: String? = null,
-    val mcporterUrlTemplate: String
+    val authEnvVar: String
 )
 
 data class McpToolRuntimeConfig(
@@ -30,23 +25,19 @@ object McpToolRegistry {
             name = "supabase",
             upstream = "https://supabase.suprclaw.com",
             authType = "bearer",
-            authEnvVar = "SUPABASE_ACCESS_TOKEN",
-            mcporterUrlTemplate = "http://127.0.0.1:18790/supabase/mcp?project_ref={projectRef}"
+            authEnvVar = "SUPABASE_ACCESS_TOKEN"
         ),
         "cloud_browser" to McpToolDefinition(
             name = "cloud_browser",
             upstream = "https://api.suprclaw.com/api/mcp/cloud-browser",
             authType = "bearer",
-            authEnvVar = "OPENCLAW_GATEWAY_TOKEN",
-            mcporterUrlTemplate = "http://127.0.0.1:18790/cloud_browser"
+            authEnvVar = "GATEWAY_TOKEN"
         ),
         "zapier" to McpToolDefinition(
             name = "zapier",
             upstream = "https://mcp.zapier.com",
             authType = "bearer",
-            authEnvVar = "ZAPIER_MCP_EMBED_SECRET",
-            // Zapier embed returns a full per-user MCP server URL; avoid appending an extra fixed path.
-            mcporterUrlTemplate = "http://127.0.0.1:18790/zapier"
+            authEnvVar = "ZAPIER_MCP_EMBED_SECRET"
         )
     )
 

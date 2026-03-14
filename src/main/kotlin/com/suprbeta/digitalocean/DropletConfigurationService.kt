@@ -6,6 +6,10 @@ import com.suprbeta.digitalocean.models.AgentInsert
 import com.suprbeta.digitalocean.models.UserDropletInternal
 import com.suprbeta.firebase.FirestoreRepository
 import com.suprbeta.marketplace.MarketplaceAgent
+import com.suprbeta.runtime.AgentRuntimeCreateRequest
+import com.suprbeta.runtime.AgentRuntimeRegistry
+import com.suprbeta.runtime.RuntimeCommandExecutor
+import com.suprbeta.runtime.RuntimePaths
 import com.suprbeta.supabase.SupabaseAgentRepository
 import com.suprbeta.supabase.UserSupabaseClientProvider
 import io.ktor.server.application.*
@@ -24,26 +28,41 @@ class DropletConfigurationServiceImpl(
     private val userClientProvider: UserSupabaseClientProvider,
     private val sshCommandExecutor: SshCommandExecutor,
     private val dropletMcpService: DropletMcpService,
+    private val runtimeRegistry: AgentRuntimeRegistry,
     application: Application
 ) : DropletConfigurationService {
     companion object {
-        private const val DEFAULT_AGENT_MODEL = "amazon-bedrock/minimax.minimax-m2.1"
+        private const val DEFAULT_AGENT_MODEL = "suprclaw-default"
         private val SAFE_MODEL_REGEX = Regex("^[a-zA-Z0-9._:/-]+$")
         private val SAFE_RELATIVE_PATH_REGEX = Regex("^[a-zA-Z0-9._/-]+$")
     }
 
     private val logger = application.log
     private val agentNameRegex = Regex("^[a-zA-Z0-9_-]+$")
+    private val commandExecutor = RuntimeCommandExecutor(sshCommandExecutor)
 
     override suspend fun createAgent(userId: String, name: String, role: String, model: String?): String {
         val userDroplet = validateAndGetDroplet(userId, name)
-        val workspacePath = "/home/openclaw/.openclaw/workspace-$name"
+        val workspacePath = "${RuntimePaths.runtimeHome}/workspace-$name"
         val selectedModel = validateModel(model?.trim()?.ifBlank { DEFAULT_AGENT_MODEL } ?: DEFAULT_AGENT_MODEL)
-        val command =
-            "openclaw agents add ${singleQuote(name)} --workspace ${singleQuote(workspacePath)} --model ${singleQuote(selectedModel)}"
-        logger.info("Creating OpenClaw agent '$name' on droplet ${userDroplet.dropletId}")
+        val runtimeAdapter = runtimeRegistry.resolve(userDroplet)
+        val command = runtimeAdapter.buildCreateAgentCommand(
+            AgentRuntimeCreateRequest(
+                agentId = name,
+                workspacePath = workspacePath,
+                model = selectedModel
+            )
+        )
+        logger.info("Creating ${runtimeAdapter.runtime.wireValue} agent '$name' on droplet ${userDroplet.dropletId}")
         val output = runAgentCommand(userDroplet, command)
-        runAgentCommand(userDroplet, AgentWorkspaceBootstrap.buildCloudBrowserToolsCommand(workspacePath))
+        runtimeAdapter.buildPostConfigReloadCommand()?.let { runAgentCommand(userDroplet, it) }
+        runAgentCommand(
+            userDroplet,
+            AgentWorkspaceBootstrap.buildWorkspaceBootstrapCommand(
+                workspacePath = workspacePath,
+                includeLegacyToolsMirror = false
+            )
+        )
 
         val client = userClientProvider.getClient(userDroplet.resolveSupabaseUrl(), userDroplet.supabaseServiceKey, userDroplet.supabaseSchema)
         agentRepository.saveAgent(
@@ -63,31 +82,41 @@ class DropletConfigurationServiceImpl(
         val userDroplet = validateAndGetDroplet(userId, agent.id)
         val safeInstallPath = validateRelativePath(agent.installPath, "install path")
         val safeSourcePath = validateRelativePath(agent.sourcePath, "source path")
-        val workspacePath = "/home/openclaw/$safeInstallPath"
+        val workspacePath = "/home/${RuntimePaths.runtimeUser}/$safeInstallPath"
         val tmpDir = "/tmp/marketplace-${agent.id}"
         var agentCreated = false
+        val runtimeAdapter = runtimeRegistry.resolve(userDroplet)
 
         try {
-            // Step 0: Validate required MCP tool env vars are present — always, even if already configured
-            if (agent.mcpTools.isNotEmpty()) {
+            if (agent.mcpTools.isNotEmpty() && runtimeAdapter.supportsNativeMcpProvisioning()) {
                 dropletMcpService.validateMcpTools(agent.mcpTools)
             }
 
-            // Step 0b: Configure MCP tools — always reconfigure if agent requires any, to ensure keys are fresh
-            if (agent.mcpTools.isNotEmpty()) {
+            if (agent.mcpTools.isNotEmpty() && runtimeAdapter.supportsNativeMcpProvisioning()) {
                 val allTools = (userDroplet.configuredMcpTools + agent.mcpTools).distinct()
                 logger.info("Configuring MCP tools ${allTools.joinToString()} for agent '${agent.id}' on droplet ${userDroplet.dropletId}")
                 dropletMcpService.configureMcpTools(userDroplet, allTools)
                 firestoreRepository.updateConfiguredMcpTools(userId, userDroplet.dropletId, allTools)
+            } else if (agent.mcpTools.isNotEmpty()) {
+                logger.info(
+                    "Skipping legacy MCP provisioning for agent '${agent.id}' on ${runtimeAdapter.runtime.wireValue}; " +
+                        "workspace skills are now the primary integration path"
+                )
             }
 
-            // Step 1: Create agent workspace via openclaw CLI
             logger.info("Installing marketplace agent '${agent.id}' on droplet ${userDroplet.dropletId}")
             val output = runAgentCommand(
                 userDroplet,
-                "openclaw agents add ${singleQuote(agent.id)} --workspace ${singleQuote(workspacePath)} --model ${singleQuote(DEFAULT_AGENT_MODEL)}"
+                runtimeAdapter.buildCreateAgentCommand(
+                    AgentRuntimeCreateRequest(
+                        agentId = agent.id,
+                        workspacePath = workspacePath,
+                        model = DEFAULT_AGENT_MODEL
+                    )
+                )
             )
             agentCreated = true
+            runtimeAdapter.buildPostConfigReloadCommand()?.let { runAgentCommand(userDroplet, it) }
 
             // Step 2: Sparse-checkout only the agent's source directory, then overwrite workspace files
             runAgentCommand(
@@ -100,7 +129,13 @@ class DropletConfigurationServiceImpl(
                     " && cp -rf ${singleQuote("$tmpDir/$safeSourcePath/.")} ${singleQuote("$workspacePath/")}" +
                     " && rm -rf ${singleQuote(tmpDir)}"
             )
-            runAgentCommand(userDroplet, AgentWorkspaceBootstrap.buildCloudBrowserToolsCommand(workspacePath))
+            runAgentCommand(
+                userDroplet,
+                AgentWorkspaceBootstrap.buildWorkspaceBootstrapCommand(
+                    workspacePath = workspacePath,
+                    includeLegacyToolsMirror = false
+                )
+            )
             logger.info("Marketplace config applied to $workspacePath for agent '${agent.id}'")
 
             // Step 3: Save to user's Supabase project
@@ -120,7 +155,8 @@ class DropletConfigurationServiceImpl(
             if (agentCreated) {
                 logger.warn("Installation failed for agent '${agent.id}', rolling back...")
                 runCatching {
-                    runAgentCommand(userDroplet, "openclaw agents delete ${singleQuote(agent.id)} --force")
+                    runAgentCommand(userDroplet, runtimeAdapter.buildDeleteAgentCommand(agent.id))
+                    runtimeAdapter.buildPostConfigReloadCommand()?.let { runAgentCommand(userDroplet, it) }
                     logger.info("Rollback successful: agent '${agent.id}' deleted")
                 }.onFailure { rollbackError ->
                     logger.error("Rollback failed for agent '${agent.id}': ${rollbackError.message}")
@@ -132,18 +168,20 @@ class DropletConfigurationServiceImpl(
 
     override suspend fun deleteAgent(userId: String, name: String): String {
         val userDroplet = validateAndGetDroplet(userId, name)
-        val command = "openclaw agents delete ${singleQuote(name)} --force"
-        logger.info("Deleting OpenClaw agent '$name' on droplet ${userDroplet.dropletId}")
+        val runtimeAdapter = runtimeRegistry.resolve(userDroplet)
+        val command = runtimeAdapter.buildDeleteAgentCommand(name)
+        logger.info("Deleting ${runtimeAdapter.runtime.wireValue} agent '$name' on droplet ${userDroplet.dropletId}")
         val output = try {
             runAgentCommand(userDroplet, command, singleAttempt = true)
         } catch (e: Exception) {
             if (e.message.orEmpty().contains("not found", ignoreCase = true)) {
-                logger.warn("Agent '$name' not found in openclaw registry, proceeding with cleanup")
+                logger.warn("Agent '$name' not found in runtime registry, proceeding with cleanup")
                 ""
             } else throw e
         }
+        runtimeAdapter.buildPostConfigReloadCommand()?.let { runAgentCommand(userDroplet, it) }
 
-        val workspacePath = "/home/openclaw/.openclaw/workspace-$name"
+        val workspacePath = "${RuntimePaths.runtimeHome}/workspace-$name"
         runAgentCommand(userDroplet, "rm -rf ${singleQuote(workspacePath)}")
         logger.info("Deleted workspace '$workspacePath' on droplet ${userDroplet.dropletId}")
 
@@ -168,19 +206,7 @@ class DropletConfigurationServiceImpl(
     }
 
     private fun runAgentCommand(userDroplet: UserDropletInternal, command: String, singleAttempt: Boolean = false): String {
-        val hostCommand = if (userDroplet.isDockerDeployment()) {
-            val containerId = userDroplet.containerIdOrNull()
-                ?: throw IllegalStateException("Missing container ID for docker deployment")
-            "docker exec ${singleQuote(containerId)} su - openclaw -s /bin/sh -lc ${singleQuote(command)}"
-        } else {
-            command
-        }
-
-        return if (singleAttempt) {
-            sshCommandExecutor.runSshCommandOnce(userDroplet.ipAddress, hostCommand)
-        } else {
-            sshCommandExecutor.runSshCommand(userDroplet.ipAddress, hostCommand)
-        }
+        return commandExecutor.run(userDroplet, command, singleAttempt)
     }
 
     private fun validateModel(model: String): String {

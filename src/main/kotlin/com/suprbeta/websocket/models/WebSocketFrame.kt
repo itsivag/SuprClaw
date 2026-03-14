@@ -4,8 +4,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 
 /**
- * WebSocket protocol frame matching the OpenClaw Gateway protocol.
- * Ref: OpenClaw_WebSocket_Schemas.md
+ * App-facing websocket frame used by the SuprClaw mobile/backend bridge.
  */
 @Serializable
 data class WebSocketFrame(
@@ -22,9 +21,6 @@ data class WebSocketFrame(
     val state: String? = null    // State for streaming (delta, final, etc.)
 )
 
-/**
- * Full connect request sent in response to connect.challenge
- */
 @Serializable
 data class ConnectRequest(
     val type: String = "req",

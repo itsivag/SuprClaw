@@ -4,9 +4,9 @@
 
 ## About
 
-SuprClaw is the backend service for a multi-tenant AI agent orchestration platform. It handles provisioning personal AI agent infrastructure on Hetzner-backed Docker hosts, managing per-user isolated databases via Supabase, and proxying real-time WebSocket communication between clients and AI agents running on user-owned VPS instances.
+SuprClaw is the backend service for a multi-tenant AI agent orchestration platform. It provisions PicoClaw runtimes on Hetzner-backed Docker hosts, manages per-user isolated databases via Supabase, and proxies real-time WebSocket communication between clients and user runtimes.
 
-Each user gets their own OpenClaw container (running on a managed host VPS) and an isolated Supabase project for storing tasks, agents, and conversation history.
+Each user gets their own PicoClaw runtime container on a managed host and an isolated Supabase project for storing tasks, agents, and conversation history.
 
 ## How It Works
 
@@ -19,13 +19,13 @@ Client (Android/iOS/macOS)
   SuprClaw Backend (this repo)
   ├── Firebase Auth        → authenticates every request
   ├── Firestore            → stores internal droplet state & routing
-  ├── Central Supabase     → routes user → VPS (public.user_droplets)
-  └── WebSocket Proxy      → forwards messages to user's VPS
+  ├── Central Supabase     → routes user → runtime (public.user_droplets)
+  └── WebSocket Proxy      → bridges messages to the user's runtime
         │
         ▼
   Hetzner Host VPS (shared)
-  ├── openclaw containers  → one container per user
-  ├── mcp-auth-proxy       → routes MCP tool calls (port 18790)
+  ├── picoclaw containers  → one container per user
+  ├── native MCP           → optional runtime-managed MCP servers
   └── Per-user Supabase    → stores tasks, agents, documents
 ```
 
@@ -33,28 +33,28 @@ Client (Android/iOS/macOS)
 
 **1. Provisioning a new user**
 - Allocates capacity on a Hetzner Docker host (or creates a new host)
-- Creates a dedicated OpenClaw container for the user
+- Creates a dedicated PicoClaw container for the user
 - In parallel: creates a per-user Supabase project
-- Configures SSH, gateway token, DNS, and SSL on the VPS
-- Injects MCP credentials to `/etc/suprclaw/mcp.env`
+- Configures SSH, gateway token, DNS, and SSL on the host
+- Writes runtime config and optional native MCP server entries to `picoclaw.json`
 - Initializes user's database schema and inserts default agents
-- Registers the VPS in the central Supabase routing table
+- Registers the runtime in the central Supabase routing table
 
 **2. WebSocket proxy**
 - Client connects to `/ws` with a Firebase JWT
-- Backend authenticates, looks up the user's VPS gateway URL from Firestore
-- Opens a proxied WebSocket connection to the VPS
+- Backend authenticates, looks up the user's runtime from Firestore
+- Opens a runtime bridge for the session
 - Messages flow bidirectionally through an interceptor pipeline (auth, logging, token usage tracking)
 
 **3. Task assignment webhooks**
 - Supabase DB webhook fires on `task_assignees` INSERT
-- Backend receives `POST /webhooks/tasks/{projectRef}`, looks up user, forwards to VPS `/hooks/agent`
-- Agent on VPS receives the task notification and begins work
+- Backend receives `POST /webhooks/tasks/{projectRef}`, looks up the user runtime, and dispatches a wake event
+- The target agent session receives the task notification and begins work
 
 **4. Marketplace agent installation**
 - User selects an agent from the catalog (`/marketplace`)
-- Backend validates required MCP tool env vars
-- Clones agent repo to VPS via SSH, writes MCP routes and env, restarts proxy
+- Backend validates required MCP tool env vars when native MCP is needed
+- Clones the agent repo into the runtime workspace via SSH and reloads the runtime config
 
 ## Setup
 

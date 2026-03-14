@@ -1,4 +1,4 @@
-name: Deploy Backend to Production
+name: Deploy Backend to Hetzner
 
 on:
   push:
@@ -6,19 +6,52 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/suprclaw-backend
+      IMAGE_TAG: ${{ github.sha }}
+      DEPLOY_HOST: ${{ secrets.HETZNER_SERVER_IP }}
+      DEPLOY_USER: ${{ secrets.HETZNER_DEPLOY_USER }}
+      GHCR_PULL_USERNAME: ${{ secrets.GHCR_PULL_USERNAME }}
+      GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+      SUPRCLAW_API_HOST: ${{ secrets.SUPRCLAW_API_HOST }}
+      LITELLM_IMAGE: ${{ secrets.LITELLM_IMAGE }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Validate deployment secrets
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+        run: |
+          required_vars=(
+            DEPLOY_HOST
+            DEPLOY_USER
+            GHCR_PULL_USERNAME
+            GHCR_PULL_TOKEN
+            SSH_PRIVATE_KEY
+            ENV_FILE
+          )
+          for var in "${required_vars[@]}"; do
+            if [ -z "${!var}" ]; then
+              echo "Missing required secret: $var"
+              exit 1
+            fi
+          done
+
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
-          java-version: '21'
+          distribution: temurin
+          java-version: "21"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
@@ -28,161 +61,102 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
-      - name: Build with Gradle
-        run: ./gradlew clean build -x test --no-daemon
+      - name: Build fat jar
+        run: ./gradlew clean shadowJar verifyFatJar -x test --no-daemon
 
-      - name: Create .env from secrets
-        run: echo "${{ secrets.ENV_FILE }}" > .env
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Create deployment package
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/backend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+
+      - name: Prepare deployment bundle
+        env:
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+          LITELLM_ENV_FILE: ${{ secrets.LITELLM_ENV_FILE }}
+          LITELLM_CONFIG_YAML: ${{ secrets.LITELLM_CONFIG_YAML }}
         run: |
-          mkdir -p deploy
-          cp build/libs/*.jar deploy/
-          cp .env deploy/
-          cp setup-wildcard-ssl.sh deploy/ || echo "Warning: setup-wildcard-ssl.sh not found"
-          tar -czf suprclaw-deploy.tar.gz -C deploy .
+          mkdir -p deploy-bundle
+          cp deploy/podman/up.sh deploy-bundle/
+          cp deploy/podman/down.sh deploy-bundle/
+          cp deploy/podman/Caddyfile deploy-bundle/
+          cp deploy/podman/suprclaw-stack.service deploy-bundle/
+
+          printf '%s' "$ENV_FILE" > deploy-bundle/backend.env
+          printf '%s' "$LITELLM_ENV_FILE" > deploy-bundle/litellm.env
+          printf '%s' "$LITELLM_CONFIG_YAML" > deploy-bundle/litellm-config.yaml
+
+          cat > deploy-bundle/stack.env <<EOF
+BACKEND_IMAGE=${IMAGE_NAME}:${IMAGE_TAG}
+LITELLM_IMAGE=${LITELLM_IMAGE:-ghcr.io/berriai/litellm:main-stable}
+SUPRCLAW_API_HOST=${SUPRCLAW_API_HOST:-api.suprclaw.com}
+EOF
+
+          tar -czf suprclaw-podman-deploy.tar.gz -C deploy-bundle .
 
       - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" | base64 -d > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          if [ -z "$SERVER_IP" ]; then
-            echo "❌ SERVER_IP secret is not set"
-            exit 1
-          fi
-          ssh-keyscan -H "$SERVER_IP" >> ~/.ssh/known_hosts
-          echo "SSH key setup complete"
-          ls -la ~/.ssh/deploy_key
-        env:
-          SERVER_IP: ${{ secrets.SERVER_IP }}
-
-      - name: Debug connection info
-        run: |
-          echo "DEPLOY_USER length: ${#DEPLOY_USER}"
-          echo "SERVER_IP length: ${#SERVER_IP}"
-          echo "Testing connection to: $DEPLOY_USER@$SERVER_IP"
-        env:
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          SERVER_IP: ${{ secrets.SERVER_IP }}
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
 
       - name: Test SSH connection
+        run: ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$DEPLOY_USER@$DEPLOY_HOST" "echo Hetzner SSH connection successful"
+
+      - name: Upload deployment bundle
+        run: scp -i ~/.ssh/deploy_key suprclaw-podman-deploy.tar.gz "$DEPLOY_USER@$DEPLOY_HOST":~/
+
+      - name: Deploy Podman stack on Hetzner
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$DEPLOY_USER@$SERVER_IP" "echo 'SSH connection successful'"
-        env:
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          SERVER_IP: ${{ secrets.SERVER_IP }}
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \
+            "GHCR_PULL_USERNAME='$GHCR_PULL_USERNAME' GHCR_PULL_TOKEN='$GHCR_PULL_TOKEN' bash -s" <<'ENDSSH'
+              set -euo pipefail
 
-      - name: Upload to server
-        run: |
-          scp -i ~/.ssh/deploy_key suprclaw-deploy.tar.gz "$DEPLOY_USER@$SERVER_IP":~/
-        env:
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          SERVER_IP: ${{ secrets.SERVER_IP }}
+              mkdir -p ~/suprclaw-deploy
+              tar -xzf ~/suprclaw-podman-deploy.tar.gz -C ~/suprclaw-deploy
 
-      - name: Deploy on server
-        env:
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          SERVER_IP: ${{ secrets.SERVER_IP }}
-        run: |
-          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$SERVER_IP" << 'ENDSSH'
-            cd ~
+              sudo install -d -m 0755 /opt/suprclaw/podman /etc/suprclaw /var/lib/suprclaw/caddy/data /var/lib/suprclaw/caddy/config
+              sudo install -m 0755 ~/suprclaw-deploy/up.sh /opt/suprclaw/podman/up.sh
+              sudo install -m 0755 ~/suprclaw-deploy/down.sh /opt/suprclaw/podman/down.sh
+              sudo install -m 0644 ~/suprclaw-deploy/Caddyfile /etc/suprclaw/Caddyfile
+              sudo install -m 0644 ~/suprclaw-deploy/suprclaw-stack.service /etc/systemd/system/suprclaw-stack.service
+              sudo install -m 0600 ~/suprclaw-deploy/backend.env /etc/suprclaw/backend.env
+              sudo install -m 0600 ~/suprclaw-deploy/litellm.env /etc/suprclaw/litellm.env
+              sudo install -m 0644 ~/suprclaw-deploy/litellm-config.yaml /etc/suprclaw/litellm-config.yaml
+              sudo install -m 0644 ~/suprclaw-deploy/stack.env /etc/default/suprclaw-stack
 
-            # Backup config files BEFORE moving directory
-            if [ -d "SuprClaw" ]; then
-              cp SuprClaw/firebase-credentials.json ~/.firebase-credentials.backup 2>/dev/null || echo "No firebase-credentials.json to backup"
-              mv SuprClaw SuprClaw.backup.$(date +%Y%m%d_%H%M%S)
-            fi
+              echo "$GHCR_PULL_TOKEN" | sudo podman login ghcr.io --username "$GHCR_PULL_USERNAME" --password-stdin
 
-            # Extract new deployment
-            mkdir -p SuprClaw
-            tar -xzf suprclaw-deploy.tar.gz -C SuprClaw/
-            cd SuprClaw
+              sudo systemctl daemon-reload
+              sudo systemctl enable suprclaw-stack.service
+              sudo systemctl restart suprclaw-stack.service
 
-            # Create necessary directories
-            mkdir -p logs build/libs
-
-            # Move JAR to correct location
-            mv *.jar build/libs/ 2>/dev/null || true
-
-            # .env is deployed fresh from GitHub Secrets (via tarball) - no restore needed
-            if [ -f .env ]; then
-              echo "✅ .env from deployment package is present"
-            else
-              echo "❌ .env missing from deployment package - aborting"
-              exit 1
-            fi
-            # Clean up any stale .env backup
-            rm -f ~/.env.backup
-
-            if [ -f ~/.firebase-credentials.backup ]; then
-              mv ~/.firebase-credentials.backup firebase-credentials.json
-              echo "✅ Restored firebase-credentials.json from backup"
-            else
-              echo "⚠️  Warning: No firebase-credentials.json backup found"
-            fi
-
-            # Set proper permissions
-            chmod 600 .env firebase-credentials.json 2>/dev/null || true
-
-            # Create/update systemd service (using printf - no heredoc to avoid YAML issues)
-            printf '%s\n' \
-              '[Unit]' \
-              'Description=SuprClaw Backend API' \
-              'After=network.target' \
-              '' \
-              '[Service]' \
-              'Type=simple' \
-              'User=suprclaw' \
-              'WorkingDirectory=/home/suprclaw/SuprClaw' \
-              'EnvironmentFile=/home/suprclaw/SuprClaw/.env' \
-              'ExecStart=/usr/bin/java -Xmx1024m -Xms512m -jar /home/suprclaw/SuprClaw/build/libs/SuprClaw-all.jar' \
-              'Restart=always' \
-              'RestartSec=10' \
-              'StandardOutput=journal' \
-              'StandardError=journal' \
-              'SyslogIdentifier=suprclaw-backend' \
-              '' \
-              '[Install]' \
-              'WantedBy=multi-user.target' \
-              | sudo tee /etc/systemd/system/suprclaw-backend.service > /dev/null
-
-            # Reload systemd to pick up service changes
-            sudo systemctl daemon-reload
-
-            # Fix SSL certificate permissions (if needed)
-            if [ -d "/etc/letsencrypt/live/suprclaw.com" ]; then
-              sudo chmod 755 /etc/letsencrypt/live /etc/letsencrypt/archive
-              sudo chmod 755 /etc/letsencrypt/live/suprclaw.com /etc/letsencrypt/archive/suprclaw.com
-              sudo chmod 644 /etc/letsencrypt/archive/suprclaw.com/*.pem
-              sudo chmod 640 /etc/letsencrypt/archive/suprclaw.com/privkey*.pem
-              sudo chgrp suprclaw /etc/letsencrypt/archive/suprclaw.com/privkey*.pem
-            fi
-
-            # Restart service
-            sudo systemctl restart suprclaw-backend
-
-            # Wait for service to start
-            sleep 5
-
-            # Check service status
-            if sudo systemctl is-active --quiet suprclaw-backend; then
-              echo "✅ Deployment successful! Service is running."
-              sudo systemctl status suprclaw-backend --no-pager
-            else
-              echo "❌ Deployment failed! Service is not running."
-              sudo journalctl -u suprclaw-backend -n 50 --no-pager
-              exit 1
-            fi
+              sudo systemctl is-active --quiet suprclaw-stack.service
+              sudo podman ps
           ENDSSH
 
       - name: Verify deployment
         run: |
-          sleep 5
-          curl -f https://api.suprclaw.com/ || echo "Warning: API health check failed"
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \
+            "curl -fsS -H 'Host: ${SUPRCLAW_API_HOST:-api.suprclaw.com}' http://127.0.0.1/health"
 
       - name: Cleanup
         if: always()
         run: |
           rm -f ~/.ssh/deploy_key
-          rm -f suprclaw-deploy.tar.gz
+          rm -f suprclaw-podman-deploy.tar.gz

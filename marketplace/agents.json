@@ -23,7 +23,7 @@
         "data-analyst"
       ],
       "source_path": "marketplace/seo",
-      "install_path": ".openclaw/workspace-seo",
+      "install_path": ".picoclaw/workspace-seo",
       "mcp_tools": ["cloud_browser"]
     },
     {
@@ -48,7 +48,7 @@
         "data-analyst"
       ],
       "source_path": "marketplace/content",
-      "install_path": ".openclaw/workspace-content",
+      "install_path": ".picoclaw/workspace-content",
       "mcp_tools": ["cloud_browser"]
     }
   ]

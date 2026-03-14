@@ -2,10 +2,9 @@ package com.suprbeta.websocket
 
 import com.suprbeta.browser.BrowserClientBridge
 import com.suprbeta.browser.BrowserSessionEventPayload
-import com.suprbeta.core.ShellEscaping.requireUuid
-import com.suprbeta.core.ShellEscaping.singleQuote
-import com.suprbeta.core.SshCommandExecutor
+import com.suprbeta.chat.ChatHistoryService
 import com.suprbeta.digitalocean.models.UserDropletInternal
+import com.suprbeta.runtime.PicoClawChatBridge
 import com.suprbeta.websocket.models.ProxySession
 import com.suprbeta.websocket.models.SessionMetadata
 import com.suprbeta.websocket.models.WebSocketFrame
@@ -19,26 +18,21 @@ import kotlinx.serialization.json.*
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Manages proxy sessions between mobile clients and OpenClaw VPS
+ * Manages proxy sessions between mobile clients and the per-user runtime bridge.
  */
 class ProxySessionManager(
     application: Application,
-    private val openClawConnector: OpenClawConnector,
     private val messagePipeline: MessagePipeline,
     private val usageInterceptor: UsageInterceptor,
     private val json: Json,
+    private val chatHistoryService: ChatHistoryService,
     private val firestoreRepository: com.suprbeta.firebase.FirestoreRepository,
-    private val sshCommandExecutor: SshCommandExecutor
+    private val picoClawChatBridge: PicoClawChatBridge
 ) : BrowserClientBridge {
     private val logger = application.log
 
-    private companion object {
-        const val PAIRING_APPROVAL_TTL_MS = 60_000L
-    }
-
     // Map of userId -> ProxySession
     private val sessions = ConcurrentHashMap<String, ProxySession>()
-    private val pairingApprovals = ConcurrentHashMap<String, Long>()
 
     override suspend fun publishEvent(userId: String, payload: BrowserSessionEventPayload) {
         val session = sessions[userId] ?: return
@@ -72,19 +66,6 @@ class ProxySessionManager(
             existingSession.disconnectJob?.cancel()
             existingSession.disconnectJob = null
             existingSession.inboundJob?.cancel()
-
-            // Force a fresh upstream handshake when the mobile client reconnects.
-            // Reusing a previously-connected upstream session can leave the client
-            // waiting in handshake state on subsequent reconnects.
-            existingSession.outboundJob?.cancel()
-            existingSession.outboundJob = null
-            runCatching {
-                existingSession.openclawSession?.close(
-                    CloseReason(CloseReason.Codes.NORMAL, "client reconnected; forcing upstream re-handshake")
-                )
-            }
-            existingSession.openclawSession = null
-            existingSession.openClawGatewayToken = null
 
             existingSession.clientSession = clientSession
             // Optionally, update userTier if they upgraded mid-session
@@ -128,9 +109,7 @@ class ProxySessionManager(
         return session
     }
 
-    suspend fun establishOpenClawConnection(session: ProxySession): Boolean {
-        if (session.isOpenClawConnected) return true // Already connected (resumed session)
-
+    suspend fun establishRuntimeConnection(session: ProxySession): Boolean {
         try {
             val userId = session.metadata.userId
             val userDroplet = firestoreRepository.getUserDropletInternal(userId)
@@ -139,33 +118,19 @@ class ProxySessionManager(
                 logger.error("No valid droplet found for user $userId")
                 return false
             }
-            
-            logger.info("Routing user $userId to VPS: ${userDroplet.vpsGatewayUrl}")
-            
-            val openClawSession = openClawConnector.connect(
-                token = userDroplet.gatewayToken,
-                vpsGatewayUrl = userDroplet.vpsGatewayUrl
-            )
-
-            if (openClawSession == null) return false
-
-            session.openclawSession = openClawSession
-            session.openClawGatewayToken = userDroplet.gatewayToken
+            logger.info("Routing user $userId through direct picoclaw bridge")
             return true
-
         } catch (e: Exception) {
-            logger.error("Error establishing OpenClaw connection for user ${session.metadata.userId}: ${e.message}", e)
+            logger.error("Error establishing runtime connection for user ${session.metadata.userId}: ${e.message}", e)
             return false
         }
     }
 
     fun startMessageForwarding(session: ProxySession, scope: CoroutineScope) {
-        if (!session.isOpenClawConnected) return
-
         // Cancel existing inbound job if any (reconnect scenario)
         session.inboundJob?.cancel()
 
-        // Inbound job: Mobile client → OpenClaw VPS
+        // Inbound job: Mobile client -> runtime bridge
         session.inboundJob = scope.launch {
             try {
                 val currentClientSession = session.clientSession ?: return@launch
@@ -183,77 +148,26 @@ class ProxySessionManager(
             }
         }
 
-        // Only start outbound job if not already running (resumed session handles its own outbound)
-        if (session.outboundJob == null || !session.outboundJob!!.isActive) {
-            session.outboundJob = scope.launch {
-                drainMessageQueues(session)
-                runOutboundWithReconnect(session, scope)
-            }
-        } else {
-            // Reconnected: just drain the offline queue
-            scope.launch { drainMessageQueues(session) }
-        }
+        scope.launch { drainMessageQueues(session) }
 
         logger.info("Message forwarding active for user ${session.metadata.userId}")
     }
 
-    private suspend fun runOutboundWithReconnect(session: ProxySession, scope: CoroutineScope) {
-        while (true) {
-            val vpsSession = session.openclawSession ?: break
-
-            var upstreamCloseReason: CloseReason? = null
-
-            try {
-                for (frame in vpsSession.incoming) {
-                    if (frame is Frame.Text) {
-                        handleOutboundMessage(session, frame.readText())
-                    }
-                }
-
-                upstreamCloseReason = awaitCloseReasonSafely(vpsSession)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                logger.error("Outbound forwarding error for user ${session.metadata.userId}: ${e.message}")
-            } finally {
-                if (upstreamCloseReason == null) {
-                    upstreamCloseReason = awaitCloseReasonSafely(vpsSession)
-                }
-                logger.info(
-                    "OpenClaw upstream WebSocket closed for user ${session.metadata.userId}: " +
-                        describeCloseReason(upstreamCloseReason)
-                )
-            }
-
-            session.openclawSession = null
-            
-            // If the session is fully closing (not just VPS drop), exit
-            if (sessions[session.metadata.userId] == null) break
-
-            logger.info("Attempting VPS reconnect for user ${session.metadata.userId}...")
-            val reconnected = establishOpenClawConnection(session)
-            if (!reconnected) {
-                logger.error("VPS reconnect failed for user ${session.metadata.userId}")
-                closeSession(session.metadata.userId)
-                return
-            }
-        }
-    }
-
     private suspend fun handleInboundMessage(session: ProxySession, messageText: String) {
-        val openClawSession = session.openclawSession ?: return
-
         try {
             val frame = json.decodeFromString<WebSocketFrame>(messageText)
             session.metadata.incrementReceived()
 
             if (frame.method == "connect") return
+            val userDroplet = firestoreRepository.getUserDropletInternal(session.metadata.userId) ?: return
 
             when (val result = messagePipeline.processInbound(frame, session)) {
                 is InterceptorResult.Continue -> {
-                    val processedJson = json.encodeToString(result.frame)
-                    openClawSession.send(Frame.Text(processedJson))
-                    session.metadata.incrementSent()
+                    runCatching { chatHistoryService.captureInbound(result.frame, session) }
+                        .onFailure {
+                            logger.error("Failed to capture inbound chat history for user ${session.metadata.userId}", it)
+                        }
+                    handlePicoClawInbound(session, userDroplet, result.frame)
                 }
                 is InterceptorResult.Drop -> {}
                 is InterceptorResult.Error -> throw RuntimeException(result.message)
@@ -263,92 +177,38 @@ class ProxySessionManager(
         }
     }
 
-    private suspend fun handleOutboundMessage(session: ProxySession, messageText: String) {
-        try {
-            val frame = json.decodeFromString<WebSocketFrame>(messageText)
-            session.metadata.incrementReceived()
-
-            // Handle OpenClaw handshake
-            if (frame.event == "connect.challenge") {
-                val upstreamToken = session.openClawGatewayToken ?: return
-                openClawConnector.handleConnectChallenge(
-                    session.openclawSession!!,
-                    upstreamToken,
-                    frame.payload,
-                    session.metadata.platform ?: "unknown"
-                )
-                return
-            }
-
-            if (tryApprovePairing(session, frame)) {
-                return
-            }
-
-            when (val result = messagePipeline.processOutbound(frame, session)) {
-                is InterceptorResult.Continue -> {
-                    val processedJson = json.encodeToString(result.frame)
-                    deliverToClient(session, processedJson)
+    private suspend fun handlePicoClawInbound(
+        session: ProxySession,
+        droplet: UserDropletInternal,
+        frame: WebSocketFrame
+    ) {
+        if (frame.type == "req" && frame.method == "chat.send") {
+            val sessionKey = extractSessionKey(frame) ?: session.metadata.getSessionKey() ?: "agent:main:main"
+            val message = extractInboundText(frame) ?: return
+            session.metadata.rememberSessionKey(sessionKey)
+            val responseFrame = picoClawChatBridge.runChat(
+                droplet = droplet,
+                sessionKey = sessionKey,
+                message = message,
+                requestId = frame.id
+            )
+            runCatching { chatHistoryService.captureOutbound(responseFrame, session) }
+                .onFailure {
+                    logger.error("Failed to capture outbound chat history for user ${session.metadata.userId}", it)
                 }
-                is InterceptorResult.Drop -> {}
-                is InterceptorResult.Error -> throw RuntimeException(result.message)
+            deliverToClient(session, json.encodeToString(responseFrame))
+            return
+        }
+
+        val errorFrame = WebSocketFrame(
+            type = "res",
+            id = frame.id,
+            ok = false,
+            error = buildJsonObject {
+                put("message", "Unsupported request for picoclaw runtime")
             }
-        } catch (e: Exception) {
-            logger.error("Failed to process outbound message for user ${session.metadata.userId}: ${e.message}")
-        }
-    }
-
-    private suspend fun tryApprovePairing(session: ProxySession, frame: WebSocketFrame): Boolean {
-        val errorObj = frame.error?.jsonObject ?: return false
-        val message = errorObj["message"]?.jsonPrimitive?.contentOrNull ?: return false
-        if (message != "pairing required") return false
-
-        val requestId = runCatching {
-            errorObj["details"]?.jsonObject?.get("requestId")?.jsonPrimitive?.contentOrNull
-        }.getOrNull()
-
-        if (requestId.isNullOrBlank()) {
-            logger.warn("Pairing required for user ${session.metadata.userId} but requestId is missing")
-            return false
-        }
-
-        val safeRequestId = runCatching {
-            requireUuid(requestId, "pairing requestId")
-        }.getOrNull()
-
-        if (safeRequestId == null) {
-            logger.warn("Ignoring invalid pairing requestId for user ${session.metadata.userId}")
-            return false
-        }
-
-        val now = System.currentTimeMillis()
-        evictExpiredPairingApprovals(now)
-        val previous = pairingApprovals.put(safeRequestId, now)
-        if (previous != null && now - previous < PAIRING_APPROVAL_TTL_MS) {
-            logger.info("Pairing request $requestId is already being handled for user ${session.metadata.userId}")
-            return true
-        }
-
-        val userDroplet = firestoreRepository.getUserDropletInternal(session.metadata.userId)
-        if (userDroplet == null) {
-            logger.warn("Cannot approve pairing for user ${session.metadata.userId}: no droplet found")
-            pairingApprovals.remove(safeRequestId)
-            return false
-        }
-
-        return try {
-            approvePairingRequest(userDroplet, safeRequestId)
-            logger.info("Approved runtime pairing requestId=$safeRequestId for user ${session.metadata.userId}")
-            runCatching {
-                session.openclawSession?.close(
-                    CloseReason(CloseReason.Codes.NORMAL, "pairing approved, reconnecting")
-                )
-            }
-            true
-        } catch (e: Exception) {
-            pairingApprovals.remove(safeRequestId)
-            logger.error("Failed to approve runtime pairing for user ${session.metadata.userId}: ${e.message}")
-            false
-        }
+        )
+        deliverToClient(session, json.encodeToString(errorFrame))
     }
 
     private suspend fun deliverToClient(session: ProxySession, message: String) {
@@ -369,31 +229,27 @@ class ProxySessionManager(
         logger.debug("Client offline, message queued in memory for user ${session.metadata.userId}")
     }
 
-    private fun evictExpiredPairingApprovals(now: Long) {
-        pairingApprovals.entries.forEach { (requestId, timestamp) ->
-            if (now - timestamp >= PAIRING_APPROVAL_TTL_MS) {
-                pairingApprovals.remove(requestId, timestamp)
-            }
-        }
+    private fun extractSessionKey(frame: WebSocketFrame): String? {
+        return findString(frame.params, setOf("sessionKey", "session_key"))
+            ?: findString(frame.payload, setOf("sessionKey", "session_key"))
+            ?: findString(frame.result, setOf("sessionKey", "session_key"))
     }
 
-    private fun approvePairingRequest(userDroplet: UserDropletInternal, requestId: String) {
-        val hostIp = userDroplet.ipAddress
-        require(hostIp.isNotBlank()) { "Droplet IP address is missing" }
+    private fun extractInboundText(frame: WebSocketFrame): String? =
+        findString(frame.params, setOf("text", "message", "content", "input"))
 
-        val containerId = userDroplet.dropletName.trim()
-        val isDockerContainerId = Regex("^[a-f0-9]{12,64}$").matches(containerId)
+    private fun findString(element: JsonElement?, keys: Set<String>, depth: Int = 0): String? {
+        if (element == null || depth > 4) return null
+        return when (element) {
+            is JsonObject -> {
+                keys.firstNotNullOfOrNull { key ->
+                    element[key]?.jsonPrimitive?.contentOrNull?.trim()?.ifBlank { null }
+                } ?: element.values.firstNotNullOfOrNull { findString(it, keys, depth + 1) }
+            }
 
-        val safeRequestId = requireUuid(requestId, "pairing requestId")
-        val command = if (isDockerContainerId) {
-            val approveCommand =
-                "openclaw devices approve ${singleQuote(safeRequestId)} || test -s /home/openclaw/.openclaw/devices/paired.json"
-            "docker exec $containerId su - openclaw -s /bin/sh -c ${singleQuote(approveCommand)}"
-        } else {
-            "openclaw devices approve ${singleQuote(safeRequestId)}"
+            is JsonArray -> element.firstNotNullOfOrNull { findString(it, keys, depth + 1) }
+            else -> null
         }
-
-        sshCommandExecutor.runSshCommand(hostIp, command)
     }
 
     private suspend fun drainMessageQueues(session: ProxySession) {
@@ -450,15 +306,13 @@ class ProxySessionManager(
 
         session.disconnectJob?.cancel()
         session.inboundJob?.cancel()
-        session.outboundJob?.cancel()
 
         withTimeoutOrNull(2_000) {
             usageInterceptor.flushSession(session.sessionId)
         }
-
-        try {
-            session.openclawSession?.close()
-        } catch (e: Exception) {}
+        withTimeoutOrNull(2_000) {
+            chatHistoryService.flushSession(session.sessionId)
+        }
 
         try {
             session.clientSession?.close()
@@ -474,19 +328,5 @@ class ProxySessionManager(
         sessions.keys.toList().forEach { userId ->
             closeSession(userId)
         }
-    }
-
-    private fun describeCloseReason(reason: CloseReason?): String {
-        if (reason == null) return "close=unavailable"
-
-        val message = reason.message.takeIf { it.isNotBlank() } ?: "<empty>"
-        return "close.code=${reason.code} close.message=$message"
-    }
-
-    private suspend fun awaitCloseReasonSafely(
-        session: DefaultWebSocketSession,
-        timeoutMillis: Long = 250
-    ): CloseReason? {
-        return runCatching { withTimeoutOrNull(timeoutMillis) { session.closeReason.await() } }.getOrNull()
     }
 }

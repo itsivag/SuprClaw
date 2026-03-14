@@ -1,11 +1,7 @@
 package com.suprbeta.docker
 
 import com.suprbeta.config.AppConfig
-import com.suprbeta.core.ShellEscaping.requireUuid
-import com.suprbeta.core.ShellEscaping.singleQuote
 import com.suprbeta.core.SshCommandExecutor
-import com.suprbeta.digitalocean.DropletMcpService
-import com.suprbeta.digitalocean.McpToolRegistry
 import io.github.cdimascio.dotenv.dotenv
 import com.suprbeta.digitalocean.models.AgentInsert
 import com.suprbeta.digitalocean.models.ProvisioningStatus
@@ -18,27 +14,26 @@ import com.suprbeta.supabase.SupabaseAgentRepository
 import com.suprbeta.supabase.SupabaseManagementService
 import com.suprbeta.supabase.SupabaseSchemaRepository
 import com.suprbeta.supabase.UserSupabaseClientProvider
-import com.suprbeta.websocket.OpenClawConnector
-import com.suprbeta.websocket.models.WebSocketFrame
+import com.suprbeta.runtime.RuntimePaths
 import io.ktor.server.application.*
-import io.ktor.websocket.Frame
-import io.ktor.websocket.close
-import io.ktor.websocket.readText
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import java.net.InetAddress
+import java.net.HttpURLConnection
+import java.net.URI
+import java.net.URLEncoder
 import java.net.UnknownHostException
+import java.net.URL
 import java.security.SecureRandom
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * Provisioning service for Docker-based multi-tenant architecture.
@@ -58,16 +53,15 @@ class DockerHostProvisioningService(
     private val managementService: SupabaseManagementService,
     private val agentRepository: SupabaseAgentRepository,
     private val userClientProvider: UserSupabaseClientProvider,
-    private val openClawConnector: OpenClawConnector,
     private val sshCommandExecutor: SshCommandExecutor,
-    private val dropletMcpService: DropletMcpService,
     private val application: Application
 ) : com.suprbeta.digitalocean.DropletProvisioningService {
 
     private val logger = application.log
-    private val json = Json { ignoreUnknownKeys = true }
     private val dotenv = dotenv { ignoreIfMissing = true; directory = "." }
     private val secureRandom = SecureRandom()
+    private val json = Json { ignoreUnknownKeys = true }
+    private val dnsPropagationTimeoutMs = AppConfig.dockerDnsPropagationTimeoutSeconds * 1_000L
     
     /** In-memory status map keyed by container ID (used as droplet ID). */
     val statuses = ConcurrentHashMap<Long, ProvisioningStatus>()
@@ -75,11 +69,8 @@ class DockerHostProvisioningService(
     private val provisioningIdsByUser = ConcurrentHashMap<String, Long>()
     
     companion object {
-        private const val GATEWAY_PORT = 18789
         private const val POLL_INTERVAL_MS = 5_000L
         private const val MAX_POLL_WAIT_MS = 300_000L
-        private const val DNS_PROPAGATION_TIMEOUT_MS = 120_000L
-        
         // Progress values for each phase (0.0 to 1.0)
         private val PHASE_PROGRESS = mapOf(
             ProvisioningStatus.PHASE_CREATING to 0.0,
@@ -192,11 +183,10 @@ class DockerHostProvisioningService(
             // Phase 4: Generate tokens and subdomain
             updateStatus(dropletId, "creating_container", "Generating gateway tokens...")
             val gatewayToken = generateGatewayToken()
-            val hookToken = generateGatewayToken()
             subdomain = generateSubdomain(userId)
 
             // Phase 5: Create container
-            updateStatus(dropletId, "creating_container", "Creating OpenClaw container...")
+            updateStatus(dropletId, "creating_container", "Creating PicoClaw container...")
             val supabaseConfig = SupabaseConfig(
                 url = safeEndpoint,
                 serviceKey = safeServiceKey,
@@ -205,52 +195,23 @@ class DockerHostProvisioningService(
                 apiKey = safeServiceKey  // self-hosted: service key is also used as Kong api key
             )
 
-            val mcpTools = McpToolRegistry.defaultTools.map { toolName ->
-                val toolDef = McpToolRegistry.get(toolName)
-                val envVars: Map<String, String> = if (toolDef != null) {
-                    val envValue = dotenv[toolDef.authEnvVar] ?: System.getenv(toolDef.authEnvVar) ?: ""
-                    mapOf(toolDef.authEnvVar to envValue)
-                } else {
-                    emptyMap()
-                }
-                McpToolConfig(name = toolName, envVars = envVars)
-            }
-
-            val supabaseMcpUrl = dotenv["SUPABASE_MCP_URL"] ?: System.getenv("SUPABASE_MCP_URL") ?: ""
-            val mcpRoutesJson = run {
-                val entries = mcpTools.mapNotNull { toolConfig ->
-                    val def = McpToolRegistry.get(toolConfig.name) ?: return@mapNotNull null
-                    val auth = when (def.authType) {
-                        "bearer"      -> """{"type":"bearer","envVar":"${def.authEnvVar}"}"""
-                        "path-prefix" -> """{"type":"path-prefix","envVar":"${def.authEnvVar}","template":"${def.authTemplate}"}"""
-                        else           -> """{"type":"${def.authType}","envVar":"${def.authEnvVar}"}"""
-                    }
-                    val upstream = if (def.name == "supabase") supabaseMcpUrl.ifBlank { def.upstream } else def.upstream
-                    """"${def.name}":{"upstream":"$upstream","auth":$auth}"""
-                }
-                "{${entries.joinToString(",")}}"
-            }
-
-            val mcpMcporterJson = run {
-                val servers = mcpTools.mapNotNull { toolConfig ->
-                    val def = McpToolRegistry.get(toolConfig.name) ?: return@mapNotNull null
-                    val url = def.mcporterUrlTemplate.replace("{projectRef}", safeProjectRef)
-                    """"${def.name}":{"url":"$url","lifecycle":"keep-alive"}"""
-                }
-                """{"mcpServers":{${servers.joinToString(",")}}}"""
-            }
+            val mcpTools = emptyList<McpToolConfig>()
+            val mcpRoutesJson = "{}"
+            val mcpMcporterJson = """{"mcpServers":{}}"""
 
             val awsAccessKeyId = dotenv["AWS_ACCESS_KEY_ID"] ?: System.getenv("AWS_ACCESS_KEY_ID") ?: ""
             val awsSecretAccessKey = dotenv["AWS_SECRET_ACCESS_KEY"] ?: System.getenv("AWS_SECRET_ACCESS_KEY") ?: ""
             val awsRegion = dotenv["AWS_REGION"] ?: System.getenv("AWS_REGION") ?: "us-east-1"
             val awsBearerTokenBedrock = dotenv["AWS_BEARER_TOKEN_BEDROCK"] ?: System.getenv("AWS_BEARER_TOKEN_BEDROCK") ?: ""
+            val liteLlmApiBase = dotenv["LITELLM_API_BASE"] ?: System.getenv("LITELLM_API_BASE") ?: ""
+            val liteLlmApiKey = dotenv["LITELLM_API_KEY"] ?: System.getenv("LITELLM_API_KEY") ?: ""
+            val liteLlmModelId = dotenv["LITELLM_MODEL_ID"] ?: System.getenv("LITELLM_MODEL_ID") ?: ""
 
             val containerInfo = containerService.createContainer(
                 hostIp = hostIp,
                 userId = userId,
                 subdomain = subdomain,
                 gatewayToken = gatewayToken,
-                hookToken = hookToken,
                 supabaseConfig = supabaseConfig,
                 mcpTools = mcpTools,
                 hostPort = allocatedPort,
@@ -260,7 +221,10 @@ class DockerHostProvisioningService(
                 awsAccessKeyId = awsAccessKeyId,
                 awsSecretAccessKey = awsSecretAccessKey,
                 awsRegion = awsRegion,
-                awsBearerTokenBedrock = awsBearerTokenBedrock
+                awsBearerTokenBedrock = awsBearerTokenBedrock,
+                liteLlmApiBase = liteLlmApiBase,
+                liteLlmApiKey = liteLlmApiKey,
+                liteLlmModelId = liteLlmModelId
             )
 
             containerId = containerInfo.containerId
@@ -279,7 +243,13 @@ class DockerHostProvisioningService(
             val dnsLabel = subdomain.removeSuffix(".suprclaw.com")
             val createdSubdomain = dnsProvider.createDnsRecord(dnsLabel, hostIp)
             logger.info("DNS record created: $createdSubdomain -> $hostIp")
-            waitForDnsResolution(createdSubdomain, hostIp)
+            runCatching {
+                waitForDnsResolution(createdSubdomain, hostIp)
+            }.onFailure { error ->
+                logger.warn(
+                    "DNS propagation check did not complete for $createdSubdomain -> $hostIp: ${error.message}. Continuing with provisioning."
+                )
+            }
 
             // Phase 8: Verify gateway
             updateStatus(dropletId, ProvisioningStatus.PHASE_VERIFYING, "Verifying gateway status...")
@@ -289,8 +259,6 @@ class DockerHostProvisioningService(
             updateStatus(dropletId, ProvisioningStatus.PHASE_CONFIGURING, "Initializing user database...")
             val vpsGatewayUrl = "https://$subdomain"
 
-            // Phase 8b: Approve pairing if required
-            approvePairingIfRequired(vpsGatewayUrl, gatewayToken, hostIp, containerId, dropletId)
             val proxyGatewayUrl = "wss://api.suprclaw.com"
 
             schemaRepository.initializeUserProject(
@@ -312,14 +280,14 @@ class DockerHostProvisioningService(
                 gatewayUrl = proxyGatewayUrl,
                 vpsGatewayUrl = vpsGatewayUrl,
                 gatewayToken = gatewayToken,
-                hookToken = hookToken,
                 supabaseProjectRef = safeProjectRef,
                 supabaseServiceKey = safeServiceKey,
                 supabaseUrl = safeEndpoint,
                 supabaseSchema = safeSchema,
                 createdAt = Instant.now().toString(),
                 status = "active",
-                configuredMcpTools = McpToolRegistry.defaultTools
+                configuredMcpTools = emptyList(),
+                agentRuntime = "picoclaw"
             )
 
             saveUserHostDroplet(userHostDroplet)
@@ -339,7 +307,7 @@ class DockerHostProvisioningService(
             // Patch IDENTITY.md in the container with the Supabase-generated agent ID
             val leadAgent = agentRepository.getLeadAgent(userClient)
             if (leadAgent?.id != null) {
-                val identityPath = "/home/openclaw/.openclaw/workspace/IDENTITY.md"
+                val identityPath = "${RuntimePaths.leadWorkspace}/IDENTITY.md"
                 sshCommandExecutor.runSshCommand(
                     hostIp,
                     "docker exec $containerId sed -i 's/UID in Supabase: `unknown`/UID in Supabase: `${leadAgent.id}`/' $identityPath"
@@ -416,18 +384,6 @@ class DockerHostProvisioningService(
         } catch (e: Exception) {
             logger.error("Failed to delete container", e)
             errors += "Container: ${e.message}"
-        }
-
-        // 1b. Remove devices volume (device pairing approvals are user-specific and no longer needed)
-        try {
-            val sanitizedUserId = userId.lowercase().replace(Regex("[^a-z0-9-]"), "-").take(20)
-            sshCommandExecutor.runSshCommand(
-                resolvedHostIp,
-                "docker volume rm openclaw-devices-$sanitizedUserId 2>/dev/null || true"
-            )
-            logger.info("🗑️ Devices volume removed for user $userId")
-        } catch (e: Exception) {
-            logger.warn("Failed to remove devices volume (non-fatal): ${e.message}")
         }
 
         // 2. Remove Traefik route
@@ -547,7 +503,7 @@ class DockerHostProvisioningService(
                 // Require a successful HTTP response from the container ingress, not just any body.
                 val output = sshCommandExecutor.runSshCommand(
                     hostIp,
-                    "curl -fsS -o /dev/null --connect-timeout 5 http://127.0.0.1:$port/ && echo 'READY' || echo 'NOT_READY'"
+                    "curl -fsS -o /dev/null --connect-timeout 5 http://127.0.0.1:$port/health && echo 'READY' || echo 'NOT_READY'"
                 )
 
                 if (output.trim() == "READY") {
@@ -593,16 +549,16 @@ class DockerHostProvisioningService(
         val supervisorLogs = runCatching {
             sshCommandExecutor.runSshCommand(
                 hostIp,
-                "docker exec $containerId sh -lc 'for f in /var/log/supervisor/openclaw-gateway.log /var/log/supervisor/openclaw-gateway.err /var/log/supervisor/nginx.err /var/log/supervisor/pairing-bootstrap.log /var/log/supervisor/pairing-bootstrap.err; do if [ -f \"${'$'}f\" ]; then echo \"===== ${'$'}f =====\"; tail -n 120 \"${'$'}f\"; fi; done' 2>&1 || true"
+                "docker exec $containerId sh -lc 'for f in /var/log/supervisor/picoclaw-gateway.log /var/log/supervisor/picoclaw-gateway.err; do if [ -f \"${'$'}f\" ]; then echo \"===== ${'$'}f =====\"; tail -n 120 \"${'$'}f\"; fi; done' 2>&1 || true"
             ).trim()
         }.getOrDefault("supervisor child logs unavailable")
 
         val runtimeLogs = runCatching {
             sshCommandExecutor.runSshCommand(
                 hostIp,
-                "docker exec $containerId sh -lc 'if [ -d /tmp/openclaw ]; then ls -lah /tmp/openclaw; for f in /tmp/openclaw/*.log; do [ -e \"${'$'}f\" ] || continue; echo \"===== ${'$'}f =====\"; tail -n 120 \"${'$'}f\"; done; else echo \"/tmp/openclaw missing\"; fi' 2>&1 || true"
+                "docker exec $containerId sh -lc 'if [ -d /tmp/picoclaw ]; then ls -lah /tmp/picoclaw; for f in /tmp/picoclaw/*.log; do [ -e \"${'$'}f\" ] || continue; echo \"===== ${'$'}f =====\"; tail -n 120 \"${'$'}f\"; done; else echo \"/tmp/picoclaw missing\"; fi' 2>&1 || true"
             ).trim()
-        }.getOrDefault("openclaw runtime logs unavailable")
+        }.getOrDefault("picoclaw runtime logs unavailable")
 
         val logs = runCatching {
             sshCommandExecutor.runSshCommand(
@@ -615,35 +571,107 @@ class DockerHostProvisioningService(
         logger.error("Container supervisor status for $containerId:\n$supervisor")
         logger.error("Container listening sockets for $containerId:\n$sockets")
         logger.error("Container supervisor child logs for $containerId:\n$supervisorLogs")
-        logger.error("Container OpenClaw runtime logs for $containerId:\n$runtimeLogs")
+        logger.error("Container PicoClaw runtime logs for $containerId:\n$runtimeLogs")
         logger.error("Container logs for $containerId:\n$logs")
     }
 
     private suspend fun waitForDnsResolution(hostname: String, expectedIp: String) {
-        val deadline = System.currentTimeMillis() + DNS_PROPAGATION_TIMEOUT_MS
+        val deadline = System.currentTimeMillis() + dnsPropagationTimeoutMs
+        var attempts = 0
 
         while (System.currentTimeMillis() < deadline) {
-            try {
-                val addresses = withContext(Dispatchers.IO) {
-                    InetAddress.getAllByName(hostname)
-                        .map { it.hostAddress }
-                        .distinct()
-                }
-
-                if (addresses.contains(expectedIp)) {
-                    logger.info("DNS propagated for $hostname -> ${addresses.joinToString(", ")}")
-                    return
-                }
-
-                logger.info("DNS for $hostname currently resolves to ${addresses.joinToString(", ")}; waiting for $expectedIp")
-            } catch (_: UnknownHostException) {
-                logger.info("DNS for $hostname is not resolvable yet; waiting...")
+            attempts += 1
+            val publicAddresses = resolveWithPublicDns(hostname)
+            if (publicAddresses.contains(expectedIp)) {
+                logger.info("DNS propagated for $hostname via public resolver -> ${publicAddresses.joinToString(", ")}")
+                return
             }
 
+            val systemAddresses = resolveWithSystemDns(hostname)
+            if (systemAddresses.contains(expectedIp)) {
+                logger.info("DNS propagated for $hostname via system resolver -> ${systemAddresses.joinToString(", ")}")
+                return
+            }
+
+            val combined = (systemAddresses + publicAddresses).distinct()
+            if (attempts >= 3) {
+                if (combined.isEmpty()) {
+                    logger.info("DNS for $hostname is still propagating after provider confirmation; continuing without blocking")
+                } else {
+                    logger.info(
+                        "DNS for $hostname currently resolves to ${combined.joinToString(", ")} while waiting for $expectedIp; continuing without blocking"
+                    )
+                }
+                return
+            }
+
+            if (combined.isEmpty()) {
+                logger.info("DNS for $hostname is not resolvable yet; waiting...")
+            } else {
+                logger.info("DNS for $hostname currently resolves to ${combined.joinToString(", ")}; waiting for $expectedIp")
+            }
             delay(2_000L)
         }
 
-        throw IllegalStateException("DNS record $hostname did not resolve to $expectedIp within ${DNS_PROPAGATION_TIMEOUT_MS / 1000}s")
+        logger.info("DNS for $hostname did not visibly propagate within ${dnsPropagationTimeoutMs / 1000}s; continuing with provider-confirmed record")
+    }
+
+    private suspend fun resolveWithSystemDns(hostname: String): List<String> {
+        return try {
+            withContext(Dispatchers.IO) {
+                InetAddress.getAllByName(hostname)
+                    .map { it.hostAddress }
+                    .distinct()
+            }
+        } catch (_: UnknownHostException) {
+            emptyList()
+        }
+    }
+
+    private suspend fun resolveWithPublicDns(hostname: String): List<String> {
+        val encodedName = URLEncoder.encode(hostname, Charsets.UTF_8)
+        val cacheBust = System.currentTimeMillis()
+        val endpoints = listOf(
+            "https://dns.google/resolve?name=$encodedName&type=A&nonce=$cacheBust",
+            "https://cloudflare-dns.com/dns-query?name=$encodedName&type=A&nonce=$cacheBust"
+        )
+
+        for (endpoint in endpoints) {
+            val addresses = runCatching {
+                withContext(Dispatchers.IO) {
+                    val connection = URI.create(endpoint).toURL().openConnection() as HttpURLConnection
+                    connection.requestMethod = "GET"
+                    connection.setRequestProperty("Accept", "application/dns-json")
+                    connection.setRequestProperty("Cache-Control", "no-cache")
+                    connection.setRequestProperty("Pragma", "no-cache")
+                    connection.connectTimeout = 10_000
+                    connection.readTimeout = 10_000
+                    val response = connection.inputStream.bufferedReader().use { it.readText() }
+                    val root = json.parseToJsonElement(response).jsonObject
+                    root["Answer"]
+                        ?.jsonArray
+                        ?.mapNotNull { answer ->
+                            val record = answer.jsonObject
+                            if (record["type"]?.jsonPrimitive?.content == "1") {
+                                record["data"]?.jsonPrimitive?.content
+                            } else {
+                                null
+                            }
+                        }
+                        ?.distinct()
+                        .orEmpty()
+                }
+            }.getOrElse { error ->
+                logger.debug("Public DNS lookup failed for $hostname via $endpoint: ${error.message}")
+                emptyList()
+            }
+
+            if (addresses.isNotEmpty()) {
+                return addresses
+            }
+        }
+
+        return emptyList()
     }
 
     private suspend fun cleanupOnFailure(
@@ -667,20 +695,6 @@ class DockerHostProvisioningService(
             }
         }
 
-        // Remove devices volume so repeated provisioning retries start with a clean device state.
-        if (hostIp != null) {
-            try {
-                val sanitizedUserId = userId.lowercase().replace(Regex("[^a-z0-9-]"), "-").take(20)
-                sshCommandExecutor.runSshCommand(
-                    hostIp,
-                    "docker volume rm openclaw-devices-$sanitizedUserId 2>/dev/null || true"
-                )
-                logger.info("Removed devices volume for user $userId")
-            } catch (e: Exception) {
-                logger.warn("Failed to remove devices volume during cleanup (non-fatal): ${e.message}")
-            }
-        }
-        
         // Release port
         if (port != null && hostId != null) {
             try {
@@ -721,75 +735,6 @@ class DockerHostProvisioningService(
         }
     }
 
-    private suspend fun approvePairingIfRequired(
-        vpsGatewayUrl: String,
-        gatewayToken: String,
-        hostIp: String,
-        containerId: String,
-        dropletId: Long
-    ) {
-        val session = openClawConnector.connect(token = gatewayToken, vpsGatewayUrl = vpsGatewayUrl)
-        if (session == null) {
-            logger.warn("Pairing phase skipped for droplet $dropletId: unable to open websocket to $vpsGatewayUrl")
-            return
-        }
-        try {
-            val deadlineMs = System.currentTimeMillis() + 25_000L
-            while (System.currentTimeMillis() < deadlineMs) {
-                val inbound = withTimeoutOrNull(2_500L) { session.incoming.receive() } ?: continue
-                if (inbound !is Frame.Text) continue
-                val frame = json.decodeFromString<WebSocketFrame>(inbound.readText())
-
-                if (frame.event == "connect.challenge") {
-                    openClawConnector.handleConnectChallenge(session, gatewayToken, frame.payload, "android")
-                    continue
-                }
-
-                if (frame.type == "res" && frame.error == null) {
-                    logger.info("Pairing phase: connect succeeded for droplet $dropletId (no approval needed)")
-                    return
-                }
-
-                val errorObj = frame.error?.jsonObject ?: continue
-                val message = errorObj["message"]?.jsonPrimitive?.contentOrNull ?: continue
-
-                if (message == "pairing required") {
-                    val requestId = runCatching {
-                        errorObj["details"]?.jsonObject?.get("requestId")?.jsonPrimitive?.contentOrNull
-                    }.getOrNull()
-
-                    if (requestId.isNullOrBlank()) {
-                        logger.warn("Pairing phase: pairing required but no requestId for droplet $dropletId")
-                        return
-                    }
-
-                    val safeRequestId = runCatching {
-                        requireUuid(requestId, "pairing requestId")
-                    }.getOrNull()
-
-                    if (safeRequestId == null) {
-                        logger.warn("Pairing phase: ignoring invalid requestId for droplet $dropletId")
-                        return
-                    }
-
-                    val approveCommand =
-                        "openclaw devices approve ${singleQuote(safeRequestId)} || test -s /home/openclaw/.openclaw/devices/paired.json"
-                    sshCommandExecutor.runSshCommand(
-                        hostIp,
-                        "docker exec $containerId su - openclaw -s /bin/sh -c ${singleQuote(approveCommand)}"
-                    )
-                    logger.info("Pairing phase: approved requestId=$safeRequestId (or pairing already present) for droplet $dropletId")
-                    return
-                }
-            }
-            logger.warn("Pairing phase timed out for droplet $dropletId")
-        } catch (e: Exception) {
-            logger.warn("Pairing phase failed for droplet $dropletId: ${e.message}")
-        } finally {
-            try { session.close() } catch (_: Exception) {}
-        }
-    }
-
     private fun generateGatewayToken(): String {
         val bytes = ByteArray(24)
         secureRandom.nextBytes(bytes)
@@ -824,7 +769,6 @@ class DockerHostProvisioningService(
             gatewayUrl = droplet.gatewayUrl,
             vpsGatewayUrl = droplet.vpsGatewayUrl,
             gatewayToken = droplet.gatewayToken,
-            hookToken = droplet.hookToken ?: "",
             ipAddress = droplet.hostIp,
             sshKey = droplet.port.toString(),
             subdomain = droplet.subdomain,
@@ -836,7 +780,8 @@ class DockerHostProvisioningService(
             supabaseUrl = droplet.supabaseUrl,
             supabaseSchema = droplet.supabaseSchema,
             configuredMcpTools = droplet.configuredMcpTools,
-            deploymentMode = "docker"
+            deploymentMode = "docker",
+            agentRuntime = droplet.agentRuntime
         )
 
         firestoreRepository.saveUserDroplet(internalDroplet)

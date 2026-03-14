@@ -43,7 +43,14 @@ class FirecrawlBrowserIntegrationTest {
 
     private fun env(key: String): String = System.getenv(key) ?: dotenv[key] ?: ""
 
+    private fun requireLiveFirecrawlOptIn() {
+        assumeTrue(env("INTEGRATION_TEST").equals("true", ignoreCase = true) || env("INTG_FIRECRAWL_LIVE").equals("true", ignoreCase = true)) {
+            "Set INTEGRATION_TEST=true or INTG_FIRECRAWL_LIVE=true to run live Firecrawl integration tests"
+        }
+    }
+
     private fun config(): BrowserConfig {
+        requireLiveFirecrawlOptIn()
         val apiKey = env("FIRECRAWL_API_KEY")
         assumeTrue(apiKey.isNotBlank()) { "FIRECRAWL_API_KEY not set — skipping Firecrawl browser integration tests" }
         return BrowserConfig(

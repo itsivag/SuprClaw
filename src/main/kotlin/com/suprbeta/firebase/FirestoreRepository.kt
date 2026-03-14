@@ -6,6 +6,12 @@ import com.google.cloud.firestore.DocumentSnapshot
 import com.google.cloud.firestore.FieldValue
 import com.google.cloud.firestore.QuerySnapshot
 import com.google.cloud.firestore.SetOptions
+import com.suprbeta.chat.ChatHistoryCrypto
+import com.suprbeta.chat.ChatMessageCursor
+import com.suprbeta.chat.ChatMessageView
+import com.suprbeta.chat.ChatMessageWrite
+import com.suprbeta.chat.ChatThreadCursor
+import com.suprbeta.chat.ChatThreadView
 import com.suprbeta.browser.BrowserProfileInternal
 import com.suprbeta.browser.BrowserSessionInternal
 import com.suprbeta.browser.BrowserSessionState
@@ -42,13 +48,16 @@ class FirestoreRepository(
         private const val USER_DROPLETS_SUBCOLLECTION = "droplets"
         private const val USER_USAGE_SUBCOLLECTION = "usage"
         private const val USER_MESSAGE_QUEUE_SUBCOLLECTION = "message_queue"
+        private const val USER_CHAT_THREADS_SUBCOLLECTION = "chat_threads"
         private const val USER_CONNECTORS_SUBCOLLECTION = "connectors"
         private const val USER_BROWSER_PROFILES_SUBCOLLECTION = "browser_profiles"
+        private const val CHAT_MESSAGES_SUBCOLLECTION = "messages"
         private const val CONNECTOR_SESSIONS_COLLECTION = "connector_sessions"
         private const val BROWSER_SESSIONS_COLLECTION = "browser_sessions"
         private const val PROJECT_REFS_COLLECTION = "supabase_project_refs"
         private const val HOSTS_COLLECTION = "hosts"
         private const val USER_HOST_MAPPINGS_COLLECTION = "user_host_mappings"
+        private const val DELETE_BATCH_SIZE = 400
     }
 
     data class QueuedMessage(val docId: String, val payload: String)
@@ -206,7 +215,6 @@ class FirestoreRepository(
     private fun encryptDroplet(droplet: UserDropletInternal): UserDropletInternal {
         return droplet.copy(
             gatewayToken = cryptoService.encrypt(droplet.gatewayToken, droplet.userId),
-            hookToken = cryptoService.encrypt(droplet.hookToken, droplet.userId),
             sshKey = cryptoService.encrypt(droplet.sshKey, droplet.userId),
             supabaseServiceKey = cryptoService.encrypt(droplet.supabaseServiceKey, droplet.userId)
         )
@@ -215,9 +223,54 @@ class FirestoreRepository(
     private fun decryptDroplet(droplet: UserDropletInternal): UserDropletInternal {
         return droplet.copy(
             gatewayToken = cryptoService.decrypt(droplet.gatewayToken, droplet.userId),
-            hookToken = cryptoService.decrypt(droplet.hookToken, droplet.userId),
             sshKey = cryptoService.decrypt(droplet.sshKey, droplet.userId),
             supabaseServiceKey = cryptoService.decrypt(droplet.supabaseServiceKey, droplet.userId)
+        )
+    }
+
+    private fun mapUserDropletInternal(snapshot: DocumentSnapshot): UserDropletInternal? {
+        if (!snapshot.exists()) return null
+
+        val configuredMcpTools = (snapshot.get("configuredMcpTools") as? List<*>)
+            ?.mapNotNull { it as? String }
+            .orEmpty()
+
+        return UserDropletInternal(
+            userId = snapshot.getString("userId") ?: snapshot.reference.parent.parent?.id.orEmpty(),
+            dropletId = snapshot.getLong("dropletId") ?: snapshot.id.toLongOrNull() ?: 0L,
+            dropletName = snapshot.getString("dropletName").orEmpty(),
+            gatewayUrl = snapshot.getString("gatewayUrl").orEmpty(),
+            vpsGatewayUrl = snapshot.getString("vpsGatewayUrl").orEmpty(),
+            gatewayToken = snapshot.getString("gatewayToken").orEmpty(),
+            sshKey = snapshot.getString("sshKey").orEmpty(),
+            ipAddress = snapshot.getString("ipAddress").orEmpty(),
+            subdomain = snapshot.getString("subdomain"),
+            createdAt = snapshot.getString("createdAt").orEmpty(),
+            status = snapshot.getString("status") ?: "active",
+            sslEnabled = snapshot.getBoolean("sslEnabled") ?: true,
+            supabaseProjectRef = snapshot.getString("supabaseProjectRef").orEmpty(),
+            supabaseServiceKey = snapshot.getString("supabaseServiceKey").orEmpty(),
+            supabaseUrl = snapshot.getString("supabaseUrl").orEmpty(),
+            supabaseSchema = snapshot.getString("supabaseSchema") ?: "public",
+            configuredMcpTools = configuredMcpTools,
+            deploymentMode = snapshot.getString("deploymentMode").orEmpty(),
+            agentRuntime = snapshot.getString("agentRuntime").orEmpty()
+                .ifBlank { snapshot.getString("runtime").orEmpty() }
+                .ifBlank { "picoclaw" }
+        )
+    }
+
+    private fun mapHostInfo(snapshot: DocumentSnapshot): HostInfo? {
+        if (!snapshot.exists()) return null
+
+        return HostInfo(
+            hostId = snapshot.getLong("hostId") ?: snapshot.id.toLongOrNull() ?: 0L,
+            hostIp = snapshot.getString("hostIp").orEmpty(),
+            totalCapacity = (snapshot.getLong("totalCapacity") ?: 20L).toInt(),
+            currentContainers = (snapshot.getLong("currentContainers") ?: 0L).toInt(),
+            status = snapshot.getString("status") ?: HostInfo.STATUS_ACTIVE,
+            createdAt = snapshot.getString("createdAt").orEmpty(),
+            region = snapshot.getString("region").orEmpty()
         )
     }
 
@@ -279,7 +332,7 @@ class FirestoreRepository(
             val snapshot: DocumentSnapshot = docRef.get().await()
 
             if (snapshot.exists()) {
-                val droplet = snapshot.toObject(UserDropletInternal::class.java)?.let { decryptDroplet(it) }
+                val droplet = mapUserDropletInternal(snapshot)?.let { decryptDroplet(it) }
                 application.log.debug("Found droplet for user $userId: dropletId=${droplet?.dropletId}, doc=${dropletDoc.id}")
                 droplet
             } else {
@@ -759,9 +812,230 @@ class FirestoreRepository(
                     .await()
             }
 
+            deleteChatThreads(userId)
+
             application.log.info("User droplet deleted successfully for user: $userId")
         } catch (e: Exception) {
             application.log.error("Failed to delete user droplet for user $userId", e)
+        }
+    }
+
+    // ==================== Chat History Operations ====================
+
+    suspend fun upsertChatMessage(write: ChatMessageWrite) {
+        try {
+            val userRef = firestore.collection(USERS).document(write.userId)
+            val threadRef = userRef.collection(USER_CHAT_THREADS_SUBCOLLECTION).document(write.threadId)
+            val messageRef = threadRef.collection(CHAT_MESSAGES_SUBCOLLECTION).document(write.id)
+
+            val encryptedContent = ChatHistoryCrypto.encryptContent(
+                cryptoService = cryptoService,
+                userId = write.userId,
+                threadId = write.threadId,
+                messageId = write.id,
+                value = write.content
+            )
+            val encryptedRaw = ChatHistoryCrypto.encryptRawFrame(
+                cryptoService = cryptoService,
+                userId = write.userId,
+                threadId = write.threadId,
+                messageId = write.id,
+                value = write.rawFrameJson
+            )
+            val encryptedPreview = ChatHistoryCrypto.encryptPreview(
+                cryptoService = cryptoService,
+                userId = write.userId,
+                threadId = write.threadId,
+                value = write.content
+            )
+
+            firestore.runTransaction { transaction ->
+                val existingMessage = transaction.get(messageRef).get()
+                val existingThread = transaction.get(threadRef).get()
+
+                val persistedCreatedAt = existingMessage.getString("createdAt") ?: write.createdAt
+                val threadCreatedAt = existingThread.getString("createdAt") ?: write.createdAt
+                val existingCount = existingThread.getLong("messageCount") ?: 0L
+                val currentUpdatedAt = existingThread.getString("updatedAt")
+                val currentLastMessageAt = existingThread.getString("lastMessageAt")
+
+                val messageData = mutableMapOf<String, Any>(
+                    "id" to write.id,
+                    "threadId" to write.threadId,
+                    "threadKey" to write.threadKey,
+                    "role" to write.role,
+                    "kind" to write.kind,
+                    "direction" to write.direction,
+                    "complete" to write.complete,
+                    "createdAt" to persistedCreatedAt,
+                    "updatedAt" to write.updatedAt,
+                    "content" to encryptedContent,
+                    "rawFrameJson" to encryptedRaw
+                )
+                write.frameId?.let { messageData["frameId"] = it }
+                write.state?.let { messageData["state"] = it }
+                write.taskId?.let { messageData["taskId"] = it }
+                write.agentId?.let { messageData["agentId"] = it }
+                transaction.set(messageRef, messageData, SetOptions.merge())
+
+                val threadData = mutableMapOf<String, Any>(
+                    "threadId" to write.threadId,
+                    "threadKey" to write.threadKey,
+                    "createdAt" to threadCreatedAt,
+                    "updatedAt" to maxOf(currentUpdatedAt ?: write.updatedAt, write.updatedAt),
+                    "messageCount" to if (existingMessage.exists()) existingCount else existingCount + 1L
+                )
+                write.taskId?.let { threadData["taskId"] = it }
+                write.agentId?.let { threadData["agentId"] = it }
+                if (currentLastMessageAt == null || currentLastMessageAt <= write.updatedAt) {
+                    threadData["lastMessageAt"] = write.updatedAt
+                    threadData["lastRole"] = write.role
+                    threadData["preview"] = encryptedPreview
+                }
+                transaction.set(threadRef, threadData, SetOptions.merge())
+                null
+            }.await()
+        } catch (e: Exception) {
+            application.log.error(
+                "Failed to upsert chat history message ${write.id} for user ${write.userId}",
+                e
+            )
+            throw e
+        }
+    }
+
+    suspend fun listChatThreads(userId: String, limit: Int, after: ChatThreadCursor? = null): List<ChatThreadView> {
+        return try {
+            var query = firestore.collection(USERS)
+                .document(userId)
+                .collection(USER_CHAT_THREADS_SUBCOLLECTION)
+                .orderBy("lastMessageAt", com.google.cloud.firestore.Query.Direction.DESCENDING)
+                .orderBy("threadId", com.google.cloud.firestore.Query.Direction.DESCENDING)
+                .limit(limit)
+
+            if (after != null) {
+                query = query.startAfter(after.lastMessageAt, after.threadId)
+            }
+
+            query.get().await().documents.mapNotNull { doc ->
+                runCatching { decodeChatThread(userId, doc) }
+                    .onFailure { application.log.error("Failed to decode chat thread ${doc.id} for user $userId", it) }
+                    .getOrNull()
+            }
+        } catch (e: Exception) {
+            application.log.error("Failed to list chat threads for user $userId", e)
+            emptyList()
+        }
+    }
+
+    suspend fun listChatMessages(
+        userId: String,
+        threadId: String,
+        limit: Int,
+        after: ChatMessageCursor? = null
+    ): List<ChatMessageView> {
+        return try {
+            val threadRef = firestore.collection(USERS)
+                .document(userId)
+                .collection(USER_CHAT_THREADS_SUBCOLLECTION)
+                .document(threadId)
+
+            var query = threadRef.collection(CHAT_MESSAGES_SUBCOLLECTION)
+                .orderBy("createdAt", com.google.cloud.firestore.Query.Direction.ASCENDING)
+                .orderBy("id", com.google.cloud.firestore.Query.Direction.ASCENDING)
+                .limit(limit)
+
+            if (after != null) {
+                query = query.startAfter(after.createdAt, after.messageId)
+            }
+
+            query.get().await().documents.mapNotNull { doc ->
+                runCatching { decodeChatMessage(userId, threadId, doc) }
+                    .onFailure {
+                        application.log.error(
+                            "Failed to decode chat message ${doc.id} for user $userId thread $threadId",
+                            it
+                        )
+                    }
+                    .getOrNull()
+            }
+        } catch (e: Exception) {
+            application.log.error("Failed to list chat messages for user $userId thread $threadId", e)
+            emptyList()
+        }
+    }
+
+    private fun decodeChatThread(userId: String, doc: DocumentSnapshot): ChatThreadView {
+        val threadId = doc.getString("threadId") ?: doc.id
+        val previewEncrypted = doc.getString("preview").orEmpty()
+        val preview = if (previewEncrypted.isBlank()) {
+            ""
+        } else {
+            ChatHistoryCrypto.decryptPreview(cryptoService, userId, threadId, previewEncrypted)
+        }
+
+        return ChatThreadView(
+            threadId = threadId,
+            threadKey = doc.getString("threadKey").orEmpty(),
+            taskId = doc.getString("taskId"),
+            agentId = doc.getString("agentId"),
+            createdAt = doc.getString("createdAt").orEmpty(),
+            updatedAt = doc.getString("updatedAt").orEmpty(),
+            lastMessageAt = doc.getString("lastMessageAt").orEmpty(),
+            lastRole = doc.getString("lastRole").orEmpty(),
+            messageCount = doc.getLong("messageCount") ?: 0L,
+            preview = preview
+        )
+    }
+
+    private fun decodeChatMessage(userId: String, threadId: String, doc: DocumentSnapshot): ChatMessageView {
+        val messageId = doc.getString("id") ?: doc.id
+        val content = ChatHistoryCrypto.decryptContent(
+            cryptoService = cryptoService,
+            userId = userId,
+            threadId = threadId,
+            messageId = messageId,
+            value = doc.getString("content").orEmpty()
+        )
+
+        return ChatMessageView(
+            id = messageId,
+            threadId = threadId,
+            threadKey = doc.getString("threadKey").orEmpty(),
+            role = doc.getString("role").orEmpty(),
+            kind = doc.getString("kind").orEmpty(),
+            direction = doc.getString("direction").orEmpty(),
+            frameId = doc.getString("frameId"),
+            state = doc.getString("state"),
+            complete = doc.getBoolean("complete") ?: true,
+            taskId = doc.getString("taskId"),
+            agentId = doc.getString("agentId"),
+            createdAt = doc.getString("createdAt").orEmpty(),
+            updatedAt = doc.getString("updatedAt").orEmpty(),
+            content = content
+        )
+    }
+
+    private suspend fun deleteChatThreads(userId: String) {
+        val threadDocs = firestore.collection(USERS)
+            .document(userId)
+            .collection(USER_CHAT_THREADS_SUBCOLLECTION)
+            .get()
+            .await()
+            .documents
+
+        threadDocs.forEach { threadDoc ->
+            val messageDocs = threadDoc.reference.collection(CHAT_MESSAGES_SUBCOLLECTION).get().await().documents
+            deleteDocuments(messageDocs.map { it.reference })
+        }
+        deleteDocuments(threadDocs.map { it.reference })
+    }
+
+    private suspend fun deleteDocuments(refs: List<com.google.cloud.firestore.DocumentReference>) {
+        refs.chunked(DELETE_BATCH_SIZE).forEach { chunk ->
+            val batch = firestore.batch()
+            chunk.forEach { batch.delete(it) }
+            batch.commit().await()
         }
     }
 
@@ -1054,7 +1328,7 @@ class FirestoreRepository(
                 .await()
             
             if (snapshot.exists()) {
-                snapshot.toObject(com.suprbeta.docker.models.HostInfo::class.java)
+                mapHostInfo(snapshot)
             } else {
                 null
             }
@@ -1071,9 +1345,7 @@ class FirestoreRepository(
         return try {
             application.log.debug("Fetching all hosts")
             val snapshot = firestore.collection(HOSTS_COLLECTION).get().await()
-            snapshot.documents.mapNotNull { 
-                it.toObject(com.suprbeta.docker.models.HostInfo::class.java) 
-            }
+            snapshot.documents.mapNotNull(::mapHostInfo)
         } catch (e: Exception) {
             application.log.error("Failed to fetch hosts", e)
             emptyList()
@@ -1196,7 +1468,7 @@ class FirestoreRepository(
             val snapshot = firestore.collectionGroup(USER_DROPLETS_SUBCOLLECTION).get().await()
             snapshot.documents.mapNotNull { doc ->
                 try {
-                    doc.toObject(UserDropletInternal::class.java)
+                    mapUserDropletInternal(doc)
                 } catch (e: Exception) {
                     application.log.warn("Failed to deserialize user droplet document ${doc.reference.path}", e)
                     null
@@ -1213,7 +1485,7 @@ class FirestoreRepository(
         return try {
             val snapshot = firestore.collectionGroup(USER_DROPLETS_SUBCOLLECTION).get().await()
             snapshot.documents.firstNotNullOfOrNull { doc ->
-                val raw = runCatching { doc.toObject(UserDropletInternal::class.java) }.getOrNull() ?: return@firstNotNullOfOrNull null
+                val raw = runCatching { mapUserDropletInternal(doc) }.getOrNull() ?: return@firstNotNullOfOrNull null
                 if (raw.gatewayToken == gatewayToken) {
                     runCatching { saveUserDroplet(raw) }
                         .onFailure { application.log.warn("Failed to migrate plaintext gateway token for userId=${raw.userId}", it) }

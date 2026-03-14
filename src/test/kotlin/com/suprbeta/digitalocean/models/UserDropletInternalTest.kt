@@ -75,7 +75,7 @@ class UserDropletInternalTest {
             gatewayUrl = "wss://api.suprclaw.com",
             vpsGatewayUrl = "https://secret.suprclaw.com",
             gatewayToken = "token123",
-            hookToken = "hooktoken",
+            sshKey = "ssh-key",
             ipAddress = "1.2.3.4",
             supabaseProjectRef = "proj_abc",
             supabaseServiceKey = "svc_key",
