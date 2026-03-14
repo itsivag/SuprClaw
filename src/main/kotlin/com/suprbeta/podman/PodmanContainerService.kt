@@ -1,9 +1,9 @@
-package com.suprbeta.docker
+package com.suprbeta.podman
 
 import com.suprbeta.config.AppConfig
 import com.suprbeta.core.ShellEscaping.singleQuote
 import com.suprbeta.core.SshCommandExecutor
-import com.suprbeta.docker.models.*
+import com.suprbeta.podman.models.*
 import com.suprbeta.runtime.RuntimePaths
 import io.ktor.server.application.*
 import kotlinx.serialization.encodeToString
@@ -13,12 +13,12 @@ import java.nio.file.Path
 import java.time.Instant
 
 /**
- * Service for managing Docker containers on host VPS instances.
+ * Service for managing Podman containers on host VPS instances.
  * 
  * This service creates, configures, and manages PicoClaw containers
  * via SSH commands to the host VPS.
  */
-class DockerContainerService(
+class PodmanContainerService(
     private val sshCommandExecutor: SshCommandExecutor,
     private val portAllocator: ContainerPortAllocator,
     private val application: Application
@@ -65,7 +65,7 @@ class DockerContainerService(
         // Ensure image exists on host
         ensureImageExists(hostIp)
 
-        // Generate container name (sanitize userId for Docker naming rules)
+        // Generate container name (sanitize userId for OCI naming rules)
         // Add random suffix to avoid collisions on retry after failed provisioning
         val sanitizedUserId = userId.lowercase().replace(Regex("[^a-z0-9-]"), "-").take(20)
         val randomSuffix = (100000..999999).random()
@@ -74,7 +74,7 @@ class DockerContainerService(
         // Remove any stale containers for this user left from failed provisioning attempts
         sshCommandExecutor.runSshCommand(
             hostIp,
-            "docker ps -a --filter 'name=picoclaw-$sanitizedUserId-' --format '{{.ID}}' | xargs -r docker rm -f 2>/dev/null || true"
+            "podman ps -a --filter 'name=picoclaw-$sanitizedUserId-' --format '{{.ID}}' | xargs -r podman rm -f 2>/dev/null || true"
         )
         
         // Prepare MCP config JSON
@@ -98,17 +98,17 @@ class DockerContainerService(
             liteLlmModelId = liteLlmModelId
         )
         
-        // Build docker run command
-        val dockerCommand = buildDockerRunCommand(
+        // Build podman run command
+        val podmanCommand = buildPodmanRunCommand(
             containerName = containerName,
             sanitizedUserId = sanitizedUserId,
             hostPort = hostPort,
             envVars = envVars
         )
-        
-        // Execute docker run
-        logger.debug("docker run command: $dockerCommand")
-        val output = sshCommandExecutor.runSshCommand(hostIp, dockerCommand)
+
+        // Execute podman run
+        logger.debug("podman run command: $podmanCommand")
+        val output = sshCommandExecutor.runSshCommand(hostIp, podmanCommand)
         val containerId = output.trim()
         
         if (containerId.isBlank() || containerId.length < 12) {
@@ -120,7 +120,7 @@ class DockerContainerService(
         // Wait briefly for container to start
         kotlinx.coroutines.delay(2000)
         
-        // Verify container is running ("Up X seconds" from docker ps)
+        // Verify container is running ("Up X seconds" from podman ps)
         val status = getContainerStatus(hostIp, containerId)
         if (!status.contains("up", ignoreCase = true)) {
             val logs = getContainerLogs(hostIp, containerId)
@@ -146,7 +146,7 @@ class DockerContainerService(
      */
     suspend fun startContainer(hostIp: String, containerId: String) {
         logger.info("Starting container $containerId on $hostIp")
-        sshCommandExecutor.runSshCommand(hostIp, "docker start $containerId")
+        sshCommandExecutor.runSshCommand(hostIp, "podman start $containerId")
     }
     
     /**
@@ -154,7 +154,7 @@ class DockerContainerService(
      */
     suspend fun stopContainer(hostIp: String, containerId: String) {
         logger.info("Stopping container $containerId on $hostIp")
-        sshCommandExecutor.runSshCommand(hostIp, "docker stop $containerId")
+        sshCommandExecutor.runSshCommand(hostIp, "podman stop $containerId")
     }
     
     /**
@@ -163,7 +163,7 @@ class DockerContainerService(
     suspend fun deleteContainer(hostIp: String, containerId: String) {
         logger.info("Deleting container $containerId on $hostIp")
         // Stop first (force if needed), then remove
-        sshCommandExecutor.runSshCommand(hostIp, "docker rm -f $containerId 2>/dev/null || true")
+        sshCommandExecutor.runSshCommand(hostIp, "podman rm -f $containerId 2>/dev/null || true")
     }
     
     /**
@@ -173,7 +173,7 @@ class DockerContainerService(
         return try {
             sshCommandExecutor.runSshCommand(
                 hostIp, 
-                "docker ps --filter \"id=$containerId\" --format '{{.Status}}' 2>/dev/null || echo 'not found'"
+                "podman ps --filter \"id=$containerId\" --format '{{.Status}}' 2>/dev/null || echo 'not found'"
             ).trim()
         } catch (e: Exception) {
             "error: ${e.message}"
@@ -187,7 +187,7 @@ class DockerContainerService(
         return try {
             sshCommandExecutor.runSshCommand(
                 hostIp,
-                "docker logs --tail $tail $containerId 2>&1 || echo 'No logs available'"
+                "podman logs --tail $tail $containerId 2>&1 || echo 'No logs available'"
             )
         } catch (e: Exception) {
             "error: ${e.message}"
@@ -200,7 +200,7 @@ class DockerContainerService(
     suspend fun execInContainer(hostIp: String, containerId: String, command: String): String {
         return sshCommandExecutor.runSshCommand(
             hostIp,
-            "docker exec $containerId $command"
+            "podman exec $containerId $command"
         )
     }
     
@@ -210,7 +210,7 @@ class DockerContainerService(
     suspend fun listContainers(hostIp: String): List<String> {
         val output = sshCommandExecutor.runSshCommand(
             hostIp,
-            "docker ps --format '{{.ID}}|{{.Names}}|{{.Status}}' 2>/dev/null || echo ''"
+            "podman ps --format '{{.ID}}|{{.Names}}|{{.Status}}' 2>/dev/null || echo ''"
         )
         return output.lines().filter { it.isNotBlank() }
     }
@@ -219,9 +219,9 @@ class DockerContainerService(
      * Checks if the configured PicoClaw image exists on the host, pulls it if not.
      */
     private suspend fun ensureImageExists(hostIp: String) {
-        val image = AppConfig.dockerPicoclawImage
-        val buildContext = AppConfig.dockerPicoclawBuildContext
-        val buildDockerfile = AppConfig.dockerPicoclawBuildDockerfile
+        val image = AppConfig.podmanPicoclawImage
+        val buildContext = AppConfig.podmanPicoclawBuildContext
+        val buildContainerfile = AppConfig.podmanPicoclawContainerfile
         val refreshLatestTag = image.substringAfterLast(':', "").equals("latest", ignoreCase = true) && !image.contains("@sha256:")
         val quotedImage = singleQuote(image)
         val quotedBuildContext = singleQuote(buildContext)
@@ -229,15 +229,15 @@ class DockerContainerService(
         if (refreshLatestTag) {
             logger.info("Refreshing PicoClaw image $image on $hostIp")
             runCatching {
-                sshCommandExecutor.runSshCommand(hostIp, "docker pull $image")
+                sshCommandExecutor.runSshCommand(hostIp, "podman pull $image")
             }.onFailure { error ->
-                logger.warn("docker pull for $image failed on $hostIp: ${error.message}. Falling back to docker build from $buildContext")
+                logger.warn("podman pull for $image failed on $hostIp: ${error.message}. Falling back to podman build from $buildContext")
                 sshCommandExecutor.runSshCommand(
                     hostIp,
                     buildRemoteContextCommand(
                         image = quotedImage,
                         buildContext = quotedBuildContext,
-                        dockerfilePath = buildDockerfile
+                        containerfilePath = buildContainerfile
                     )
                 )
             }
@@ -246,21 +246,21 @@ class DockerContainerService(
 
         val imageCheck = sshCommandExecutor.runSshCommand(
             hostIp,
-            "docker image inspect $quotedImage >/dev/null 2>&1 && echo 'FOUND' || echo 'NOT_FOUND'"
+            "podman image inspect $quotedImage >/dev/null 2>&1 && echo 'FOUND' || echo 'NOT_FOUND'"
         ).trim()
 
         if (imageCheck == "NOT_FOUND") {
             logger.info("PicoClaw image $image not found on $hostIp. Pulling...")
             runCatching {
-                sshCommandExecutor.runSshCommand(hostIp, "docker pull $image")
+                sshCommandExecutor.runSshCommand(hostIp, "podman pull $image")
             }.onFailure { error ->
-                logger.warn("docker pull for $image failed on $hostIp: ${error.message}. Falling back to docker build from $buildContext")
+                logger.warn("podman pull for $image failed on $hostIp: ${error.message}. Falling back to podman build from $buildContext")
                 sshCommandExecutor.runSshCommand(
                     hostIp,
                     buildRemoteContextCommand(
                         image = quotedImage,
                         buildContext = quotedBuildContext,
-                        dockerfilePath = buildDockerfile
+                        containerfilePath = buildContainerfile
                     )
                 )
             }
@@ -270,22 +270,22 @@ class DockerContainerService(
     private fun buildRemoteContextCommand(
         image: String,
         buildContext: String,
-        dockerfilePath: String
+        containerfilePath: String
     ): String {
-        val dockerfile = Files.readString(Path.of(dockerfilePath)).trimEnd()
+        val containerfile = Files.readString(Path.of(containerfilePath)).trimEnd()
         return buildString {
-            append("docker build -t ")
+            append("podman build -t ")
             append(image)
             append(" -f- ")
             append(buildContext)
-            append(" <<'SUPRCLAW_DOCKERFILE'\n")
-            append(dockerfile)
-            append("\nSUPRCLAW_DOCKERFILE")
+            append(" <<'SUPRCLAW_CONTAINERFILE'\n")
+            append(containerfile)
+            append("\nSUPRCLAW_CONTAINERFILE")
         }
     }
     
     /**
-     * Builds environment variable arguments for docker run.
+     * Builds environment variable arguments for podman run.
      */
     private fun buildEnvironmentVariables(
         gatewayToken: String,
@@ -328,9 +328,9 @@ class DockerContainerService(
     }
     
     /**
-     * Builds the docker run command with all necessary options.
+     * Builds the podman run command with all necessary options.
      */
-    private fun buildDockerRunCommand(
+    private fun buildPodmanRunCommand(
         containerName: String,
         sanitizedUserId: String,
         hostPort: Int,
@@ -342,17 +342,14 @@ class DockerContainerService(
         }
 
         return buildString {
-            append("docker run -d")
+            append("podman run -d")
+            append(" --replace")
             append(" --name $containerName")
             append(" --restart unless-stopped")
             append(" -p 127.0.0.1:$hostPort:$CONTAINER_PORT")
-            append(" --memory=${AppConfig.dockerContainerMemory}")
-            append(" --cpus=${AppConfig.dockerContainerCpu}")
-            append(" --log-driver json-file")
-            append(" --log-opt max-size=10m")
-            append(" --log-opt max-file=3")
+            append(" --memory=${AppConfig.podmanContainerMemory}")
             append(" $envArgs")
-            append(" ${AppConfig.dockerPicoclawImage}")
+            append(" ${AppConfig.podmanPicoclawImage}")
         }
     }
     

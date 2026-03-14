@@ -21,7 +21,7 @@ import com.suprbeta.core.CryptoOperationException
 import com.suprbeta.digitalocean.models.ProvisioningStatus
 import com.suprbeta.digitalocean.models.UserDroplet
 import com.suprbeta.digitalocean.models.UserDropletInternal
-import com.suprbeta.docker.models.HostInfo
+import com.suprbeta.podman.models.HostInfo
 import com.suprbeta.usage.CreditCalculator
 import com.suprbeta.usage.DailyUsageData
 import com.suprbeta.websocket.models.TokenUsageDelta
@@ -1297,12 +1297,12 @@ class FirestoreRepository(
         }
     }
 
-    // ==================== Host Management Operations (Docker Multi-Tenant) ====================
+    // ==================== Host Management Operations (Podman Multi-Tenant) ====================
 
     /**
-     * Saves or updates host information for Docker multi-tenant architecture.
+     * Saves or updates host information for Podman multi-tenant architecture.
      */
-    suspend fun saveHostInfo(hostInfo: com.suprbeta.docker.models.HostInfo) {
+    suspend fun saveHostInfo(hostInfo: com.suprbeta.podman.models.HostInfo) {
         try {
             application.log.info("Saving host info: ${hostInfo.hostId}")
             firestore.collection(HOSTS_COLLECTION)
@@ -1319,7 +1319,7 @@ class FirestoreRepository(
     /**
      * Retrieves host information by host ID.
      */
-    suspend fun getHostInfo(hostId: Long): com.suprbeta.docker.models.HostInfo? {
+    suspend fun getHostInfo(hostId: Long): com.suprbeta.podman.models.HostInfo? {
         return try {
             application.log.debug("Fetching host info: $hostId")
             val snapshot = firestore.collection(HOSTS_COLLECTION)
@@ -1341,7 +1341,7 @@ class FirestoreRepository(
     /**
      * Lists all hosts.
      */
-    suspend fun listHosts(): List<com.suprbeta.docker.models.HostInfo> {
+    suspend fun listHosts(): List<com.suprbeta.podman.models.HostInfo> {
         return try {
             application.log.debug("Fetching all hosts")
             val snapshot = firestore.collection(HOSTS_COLLECTION).get().await()

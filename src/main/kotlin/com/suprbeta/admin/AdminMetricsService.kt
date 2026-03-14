@@ -1,7 +1,7 @@
 package com.suprbeta.admin
 
 import com.suprbeta.core.SshCommandExecutor
-import com.suprbeta.docker.models.HostInfo
+import com.suprbeta.podman.models.HostInfo
 import com.suprbeta.firebase.FirestoreRepository
 import io.ktor.server.application.*
 import kotlinx.coroutines.async
@@ -26,12 +26,12 @@ class AdminMetricsService(
         val hosts = firestoreRepository.listHosts()
             .filter { it.status == HostInfo.STATUS_ACTIVE || it.status == HostInfo.STATUS_FULL }
 
-        val dockerAssignmentsByHost = buildDockerAssignments()
+        val containerAssignmentsByHost = buildPodmanAssignments()
             .groupBy { it.hostId }
 
         val hostMetrics = hosts.map { host ->
             async {
-                collectHostMetrics(host, dockerAssignmentsByHost[host.hostId].orEmpty())
+                collectHostMetrics(host, containerAssignmentsByHost[host.hostId].orEmpty())
             }
         }.map { it.await() }
 
@@ -44,14 +44,14 @@ class AdminMetricsService(
         )
     }
 
-    private suspend fun buildDockerAssignments(): List<DockerAssignment> {
+    private suspend fun buildPodmanAssignments(): List<PodmanAssignment> {
         return firestoreRepository.listAllUserDropletsInternal()
-            .filter { it.userId.isNotBlank() && it.isDockerDeployment() && it.dropletId > 0L }
+            .filter { it.userId.isNotBlank() && it.isContainerDeployment() && it.dropletId > 0L }
             .mapNotNull { droplet ->
                 val containerId = droplet.containerIdOrNull() ?: droplet.dropletName.trim().takeIf { it.isNotBlank() }
                 val hostId = droplet.dropletId
                 if (containerId.isNullOrBlank() || hostId <= 0L) return@mapNotNull null
-                DockerAssignment(
+                PodmanAssignment(
                     userId = droplet.userId,
                     hostId = hostId,
                     containerId = containerId.lowercase()
@@ -59,7 +59,7 @@ class AdminMetricsService(
             }
     }
 
-    private fun collectHostMetrics(host: HostInfo, assignments: List<DockerAssignment>): AdminHostMetrics {
+    private fun collectHostMetrics(host: HostInfo, assignments: List<PodmanAssignment>): AdminHostMetrics {
         val errors = mutableListOf<String>()
 
         val hostSnapshot = runCatching {
@@ -70,16 +70,16 @@ class AdminMetricsService(
             errors += "host snapshot unavailable"
         }.getOrNull()
 
-        val dockerRows = runCatching {
-            val raw = sshCommandExecutor.runSshCommand(host.hostIp, dockerStatsCommand())
-            AdminMetricsParser.parseDockerStats(raw)
+        val podmanRows = runCatching {
+            val raw = sshCommandExecutor.runSshCommand(host.hostIp, podmanStatsCommand())
+            AdminMetricsParser.parsePodmanStats(raw)
         }.onFailure {
-            log.warn("Failed to collect docker stats for host ${host.hostId}: ${it.message}")
-            errors += "docker stats unavailable"
+            log.warn("Failed to collect podman stats for host ${host.hostId}: ${it.message}")
+            errors += "podman stats unavailable"
         }.getOrElse { emptyList() }
 
         val matchedAssignments = mutableSetOf<String>()
-        val containers = dockerRows.map { row ->
+        val containers = podmanRows.map { row ->
             val assignment = resolveAssignment(assignments, row.containerId)
             if (assignment != null) {
                 matchedAssignments += assignment.containerId
@@ -121,7 +121,7 @@ class AdminMetricsService(
         )
     }
 
-    private fun resolveAssignment(assignments: List<DockerAssignment>, containerIdRaw: String): DockerAssignment? {
+    private fun resolveAssignment(assignments: List<PodmanAssignment>, containerIdRaw: String): PodmanAssignment? {
         val containerId = containerIdRaw.trim().lowercase()
         if (containerId.isBlank()) return null
         return assignments.firstOrNull { assignment ->
@@ -180,8 +180,8 @@ class AdminMetricsService(
         )
     }
 
-    private fun dockerStatsCommand(): String =
-        "docker stats --no-stream --format '{{json .}}' 2>/dev/null || true"
+    private fun podmanStatsCommand(): String =
+        "podman stats --no-stream --format '{{json .}}' 2>/dev/null || true"
 
     private fun hostSnapshotCommand(): String {
         val d = '$'
@@ -226,7 +226,7 @@ class AdminMetricsService(
         """.trimIndent()
     }
 
-    private data class DockerAssignment(
+    private data class PodmanAssignment(
         val userId: String,
         val hostId: Long,
         val containerId: String

@@ -17,11 +17,11 @@ class DropletMcpServiceTest {
     private val sshExecutor = mockk<SshCommandExecutor>()
     private val managementService = mockk<SupabaseManagementService>(relaxed = true)
 
-    private val dockerDroplet = UserDropletInternal(
+    private val podmanDroplet = UserDropletInternal(
         userId = "user1",
         dropletId = 1L,
         dropletName = "71bb0ef6c173d2db26c6f011f0d2743908f5891a3708def3ea255edbe124c7a8",
-        deploymentMode = "docker",
+        deploymentMode = "podman",
         ipAddress = "1.2.3.4",
         supabaseProjectRef = "proj_abc12345",
         gatewayToken = "gw-token"
@@ -53,10 +53,10 @@ class DropletMcpServiceTest {
         every { managementService.managementToken } returns "mgmt-token"
         val service = buildService(application)
 
-        service.configureMcpTools(dockerDroplet, listOf("supabase", "cloud_browser"))
+        service.configureMcpTools(podmanDroplet, listOf("supabase", "cloud_browser"))
 
         assertEquals(2, commands.size)
-        assertContains(commands[0], "docker exec")
+        assertContains(commands[0], "podman exec")
         assertContains(commands[0], "picoclaw.json")
         assertContains(commands[0], "\"https://supabase.suprclaw.com\"")
         assertContains(commands[0], "\"https://api.suprclaw.com/api/mcp/cloud-browser\"")

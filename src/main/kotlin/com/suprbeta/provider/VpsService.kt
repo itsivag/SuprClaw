@@ -7,7 +7,7 @@ package com.suprbeta.provider
 interface VpsService {
     /**
      * Creates a new server with bootstrap user-data for the given password.
-     * Optionally pass [userDataOverride] to supply custom cloud-init (e.g. Docker host setup).
+     * Optionally pass [userDataOverride] to supply custom cloud-init (e.g. Podman host setup).
      * @return result containing the new server ID
      */
     suspend fun createServer(name: String, password: String, userDataOverride: String? = null): ServerCreateResult

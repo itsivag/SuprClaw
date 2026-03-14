@@ -20,11 +20,11 @@ import com.suprbeta.digitalocean.AgentWorkspaceServiceImpl
 import com.suprbeta.digitalocean.configureAgentRoutes
 import com.suprbeta.core.SshCommandExecutorImpl
 import com.suprbeta.digitalocean.configureDropletRoutes
-import com.suprbeta.docker.ContainerPortAllocator
-import com.suprbeta.docker.DockerContainerService
-import com.suprbeta.docker.DockerHostProvisioningService
-import com.suprbeta.docker.HostPoolManager
-import com.suprbeta.docker.TraefikManager
+import com.suprbeta.podman.ContainerPortAllocator
+import com.suprbeta.podman.PodmanContainerService
+import com.suprbeta.podman.PodmanHostProvisioningService
+import com.suprbeta.podman.HostPoolManager
+import com.suprbeta.podman.TraefikManager
 import com.suprbeta.firebase.FirebaseAuthPlugin
 import com.suprbeta.firebase.FirebaseAuthService
 import com.suprbeta.firebase.FirebaseService
@@ -323,17 +323,17 @@ fun Application.configureProvisioning(
         "Unsupported VPS_PROVIDER '$configuredVpsProvider'. DigitalOcean provider has been removed; set VPS_PROVIDER=hetzner."
     }
     val (vpsService, dnsProvider) = createHetznerProviders(httpClient)
-    log.info("Provisioning mode: docker (vps provider: hetzner)")
+    log.info("Provisioning mode: podman (vps provider: hetzner)")
 
     val portAllocator = ContainerPortAllocator(
-        startPort = AppConfig.dockerPortMin,
-        endPort = AppConfig.dockerPortMax
+        startPort = AppConfig.podmanPortMin,
+        endPort = AppConfig.podmanPortMax
     )
     val hostPoolManager = HostPoolManager(vpsService, firestoreRepository, sshCommandExecutor, this)
-    val containerService = DockerContainerService(sshCommandExecutor, portAllocator, this)
+    val containerService = PodmanContainerService(sshCommandExecutor, portAllocator, this)
     val traefikManager = TraefikManager(sshCommandExecutor, this)
 
-    val provisioningService: DropletProvisioningService = DockerHostProvisioningService(
+    val provisioningService: DropletProvisioningService = PodmanHostProvisioningService(
         vpsService = vpsService,
         hostPoolManager = hostPoolManager,
         containerService = containerService,
@@ -358,7 +358,7 @@ fun Application.configureProvisioning(
                     try {
                         val portsOutput = sshCommandExecutor.runSshCommand(
                             host.hostIp,
-                            "docker ps --filter 'name=picoclaw-' --format '{{.Ports}}' 2>/dev/null || echo ''"
+                            "podman ps --filter 'name=picoclaw-' --format '{{.Ports}}' 2>/dev/null || echo ''"
                         )
                         val usedPorts = portsOutput.lines()
                             .filter { it.isNotBlank() }

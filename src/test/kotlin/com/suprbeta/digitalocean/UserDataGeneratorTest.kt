@@ -29,8 +29,8 @@ class UserDataGeneratorTest {
     }
 
     @Test
-    fun `docker host user data includes pinned host key material`() {
-        val userData = UserDataGenerator.generateDockerHostUserData(
+    fun `podman host user data includes pinned host key material`() {
+        val userData = UserDataGenerator.generatePodmanHostUserData(
             sshPublicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestUserKey picoclaw-user",
             hostKeyMaterial = hostKeyMaterial
         )

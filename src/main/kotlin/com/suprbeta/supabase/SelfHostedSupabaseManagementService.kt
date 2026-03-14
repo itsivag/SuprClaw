@@ -120,7 +120,7 @@ class SelfHostedSupabaseManagementService(
 
     private val sshUser: String = env("SUPABASE_SELF_HOSTED_SSH_USER").ifBlank { "root" }
 
-    private val dockerDir: String = env("SUPABASE_SELF_HOSTED_DOCKER_DIR").ifBlank { "/opt/supabase/docker" }
+    private val stackDir: String = env("SUPABASE_SELF_HOSTED_STACK_DIR").ifBlank { "/opt/supabase/podman" }
     private val sshHostKeyVerifier: HostKeyVerifier by lazy { SshHostKeyVerifierFactory.createSelfHostedVerifier(application) }
 
     private val privateKeyPem: String by lazy {
@@ -279,22 +279,22 @@ class SelfHostedSupabaseManagementService(
         internal fun roleDropStatement(schemaName: String): String =
             "DROP ROLE IF EXISTS ${schemaName}_rpc"
 
-        internal fun buildReadConfiguredSchemasCommand(dockerDir: String): String = """
-            cd $dockerDir && \
+        internal fun buildReadConfiguredSchemasCommand(stackDir: String): String = """
+            cd $stackDir && \
             (grep '^PGRST_DB_SCHEMAS=' .env | head -n 1 | cut -d= -f2- || true)
         """.trimIndent()
 
-        internal fun buildUpdateConfiguredSchemasCommand(dockerDir: String, schemas: List<String>): String {
+        internal fun buildUpdateConfiguredSchemasCommand(stackDir: String, schemas: List<String>): String {
             val schemaValue = schemas.joinToString(",")
             val appendedLine = shellSingleQuote("PGRST_DB_SCHEMAS=$schemaValue")
             return """
-                cd $dockerDir && \
+                cd $stackDir && \
                 if grep -q '^PGRST_DB_SCHEMAS=' .env; then \
                     sed -i "s|^PGRST_DB_SCHEMAS=.*|PGRST_DB_SCHEMAS=$schemaValue|" .env; \
                 else \
                     printf '%s\n' $appendedLine >> .env; \
                 fi && \
-                docker compose up -d --force-recreate rest
+                podman compose up -d --force-recreate rest
             """.trimIndent()
         }
 
@@ -504,7 +504,7 @@ class SelfHostedSupabaseManagementService(
     private suspend fun reconcilePostgrestConfiguration(reason: String) {
         POSTGREST_CONFIG_MUTEX.withLock {
             val currentConfiguredSchemas = parseConfiguredPostgrestSchemas(
-                runSshCommand(sshHost, sshUser, buildReadConfiguredSchemasCommand(dockerDir)).trim()
+                runSshCommand(sshHost, sshUser, buildReadConfiguredSchemasCommand(stackDir)).trim()
             )
             val tenantSchemasFromDb = withContext(Dispatchers.IO) { queryTenantSchemas() }
             val plan = planPostgrestSchemaReconciliation(currentConfiguredSchemas, tenantSchemasFromDb)
@@ -525,7 +525,7 @@ class SelfHostedSupabaseManagementService(
             runSshCommand(
                 sshHost,
                 sshUser,
-                buildUpdateConfiguredSchemasCommand(dockerDir, plan.desiredSchemas)
+                buildUpdateConfiguredSchemasCommand(stackDir, plan.desiredSchemas)
             )
             logger.info("✅ PostgREST restarted with reconciled schemas ${formatSchemaList(plan.desiredSchemas)}")
         }

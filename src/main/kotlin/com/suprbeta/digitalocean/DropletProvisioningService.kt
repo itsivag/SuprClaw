@@ -6,7 +6,7 @@ import com.suprbeta.digitalocean.models.UserDroplet
 /**
  * Provisioning contract used by the API layer.
  *
- * SuprClaw now provisions PicoClaw environments through the shared-host Docker
+ * SuprClaw now provisions PicoClaw environments through the shared-host Podman
  * implementation. The legacy dedicated droplet implementation has been removed.
  */
 interface DropletProvisioningService {

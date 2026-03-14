@@ -18,10 +18,10 @@ class RuntimeCommandExecutor(
 
     fun wrapForDroplet(droplet: UserDropletInternal, command: String): String {
         val userShell = "su - ${RuntimePaths.runtimeUser} -s /bin/sh -lc ${singleQuote(command)}"
-        return if (droplet.isDockerDeployment()) {
+        return if (droplet.isContainerDeployment()) {
             val containerId = droplet.containerIdOrNull()
-                ?: throw IllegalStateException("Missing container ID for docker deployment")
-            "docker exec ${singleQuote(containerId)} $userShell"
+                ?: throw IllegalStateException("Missing container ID for container deployment")
+            "podman exec ${singleQuote(containerId)} $userShell"
         } else {
             command
         }

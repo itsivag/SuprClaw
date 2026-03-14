@@ -4,7 +4,7 @@
 
 ## About
 
-SuprClaw is the backend service for a multi-tenant AI agent orchestration platform. It provisions PicoClaw runtimes on Hetzner-backed Docker hosts, manages per-user isolated databases via Supabase, and proxies real-time WebSocket communication between clients and user runtimes.
+SuprClaw is the backend service for a multi-tenant AI agent orchestration platform. It provisions PicoClaw runtimes on Hetzner-backed Podman hosts, manages per-user isolated databases via Supabase, and proxies real-time WebSocket communication between clients and user runtimes.
 
 Each user gets their own PicoClaw runtime container on a managed host and an isolated Supabase project for storing tasks, agents, and conversation history.
 
@@ -32,7 +32,7 @@ Client (Android/iOS/macOS)
 ### Key Flows
 
 **1. Provisioning a new user**
-- Allocates capacity on a Hetzner Docker host (or creates a new host)
+- Allocates capacity on a Hetzner Podman host (or creates a new host)
 - Creates a dedicated PicoClaw container for the user
 - In parallel: creates a per-user Supabase project
 - Configures SSH, gateway token, DNS, and SSL on the host
@@ -135,14 +135,11 @@ The server starts on `http://0.0.0.0:8080`.
 java -jar build/libs/suprclaw-all.jar
 ```
 
-### Docker
+### Container Image
 
 ```bash
-# Build the Docker image
+# Build the container image
 ./gradlew buildImage
-
-# Run with Docker
-./gradlew runDocker
 ```
 
 ### Deployment
@@ -189,6 +186,6 @@ Admin APIs under `/api/admin/*` additionally require Firebase custom claim `role
 - **Runtime**: Kotlin / Ktor 3.4.0 / JVM 21
 - **Auth**: Firebase Auth + Firestore
 - **Database**: Supabase (central routing) + per-user Supabase projects
-- **Infrastructure**: Hetzner Cloud hosts + Docker containers + DNS
+- **Infrastructure**: Hetzner Cloud hosts + Podman containers + DNS
 - **VPS config**: SSH via SSHJ
 - **Build**: Gradle with Shadow plugin

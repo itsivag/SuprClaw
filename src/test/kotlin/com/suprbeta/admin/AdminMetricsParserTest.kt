@@ -16,7 +16,7 @@ class AdminMetricsParserTest {
     }
 
     @Test
-    fun `parse docker usage and io pairs`() {
+    fun `parse podman usage and io pairs`() {
         val (used, limit) = AdminMetricsParser.parseUsagePair("824KiB / 1GiB")
         val (rx, tx) = AdminMetricsParser.parseIoPair("12.5kB / 2.0MB")
 
@@ -27,9 +27,9 @@ class AdminMetricsParserTest {
     }
 
     @Test
-    fun `parse docker stats json line`() {
+    fun `parse podman stats json line`() {
         val raw = """{"ID":"abc123","CPUPerc":"10.5%","MemUsage":"50MiB / 200MiB","NetIO":"10kB / 12kB"}"""
-        val rows = AdminMetricsParser.parseDockerStats(raw)
+        val rows = AdminMetricsParser.parsePodmanStats(raw)
 
         assertEquals(1, rows.size)
         assertEquals("abc123", rows.first().containerId)

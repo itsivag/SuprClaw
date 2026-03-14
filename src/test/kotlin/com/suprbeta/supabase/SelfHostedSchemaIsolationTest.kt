@@ -147,12 +147,12 @@ class SelfHostedSchemaIsolationTest {
     @Test
     fun `buildUpdateConfiguredSchemasCommand recreates rest with reconciled schema list`() {
         val command = SelfHostedSupabaseManagementService.buildUpdateConfiguredSchemasCommand(
-            "/opt/supabase/docker",
+            "/opt/supabase/podman",
             listOf("public", "storage", "graphql_public", "proj_abc")
         )
 
-        assertTrue(command.contains("cd /opt/supabase/docker"))
+        assertTrue(command.contains("cd /opt/supabase/podman"))
         assertTrue(command.contains("PGRST_DB_SCHEMAS=public,storage,graphql_public,proj_abc"))
-        assertTrue(command.contains("docker compose up -d --force-recreate rest"))
+        assertTrue(command.contains("podman compose up -d --force-recreate rest"))
     }
 }

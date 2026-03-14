@@ -1,10 +1,10 @@
-package com.suprbeta.docker.models
+package com.suprbeta.podman.models
 
 import com.google.cloud.firestore.annotation.Exclude
 import kotlinx.serialization.Serializable
 
 /**
- * Information about a running Docker container for a user.
+ * Information about a running Podman container for a user.
  */
 @Serializable
 data class ContainerInfo(

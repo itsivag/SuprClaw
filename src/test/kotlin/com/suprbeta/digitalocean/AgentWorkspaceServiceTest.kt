@@ -30,7 +30,7 @@ class AgentWorkspaceServiceTest {
     private val sshExecutor = mockk<SshCommandExecutor>()
     private val supabaseClient = mockk<SupabaseClient>(relaxed = true)
 
-    private val dockerDroplet = UserDropletInternal(
+    private val podmanDroplet = UserDropletInternal(
         userId = "user-1",
         dropletId = 99L,
         dropletName = "71bb0ef6c173d2db26c6f011f0d2743908f5891a3708def3ea255edbe124c7a8",
@@ -39,10 +39,10 @@ class AgentWorkspaceServiceTest {
         supabaseUrl = "https://supabase.suprclaw.com",
         supabaseServiceKey = "service-key",
         supabaseSchema = "proj_abc123",
-        deploymentMode = "docker"
+        deploymentMode = "podman"
     )
 
-    private val vpsDroplet = dockerDroplet.copy(
+    private val vpsDroplet = podmanDroplet.copy(
         dropletName = "picoclaw-vps",
         deploymentMode = "vps"
     )
@@ -89,18 +89,18 @@ class AgentWorkspaceServiceTest {
         )
 
     @Test
-    fun `listWorkspaceFiles resolves Lead to the lead workspace path in docker mode`() = testApplication {
+    fun `listWorkspaceFiles resolves Lead to the lead workspace path in podman mode`() = testApplication {
         val commandSlot = slot<String>()
         val service = buildService(application)
 
-        coEvery { firestoreRepository.getUserDropletInternal("user-1") } returns dockerDroplet
+        coEvery { firestoreRepository.getUserDropletInternal("user-1") } returns podmanDroplet
         every { sshExecutor.runSshCommand("10.0.0.5", capture(commandSlot)) } returns "SOUL.md\nUSER.md\n"
 
         val response = service.listWorkspaceFiles("user-1", 99L, "Lead")
 
         assertEquals(listOf("SOUL.md", "USER.md"), response.files)
         assertEquals("lead", response.workspaceType)
-        assertTrue(commandSlot.captured.contains("docker exec"))
+        assertTrue(commandSlot.captured.contains("podman exec"))
         assertTrue(commandSlot.captured.contains("71bb0ef6c173d2db26c6f011f0d2743908f5891a3708def3ea255edbe124c7a8"))
         assertTrue(commandSlot.captured.contains("/home/picoclaw/.picoclaw/workspace"))
         assertFalse(commandSlot.captured.contains("AGENTS.md"))
@@ -114,7 +114,7 @@ class AgentWorkspaceServiceTest {
         val commandSlot = slot<String>()
         val service = buildService(application)
 
-        coEvery { firestoreRepository.getUserDropletInternal("user-1") } returns dockerDroplet
+        coEvery { firestoreRepository.getUserDropletInternal("user-1") } returns podmanDroplet
         every { userClientProvider.getClient(any(), any(), any()) } returns supabaseClient
         coEvery { agentRepository.getAgents(supabaseClient) } returns listOf(
             com.suprbeta.digitalocean.models.UserAgent(name = "content-writer")
@@ -125,7 +125,7 @@ class AgentWorkspaceServiceTest {
 
         assertEquals("marketplace", response.workspaceType)
         assertEquals(listOf("IDENTITY.md"), response.files)
-        assertTrue(commandSlot.captured.contains("docker exec"))
+        assertTrue(commandSlot.captured.contains("podman exec"))
         assertTrue(commandSlot.captured.contains("/home/picoclaw/.picoclaw/workspace-content"))
     }
 
@@ -133,7 +133,7 @@ class AgentWorkspaceServiceTest {
     fun `listWorkspaceFiles filters hidden workspace docs from ssh output`() = testApplication {
         val service = buildService(application)
 
-        coEvery { firestoreRepository.getUserDropletInternal("user-1") } returns dockerDroplet
+        coEvery { firestoreRepository.getUserDropletInternal("user-1") } returns podmanDroplet
         every { sshExecutor.runSshCommand("10.0.0.5", any()) } returns
             "AGENTS.md\nTOOLS.md\nHEARTBEAT.md\nBOOTSTRAP.md\nSOUL.md\nUSER.md\n"
 
@@ -143,12 +143,12 @@ class AgentWorkspaceServiceTest {
     }
 
     @Test
-    fun `getWorkspaceFile decodes base64 content in docker mode`() = testApplication {
+    fun `getWorkspaceFile decodes base64 content in podman mode`() = testApplication {
         val commandSlot = slot<String>()
         val service = buildService(application)
         val encoded = Base64.getEncoder().encodeToString("# AGENTS.md\n\nHello".toByteArray())
 
-        coEvery { firestoreRepository.getUserDropletInternal("user-1") } returns dockerDroplet
+        coEvery { firestoreRepository.getUserDropletInternal("user-1") } returns podmanDroplet
         every { sshExecutor.runSshCommand("10.0.0.5", capture(commandSlot)) } returns encoded
 
         val response = service.getWorkspaceFile("user-1", 99L, "Lead", "AGENTS.md")
@@ -157,13 +157,13 @@ class AgentWorkspaceServiceTest {
         assertEquals("# AGENTS.md\n\nHello", response.content)
         assertTrue(commandSlot.captured.contains("base64 -w0"))
         assertTrue(commandSlot.captured.contains("/home/picoclaw/.picoclaw/workspace/AGENTS.md"))
-        assertTrue(commandSlot.captured.contains("docker exec"))
+        assertTrue(commandSlot.captured.contains("podman exec"))
     }
 
     @Test
     fun `getWorkspaceFile rejects invalid filenames before ssh`() = testApplication {
         val service = buildService(application)
-        coEvery { firestoreRepository.getUserDropletInternal(any()) } returns dockerDroplet
+        coEvery { firestoreRepository.getUserDropletInternal(any()) } returns podmanDroplet
 
         assertFailsWith<IllegalArgumentException> {
             service.getWorkspaceFile("user-1", 99L, "Lead", "../../secret.txt")
@@ -176,7 +176,7 @@ class AgentWorkspaceServiceTest {
     fun `listWorkspaceFiles returns not found when marketplace agent is not installed`() = testApplication {
         val service = buildService(application)
 
-        coEvery { firestoreRepository.getUserDropletInternal("user-1") } returns dockerDroplet
+        coEvery { firestoreRepository.getUserDropletInternal("user-1") } returns podmanDroplet
         every { userClientProvider.getClient(any(), any(), any()) } returns supabaseClient
         coEvery { agentRepository.getAgents(supabaseClient) } returns emptyList()
 
@@ -199,7 +199,7 @@ class AgentWorkspaceServiceTest {
         val response = service.getWorkspaceFile("user-1", 99L, "Lead", "AGENTS.md")
 
         assertEquals("Lead body", response.content)
-        assertFalse(commandSlot.captured.contains("docker exec"))
+        assertFalse(commandSlot.captured.contains("podman exec"))
         assertTrue(commandSlot.captured.contains("base64 -w0 '/home/picoclaw/.picoclaw/workspace/AGENTS.md'"))
     }
 }

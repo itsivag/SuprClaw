@@ -30,7 +30,7 @@ data class UserDropletInternal(
     val supabaseUrl: String = "",         // Full Supabase base URL (empty = derive from supabaseProjectRef for hosted)
     val supabaseSchema: String = "public", // PostgREST schema to query (hosted: "public"; self-hosted: schema name)
     val configuredMcpTools: List<String> = emptyList(), // Transitional native MCP servers configured on this runtime
-    val deploymentMode: String = "",      // "vps" or "docker"
+    val deploymentMode: String = "",      // "vps" or "podman"
     val agentRuntime: String = AgentRuntime.PICOCLAW.wireValue
 ) {
     companion object {
@@ -52,21 +52,14 @@ data class UserDropletInternal(
     fun resolveSupabaseUrl(): String = supabaseUrl.ifBlank { "https://$supabaseProjectRef.supabase.co" }
 
     @Exclude
-    fun isDockerDeployment(): Boolean =
-        deploymentMode.equals("docker", ignoreCase = true) ||
+    fun isContainerDeployment(): Boolean =
+        deploymentMode.equals("podman", ignoreCase = true) ||
             (deploymentMode.isBlank() && CONTAINER_ID_REGEX.matches(dropletName.trim()))
-
-    // Firestore legacy compatibility for older documents that stored computed flags.
-    var dockerDeployment: Boolean = false
-        get() = isDockerDeployment()
-        set(value) {
-            field = value
-        }
 
     @Exclude
     fun containerIdOrNull(): String? {
         val candidate = dropletName.trim()
-        return candidate.takeIf { isDockerDeployment() && CONTAINER_ID_REGEX.matches(it) }
+        return candidate.takeIf { isContainerDeployment() && CONTAINER_ID_REGEX.matches(it) }
     }
 
     @Exclude

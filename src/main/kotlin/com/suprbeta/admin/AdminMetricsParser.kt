@@ -9,7 +9,7 @@ import kotlin.math.roundToLong
 object AdminMetricsParser {
     private val json = Json { ignoreUnknownKeys = true }
 
-    data class DockerStatsRow(
+    data class PodmanStatsRow(
         val containerId: String,
         val status: String,
         val cpuPercent: Double?,
@@ -29,7 +29,7 @@ object AdminMetricsParser {
         val networkTxBytes: Long?
     )
 
-    fun parseDockerStats(raw: String): List<DockerStatsRow> {
+    fun parsePodmanStats(raw: String): List<PodmanStatsRow> {
         return raw.lineSequence()
             .map { it.trim() }
             .filter { it.isNotBlank() }
@@ -42,7 +42,7 @@ object AdminMetricsParser {
                     val (memoryUsedBytes, memoryLimitBytes) = parseUsagePair(obj["MemUsage"]?.jsonPrimitive?.contentOrNull)
                     val (networkRxBytes, networkTxBytes) = parseIoPair(obj["NetIO"]?.jsonPrimitive?.contentOrNull)
 
-                    DockerStatsRow(
+                    PodmanStatsRow(
                         containerId = containerId.trim(),
                         status = "running",
                         cpuPercent = parsePercent(obj["CPUPerc"]?.jsonPrimitive?.contentOrNull),

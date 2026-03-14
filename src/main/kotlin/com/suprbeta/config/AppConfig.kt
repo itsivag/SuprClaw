@@ -14,40 +14,52 @@ object AppConfig {
     val sslEnabled: Boolean =
         (dotenv["SSL_ENABLED"] ?: System.getenv("SSL_ENABLED") ?: "true").equals("true", ignoreCase = true)
 
-    // Docker container provisioning settings
-    val dockerPicoclawImage: String =
-        dotenv["DOCKER_PICOCLAW_IMAGE"] ?: System.getenv("DOCKER_PICOCLAW_IMAGE") ?: "ghcr.io/itsivag/picoclaw:latest"
-    val dockerPicoclawBuildContext: String =
-        dotenv["DOCKER_PICOCLAW_BUILD_CONTEXT"]
-            ?: System.getenv("DOCKER_PICOCLAW_BUILD_CONTEXT")
+    // Shared-host container provisioning settings
+    val podmanPicoclawImage: String =
+        dotenv["PODMAN_PICOCLAW_IMAGE"]
+            ?: System.getenv("PODMAN_PICOCLAW_IMAGE")
+            ?: "ghcr.io/itsivag/picoclaw:latest"
+    val podmanPicoclawBuildContext: String =
+        dotenv["PODMAN_PICOCLAW_BUILD_CONTEXT"]
+            ?: System.getenv("PODMAN_PICOCLAW_BUILD_CONTEXT")
             ?: "https://github.com/itsivag/suprclaw.git#main"
-    val dockerPicoclawBuildDockerfile: String =
-        dotenv["DOCKER_PICOCLAW_BUILD_DOCKERFILE"]
-            ?: System.getenv("DOCKER_PICOCLAW_BUILD_DOCKERFILE")
-            ?: "docker/picoclaw-container/Dockerfile"
+    val podmanPicoclawContainerfile: String =
+        dotenv["PODMAN_PICOCLAW_CONTAINERFILE"]
+            ?: System.getenv("PODMAN_PICOCLAW_CONTAINERFILE")
+            ?: "containers/picoclaw-container/Containerfile"
     val defaultAgentRuntime: AgentRuntime = AgentRuntime.PICOCLAW
-    val dockerHostCapacity: Int =
-        (dotenv["DOCKER_HOST_CAPACITY"] ?: System.getenv("DOCKER_HOST_CAPACITY") ?: "20").toIntOrNull() ?: 20
-    val dockerContainerMemory: String =
-        dotenv["DOCKER_CONTAINER_MEMORY"] ?: System.getenv("DOCKER_CONTAINER_MEMORY") ?: "2g"
-    val dockerContainerCpu: String =
-        dotenv["DOCKER_CONTAINER_CPU"] ?: System.getenv("DOCKER_CONTAINER_CPU") ?: "0.5"
-    val dockerGatewayReadyTimeoutSeconds: Long =
-        (dotenv["DOCKER_GATEWAY_READY_TIMEOUT_SECONDS"]
-            ?: System.getenv("DOCKER_GATEWAY_READY_TIMEOUT_SECONDS")
+    val podmanHostCapacity: Int =
+        (dotenv["PODMAN_HOST_CAPACITY"]
+            ?: System.getenv("PODMAN_HOST_CAPACITY")
+            ?: "20").toIntOrNull() ?: 20
+    val podmanContainerMemory: String =
+        dotenv["PODMAN_CONTAINER_MEMORY"]
+            ?: System.getenv("PODMAN_CONTAINER_MEMORY")
+            ?: "2g"
+    val podmanContainerCpu: String =
+        dotenv["PODMAN_CONTAINER_CPU"]
+            ?: System.getenv("PODMAN_CONTAINER_CPU")
+            ?: "0.5"
+    val podmanGatewayReadyTimeoutSeconds: Long =
+        (dotenv["PODMAN_GATEWAY_READY_TIMEOUT_SECONDS"]
+            ?: System.getenv("PODMAN_GATEWAY_READY_TIMEOUT_SECONDS")
             ?: "300").toLongOrNull() ?: 300L
-    val dockerDnsPropagationTimeoutSeconds: Long =
-        (dotenv["DOCKER_DNS_PROPAGATION_TIMEOUT_SECONDS"]
-            ?: System.getenv("DOCKER_DNS_PROPAGATION_TIMEOUT_SECONDS")
+    val podmanDnsPropagationTimeoutSeconds: Long =
+        (dotenv["PODMAN_DNS_PROPAGATION_TIMEOUT_SECONDS"]
+            ?: System.getenv("PODMAN_DNS_PROPAGATION_TIMEOUT_SECONDS")
             ?: "20").toLongOrNull() ?: 20L
-    val dockerPortMin: Int =
-        (dotenv["DOCKER_PORT_MIN"] ?: System.getenv("DOCKER_PORT_MIN") ?: "18001").toIntOrNull() ?: 18001
-    val dockerPortMax: Int =
-        (dotenv["DOCKER_PORT_MAX"] ?: System.getenv("DOCKER_PORT_MAX") ?: "18050").toIntOrNull() ?: 18050
+    val podmanPortMin: Int =
+        (dotenv["PODMAN_PORT_MIN"]
+            ?: System.getenv("PODMAN_PORT_MIN")
+            ?: "18001").toIntOrNull() ?: 18001
+    val podmanPortMax: Int =
+        (dotenv["PODMAN_PORT_MAX"]
+            ?: System.getenv("PODMAN_PORT_MAX")
+            ?: "18050").toIntOrNull() ?: 18050
 
     fun initialize(application: Application) {
         application.log.info(
-            "Deployment mode: Docker (runtime=${defaultAgentRuntime.wireValue}, image=$dockerPicoclawImage)"
+            "Deployment mode: Podman (runtime=${defaultAgentRuntime.wireValue}, image=$podmanPicoclawImage)"
         )
     }
 }

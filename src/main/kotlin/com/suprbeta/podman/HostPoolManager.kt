@@ -1,8 +1,9 @@
-package com.suprbeta.docker
+package com.suprbeta.podman
 
+import com.suprbeta.config.AppConfig
 import com.suprbeta.core.SshCommandExecutor
 import com.suprbeta.digitalocean.UserDataGenerator
-import com.suprbeta.docker.models.HostInfo
+import com.suprbeta.podman.models.HostInfo
 import com.suprbeta.firebase.FirestoreRepository
 import com.suprbeta.provider.VpsService
 import io.github.cdimascio.dotenv.dotenv
@@ -27,7 +28,6 @@ class HostPoolManager(
     private val dotenv = dotenv { ignoreIfMissing = true; directory = "." }
 
     companion object {
-        private const val DEFAULT_HOST_CAPACITY = 20
         private const val HOST_NAME_PREFIX = "suprclaw-host"
         private const val SENTINEL_PATH = "/var/run/suprclaw-host-ready"
         private const val HOST_READY_TIMEOUT_MS = 600_000L  // 10 min
@@ -60,7 +60,7 @@ class HostPoolManager(
      */
     suspend fun assignUserToHost(userId: String, hostId: Long) {
         logger.info("Assigning user $userId to host $hostId")
-        firestoreRepository.incrementHostContainerCount(hostId, DEFAULT_HOST_CAPACITY)
+        firestoreRepository.incrementHostContainerCount(hostId, AppConfig.podmanHostCapacity)
         firestoreRepository.saveUserHostMapping(userId, hostId)
     }
 
@@ -157,7 +157,7 @@ class HostPoolManager(
         return try {
             val output = sshCommandExecutor.runSshCommand(
                 host.hostIp,
-                "id -u picoclaw >/dev/null 2>&1 && test -f $SENTINEL_PATH && echo READY || echo NOT_READY"
+                "id -u picoclaw >/dev/null 2>&1 && command -v podman >/dev/null 2>&1 && test -f $SENTINEL_PATH && echo READY || echo NOT_READY"
             ).trim()
             output == "READY"
         } catch (e: Exception) {
@@ -173,7 +173,7 @@ class HostPoolManager(
     }
     
     /**
-     * Creates a new host VPS with Docker + Traefik pre-installed via cloud-init.
+     * Creates a new host VPS with Podman + Traefik pre-installed via cloud-init.
      */
     private suspend fun createNewHost(): Pair<Long, String> {
         val hostName = "$HOST_NAME_PREFIX-${System.currentTimeMillis()}"
@@ -184,9 +184,9 @@ class HostPoolManager(
             logger.warn("PROVISIONING_SSH_PUBLIC_KEY not set — runtime SSH key auth will not work on new host")
         }
 
-        logger.info("Creating new Docker host VPS: $hostName")
+        logger.info("Creating new Podman host VPS: $hostName")
 
-        val userData = UserDataGenerator.generateDockerHostUserData(sshPublicKey)
+        val userData = UserDataGenerator.generatePodmanHostUserData(sshPublicKey)
         val result = vpsService.createServer(hostName, password = "", userDataOverride = userData)
         val hostId = result.serverId
 
@@ -195,15 +195,15 @@ class HostPoolManager(
         val hostIp = serverInfo.publicIpV4
             ?: throw IllegalStateException("Server $hostId has no public IP")
 
-        // Wait for cloud-init to finish (Docker + Traefik install takes several minutes)
-        logger.info("Server $hostId active at $hostIp — waiting for Docker host setup to complete...")
-        waitForDockerHostReady(hostIp)
+        // Wait for cloud-init to finish (Podman + Traefik install takes several minutes)
+        logger.info("Server $hostId active at $hostIp — waiting for Podman host setup to complete...")
+        waitForPodmanHostReady(hostIp)
 
         // Save host info to Firestore
         val hostInfo = HostInfo(
             hostId = hostId,
             hostIp = hostIp,
-            totalCapacity = DEFAULT_HOST_CAPACITY,
+            totalCapacity = AppConfig.podmanHostCapacity,
             currentContainers = 0,
             status = HostInfo.STATUS_ACTIVE,
             createdAt = Instant.now().toString(),
@@ -211,14 +211,14 @@ class HostPoolManager(
         )
         firestoreRepository.saveHostInfo(hostInfo)
 
-        logger.info("New Docker host ready: $hostId at $hostIp")
+        logger.info("New Podman host ready: $hostId at $hostIp")
         return Pair(hostId, hostIp)
     }
 
     /**
-     * Polls via SSH until cloud-init writes the sentinel file, meaning Docker + Traefik are ready.
+     * Polls via SSH until cloud-init writes the sentinel file, meaning Podman + Traefik are ready.
      */
-    private suspend fun waitForDockerHostReady(hostIp: String) {
+    private suspend fun waitForPodmanHostReady(hostIp: String) {
         val deadline = System.currentTimeMillis() + HOST_READY_TIMEOUT_MS
         var lastError = ""
 
@@ -229,18 +229,18 @@ class HostPoolManager(
                     "test -f $SENTINEL_PATH && echo READY || echo WAITING"
                 )
                 if (output.trim() == "READY") {
-                    logger.info("Docker host at $hostIp is ready")
+                    logger.info("Podman host at $hostIp is ready")
                     return
                 }
             } catch (e: Exception) {
                 lastError = e.message ?: "unknown"
-                logger.debug("Docker host $hostIp not ready yet: $lastError")
+                logger.debug("Podman host $hostIp not ready yet: $lastError")
             }
             kotlinx.coroutines.delay(10_000)
         }
 
         throw IllegalStateException(
-            "Docker host $hostIp did not become ready within ${HOST_READY_TIMEOUT_MS / 1000}s (last error: $lastError)"
+            "Podman host $hostIp did not become ready within ${HOST_READY_TIMEOUT_MS / 1000}s (last error: $lastError)"
         )
     }
     

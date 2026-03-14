@@ -1,4 +1,4 @@
-package com.suprbeta.docker
+package com.suprbeta.podman
 
 import com.suprbeta.config.AppConfig
 import com.suprbeta.core.SshCommandExecutor
@@ -6,7 +6,7 @@ import io.github.cdimascio.dotenv.dotenv
 import com.suprbeta.digitalocean.models.AgentInsert
 import com.suprbeta.digitalocean.models.ProvisioningStatus
 import com.suprbeta.digitalocean.models.UserDroplet
-import com.suprbeta.docker.models.*
+import com.suprbeta.podman.models.*
 import com.suprbeta.firebase.FirestoreRepository
 import com.suprbeta.provider.DnsProvider
 import com.suprbeta.provider.VpsService
@@ -36,15 +36,15 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * Provisioning service for Docker-based multi-tenant architecture.
+ * Provisioning service for Podman-based multi-tenant architecture.
  * 
  * This service orchestrates the creation of user environments on shared host VPS instances,
- * using containers instead of dedicated VMs for better resource utilization.
+ * using shared Podman containers instead of dedicated VMs for better resource utilization.
  */
-class DockerHostProvisioningService(
+class PodmanHostProvisioningService(
     private val vpsService: VpsService,
     private val hostPoolManager: HostPoolManager,
-    private val containerService: DockerContainerService,
+    private val containerService: PodmanContainerService,
     private val traefikManager: TraefikManager,
     private val portAllocator: ContainerPortAllocator,
     private val dnsProvider: DnsProvider,
@@ -61,7 +61,7 @@ class DockerHostProvisioningService(
     private val dotenv = dotenv { ignoreIfMissing = true; directory = "." }
     private val secureRandom = SecureRandom()
     private val json = Json { ignoreUnknownKeys = true }
-    private val dnsPropagationTimeoutMs = AppConfig.dockerDnsPropagationTimeoutSeconds * 1_000L
+    private val dnsPropagationTimeoutMs = AppConfig.podmanDnsPropagationTimeoutSeconds * 1_000L
     
     /** In-memory status map keyed by container ID (used as droplet ID). */
     val statuses = ConcurrentHashMap<Long, ProvisioningStatus>()
@@ -310,7 +310,7 @@ class DockerHostProvisioningService(
                 val identityPath = "${RuntimePaths.leadWorkspace}/IDENTITY.md"
                 sshCommandExecutor.runSshCommand(
                     hostIp,
-                    "docker exec $containerId sed -i 's/UID in Supabase: `unknown`/UID in Supabase: `${leadAgent.id}`/' $identityPath"
+                    "podman exec $containerId sed -i 's/UID in Supabase: `unknown`/UID in Supabase: `${leadAgent.id}`/' $identityPath"
                 )
                 logger.info("IDENTITY.md patched with lead agent ID: ${leadAgent.id}")
             }
@@ -481,7 +481,7 @@ class DockerHostProvisioningService(
     }
 
     private suspend fun verifyGateway(hostIp: String, port: Int, containerId: String) {
-        val maxWaitSeconds = AppConfig.dockerGatewayReadyTimeoutSeconds
+        val maxWaitSeconds = AppConfig.podmanGatewayReadyTimeoutSeconds
         val deadline = System.currentTimeMillis() + (maxWaitSeconds * 1000L)
         var attempt = 0
 
@@ -491,7 +491,7 @@ class DockerHostProvisioningService(
                 val health = runCatching {
                     sshCommandExecutor.runSshCommand(
                         hostIp,
-                        "docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' $containerId 2>/dev/null || echo unknown"
+                        "podman inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' $containerId 2>/dev/null || echo unknown"
                     ).trim()
                 }.getOrDefault("unknown")
 
@@ -528,42 +528,42 @@ class DockerHostProvisioningService(
         val inspect = runCatching {
             sshCommandExecutor.runSshCommand(
                 hostIp,
-                "docker inspect --format 'status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} started={{.State.StartedAt}}' $containerId 2>&1 || true"
+                "podman inspect --format 'status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} started={{.State.StartedAt}}' $containerId 2>&1 || true"
             ).trim()
         }.getOrDefault("inspect unavailable")
 
         val supervisor = runCatching {
             sshCommandExecutor.runSshCommand(
                 hostIp,
-                "docker exec $containerId supervisorctl status 2>&1 || true"
+                "podman exec $containerId supervisorctl status 2>&1 || true"
             ).trim()
         }.getOrDefault("supervisor status unavailable")
 
         val sockets = runCatching {
             sshCommandExecutor.runSshCommand(
                 hostIp,
-                "docker exec $containerId sh -lc 'ss -ltnp || netstat -ltnp' 2>&1 || true"
+                "podman exec $containerId sh -lc 'ss -ltnp || netstat -ltnp' 2>&1 || true"
             ).trim()
         }.getOrDefault("socket diagnostics unavailable")
 
         val supervisorLogs = runCatching {
             sshCommandExecutor.runSshCommand(
                 hostIp,
-                "docker exec $containerId sh -lc 'for f in /var/log/supervisor/picoclaw-gateway.log /var/log/supervisor/picoclaw-gateway.err; do if [ -f \"${'$'}f\" ]; then echo \"===== ${'$'}f =====\"; tail -n 120 \"${'$'}f\"; fi; done' 2>&1 || true"
+                "podman exec $containerId sh -lc 'for f in /var/log/supervisor/picoclaw-gateway.log /var/log/supervisor/picoclaw-gateway.err; do if [ -f \"${'$'}f\" ]; then echo \"===== ${'$'}f =====\"; tail -n 120 \"${'$'}f\"; fi; done' 2>&1 || true"
             ).trim()
         }.getOrDefault("supervisor child logs unavailable")
 
         val runtimeLogs = runCatching {
             sshCommandExecutor.runSshCommand(
                 hostIp,
-                "docker exec $containerId sh -lc 'if [ -d /tmp/picoclaw ]; then ls -lah /tmp/picoclaw; for f in /tmp/picoclaw/*.log; do [ -e \"${'$'}f\" ] || continue; echo \"===== ${'$'}f =====\"; tail -n 120 \"${'$'}f\"; done; else echo \"/tmp/picoclaw missing\"; fi' 2>&1 || true"
+                "podman exec $containerId sh -lc 'if [ -d /tmp/picoclaw ]; then ls -lah /tmp/picoclaw; for f in /tmp/picoclaw/*.log; do [ -e \"${'$'}f\" ] || continue; echo \"===== ${'$'}f =====\"; tail -n 120 \"${'$'}f\"; done; else echo \"/tmp/picoclaw missing\"; fi' 2>&1 || true"
             ).trim()
         }.getOrDefault("picoclaw runtime logs unavailable")
 
         val logs = runCatching {
             sshCommandExecutor.runSshCommand(
                 hostIp,
-                "docker logs --tail 120 $containerId 2>&1 || true"
+                "podman logs --tail 120 $containerId 2>&1 || true"
             ).trim()
         }.getOrDefault("container logs unavailable")
 
@@ -759,7 +759,7 @@ class DockerHostProvisioningService(
         // Map into UserDropletInternal, repurposing unused-in-container-mode fields to
         // store data needed for teardown:
         //   dropletId   = host VPS server ID (for host pool lookup via user_host_mappings)
-        //   dropletName = full container ID   (needed for `docker rm -f`)
+        //   dropletName = full container ID   (needed for `podman rm -f`)
         //   ipAddress   = host IP address     (needed to SSH to the host)
         //   sshKey      = container port      (needed to release from portAllocator)
         val internalDroplet = com.suprbeta.digitalocean.models.UserDropletInternal(
@@ -780,7 +780,7 @@ class DockerHostProvisioningService(
             supabaseUrl = droplet.supabaseUrl,
             supabaseSchema = droplet.supabaseSchema,
             configuredMcpTools = droplet.configuredMcpTools,
-            deploymentMode = "docker",
+            deploymentMode = "podman",
             agentRuntime = droplet.agentRuntime
         )
 

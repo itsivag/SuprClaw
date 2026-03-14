@@ -59,7 +59,7 @@ class PicoClawProvisioningSmokeTest {
             "SUPABASE_SELF_HOSTED_DB_URL",
             "SUPABASE_SELF_HOSTED_SSH_HOST",
             "SUPABASE_SELF_HOSTED_SSH_USER",
-            "SUPABASE_SELF_HOSTED_DOCKER_DIR",
+            "SUPABASE_SELF_HOSTED_STACK_DIR",
             "WEBHOOK_SECRET"
         ).filter { env(it).isBlank() }
 
@@ -153,25 +153,25 @@ class PicoClawProvisioningSmokeTest {
 
             val containerStatus = safeSshCommandExecutor.runSshCommand(
                 hostIp,
-                "docker inspect --format '{{.State.Status}}' $containerId"
+                "podman inspect --format '{{.State.Status}}' $containerId"
             ).trim()
             assertEquals("running", containerStatus)
 
             val runtimeConfigCheck = safeSshCommandExecutor.runSshCommand(
                 hostIp,
-                "docker exec $containerId test -f ${RuntimePaths.picoclawConfig} && echo OK"
+                "podman exec $containerId test -f ${RuntimePaths.picoclawConfig} && echo OK"
             ).trim()
             assertEquals("OK", runtimeConfigCheck)
 
             val leadWorkspaceCheck = safeSshCommandExecutor.runSshCommand(
                 hostIp,
-                "docker exec $containerId test -f ${RuntimePaths.leadWorkspace}/AGENTS.md && echo OK"
+                "podman exec $containerId test -f ${RuntimePaths.leadWorkspace}/AGENTS.md && echo OK"
             ).trim()
             assertEquals("OK", leadWorkspaceCheck)
 
             val leadIdentityCheck = safeSshCommandExecutor.runSshCommand(
                 hostIp,
-                "docker exec $containerId test -f ${RuntimePaths.leadWorkspace}/IDENTITY.md && echo OK"
+                "podman exec $containerId test -f ${RuntimePaths.leadWorkspace}/IDENTITY.md && echo OK"
             ).trim()
             assertEquals("OK", leadIdentityCheck)
 
@@ -196,13 +196,13 @@ class PicoClawProvisioningSmokeTest {
             val workerWorkspace = "${RuntimePaths.runtimeHome}/workspace-$workerName"
             val workerWorkspaceCheck = safeSshCommandExecutor.runSshCommand(
                 hostIp,
-                "docker exec $containerId test -f $workerWorkspace/AGENTS.md && echo OK"
+                "podman exec $containerId test -f $workerWorkspace/AGENTS.md && echo OK"
             ).trim()
             assertEquals("OK", workerWorkspaceCheck)
 
             val workerConfigCheck = safeSshCommandExecutor.runSshCommand(
                 hostIp,
-                "docker exec $containerId node -e \"const fs=require('fs'); const cfg=JSON.parse(fs.readFileSync('${RuntimePaths.picoclawConfig}','utf8')); process.stdout.write(Array.isArray(cfg.agents?.list) && cfg.agents.list.some((agent) => agent && agent.id === '$workerName') ? 'present' : 'missing')\""
+                "podman exec $containerId node -e \"const fs=require('fs'); const cfg=JSON.parse(fs.readFileSync('${RuntimePaths.picoclawConfig}','utf8')); process.stdout.write(Array.isArray(cfg.agents?.list) && cfg.agents.list.some((agent) => agent && agent.id === '$workerName') ? 'present' : 'missing')\""
             ).trim()
             assertEquals("present", workerConfigCheck)
 
@@ -210,13 +210,13 @@ class PicoClawProvisioningSmokeTest {
 
             val deletedWorkerWorkspaceCheck = safeSshCommandExecutor.runSshCommand(
                 hostIp,
-                "docker exec $containerId sh -lc \"test ! -d $workerWorkspace && echo REMOVED\""
+                "podman exec $containerId sh -lc \"test ! -d $workerWorkspace && echo REMOVED\""
             ).trim()
             assertEquals("REMOVED", deletedWorkerWorkspaceCheck)
 
             val deletedWorkerConfigCheck = safeSshCommandExecutor.runSshCommand(
                 hostIp,
-                "docker exec $containerId node -e \"const fs=require('fs'); const cfg=JSON.parse(fs.readFileSync('${RuntimePaths.picoclawConfig}','utf8')); process.stdout.write(Array.isArray(cfg.agents?.list) && cfg.agents.list.some((agent) => agent && agent.id === '$workerName') ? 'present' : 'missing')\""
+                "podman exec $containerId node -e \"const fs=require('fs'); const cfg=JSON.parse(fs.readFileSync('${RuntimePaths.picoclawConfig}','utf8')); process.stdout.write(Array.isArray(cfg.agents?.list) && cfg.agents.list.some((agent) => agent && agent.id === '$workerName') ? 'present' : 'missing')\""
             ).trim()
             assertEquals("missing", deletedWorkerConfigCheck)
 

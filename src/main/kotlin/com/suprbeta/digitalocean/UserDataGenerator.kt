@@ -45,26 +45,25 @@ object UserDataGenerator {
     }
 
     /**
-     * Generates cloud-init user-data for a Docker host VPS.
-     * This installs Docker, Traefik, creates the runtime user with the provisioning SSH key,
+     * Generates cloud-init user-data for a Podman host VPS.
+     * This installs Podman, Traefik, creates the runtime user with the provisioning SSH key,
      * and writes a sentinel file /var/run/suprclaw-host-ready when setup is complete.
      */
-    fun generateDockerHostUserData(
+    fun generatePodmanHostUserData(
         sshPublicKey: String,
         hostKeyMaterial: ProvisioningHostKeyMaterial = loadProvisioningHostKeyMaterial()
     ): String {
         val template = this::class.java.classLoader
-            .getResourceAsStream("scripts/docker-host.yaml")
+            .getResourceAsStream("scripts/podman-host.yaml")
             ?.bufferedReader()
             ?.use { it.readText() }
-            ?: throw IllegalStateException("docker-host.yaml not found in resources")
+            ?: throw IllegalStateException("podman-host.yaml not found in resources")
 
         return template
             .replace("{{SSH_PUBLIC_KEY}}", sshPublicKey)
             .replace("{{HOST_SSH_PRIVATE_KEY}}", indentBlock(hostKeyMaterial.privateKeyPem))
             .replace("{{HOST_SSH_PUBLIC_KEY}}", indentBlock(hostKeyMaterial.publicKey))
     }
-
     internal fun loadProvisioningHostKeyMaterial(
         privateKeyBase64: String? = env("PROVISIONING_SSH_HOST_PRIVATE_KEY_B64"),
         publicKey: String? = env("PROVISIONING_SSH_HOST_PUBLIC_KEY")

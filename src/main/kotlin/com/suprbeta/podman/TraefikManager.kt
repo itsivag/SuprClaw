@@ -1,4 +1,4 @@
-package com.suprbeta.docker
+package com.suprbeta.podman
 
 import com.suprbeta.core.SshCommandExecutor
 import io.ktor.server.application.*
@@ -73,7 +73,7 @@ class TraefikManager(
             // Method 1: Send SIGHUP to Traefik container
             sshCommandExecutor.runSshCommand(
                 hostIp,
-                "docker kill --signal=HUP $TRAEFIK_CONTAINER_NAME 2>/dev/null || true"
+                "podman kill --signal=HUP $TRAEFIK_CONTAINER_NAME 2>/dev/null || true"
             )
         } catch (e: Exception) {
             logger.warn("Failed to reload Traefik via signal: ${e.message}")
@@ -104,7 +104,7 @@ class TraefikManager(
         return try {
             val result = sshCommandExecutor.runSshCommand(
                 hostIp,
-                "docker ps --filter 'name=$TRAEFIK_CONTAINER_NAME' --format '{{.Names}}' 2>/dev/null || echo ''"
+                "podman ps --filter 'name=$TRAEFIK_CONTAINER_NAME' --format '{{.Names}}' 2>/dev/null || echo ''"
             )
             result.contains(TRAEFIK_CONTAINER_NAME)
         } catch (e: Exception) {
@@ -187,14 +187,13 @@ class TraefikManager(
         val traefikVersion = "v3.0"
         
         val command = """
-            docker run -d \
+            podman run -d \
                 --name $TRAEFIK_CONTAINER_NAME \
                 --restart unless-stopped \
                 --network host \
                 -p 80:80 \
                 -p 443:443 \
                 -p 8080:8080 \
-                -v /var/run/docker.sock:/var/run/docker.sock:ro \
                 -v /opt/traefik/traefik.yml:/etc/traefik/traefik.yml:ro \
                 -v /opt/traefik/dynamic:/opt/traefik/dynamic:ro \
                 -v /opt/traefik/certs:/opt/traefik/certs:ro \

@@ -15,6 +15,7 @@ fi
 : "${LITELLM_IMAGE:=ghcr.io/berriai/litellm:main-stable}"
 : "${SUPRCLAW_API_HOST:=api.suprclaw.com}"
 : "${BACKEND_ENV_FILE:=/etc/suprclaw/backend.env}"
+: "${FIREBASE_CREDENTIALS_FILE:=/etc/suprclaw/firebase-credentials.json}"
 : "${LITELLM_ENV_FILE:=/etc/suprclaw/litellm.env}"
 : "${LITELLM_CONFIG_FILE:=/etc/suprclaw/litellm-config.yaml}"
 : "${CADDYFILE:=/etc/suprclaw/Caddyfile}"
@@ -29,7 +30,7 @@ fi
 podman pod rm -f "$POD_NAME" >/dev/null 2>&1 || true
 
 podman pull "$BACKEND_IMAGE"
-podman pull docker.io/library/caddy:2
+podman pull caddy:2
 
 ENABLE_LITELLM=0
 if [[ -s "$LITELLM_CONFIG_FILE" ]]; then
@@ -43,6 +44,7 @@ podman run -d \
   --name "$BACKEND_CONTAINER_NAME" \
   --pod "$POD_NAME" \
   --env-file "$BACKEND_ENV_FILE" \
+  -v "$FIREBASE_CREDENTIALS_FILE:$FIREBASE_CREDENTIALS_FILE:ro,Z" \
   --restart=always \
   "$BACKEND_IMAGE"
 
@@ -66,6 +68,6 @@ podman run -d \
   -v /var/lib/suprclaw/caddy/data:/data:Z \
   -v /var/lib/suprclaw/caddy/config:/config:Z \
   --restart=always \
-  docker.io/library/caddy:2
+  caddy:2
 
 podman ps --filter "pod=$POD_NAME"

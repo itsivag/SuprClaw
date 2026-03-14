@@ -147,10 +147,10 @@ open class DropletMcpServiceImpl(
         }
 
     private fun runRemoteCommand(droplet: UserDropletInternal, command: String): String {
-        val remoteCommand = if (droplet.isDockerDeployment()) {
+        val remoteCommand = if (droplet.isContainerDeployment()) {
             val containerId = droplet.containerIdOrNull()
-                ?: throw IllegalStateException("Missing container ID for docker deployment")
-            "docker exec ${singleQuote(containerId)} sh -lc ${singleQuote(command)}"
+                ?: throw IllegalStateException("Missing container ID for container deployment")
+            "podman exec ${singleQuote(containerId)} sh -lc ${singleQuote(command)}"
         } else {
             command
         }

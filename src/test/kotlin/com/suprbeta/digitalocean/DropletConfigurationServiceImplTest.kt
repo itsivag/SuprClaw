@@ -33,10 +33,10 @@ class DropletConfigurationServiceImplTest {
     )
 
     @Test
-    fun `createAgent executes inside the tenant container for docker deployments`() = testApplication {
+    fun `createAgent executes inside the tenant container for podman deployments`() = testApplication {
         val service = buildService(application)
         val commands = mutableListOf<String>()
-        val dockerDroplet = UserDropletInternal(
+        val podmanDroplet = UserDropletInternal(
             userId = "user-1",
             dropletId = 99L,
             dropletName = "abcdef1234567890",
@@ -45,10 +45,10 @@ class DropletConfigurationServiceImplTest {
             supabaseUrl = "https://supabase.suprclaw.com",
             supabaseServiceKey = "service-key",
             supabaseSchema = "proj_abc123",
-            deploymentMode = "docker"
+            deploymentMode = "podman"
         )
 
-        coEvery { firestoreRepository.getUserDropletInternal("user-1") } returns dockerDroplet
+        coEvery { firestoreRepository.getUserDropletInternal("user-1") } returns podmanDroplet
         every { sshExecutor.runSshCommand("10.0.0.5", any()) } answers {
             commands += secondArg<String>()
             "created"
@@ -64,7 +64,7 @@ class DropletConfigurationServiceImplTest {
         )
 
         assertEquals("created", result)
-        assertTrue(commands.any { it.contains("docker exec 'abcdef1234567890'") })
+        assertTrue(commands.any { it.contains("podman exec 'abcdef1234567890'") })
         assertTrue(commands.any { it.contains("su - picoclaw -s /bin/sh -lc") })
         assertTrue(commands.any { it.contains("picoclaw.json") })
         assertTrue(commands.any { it.contains("/home/picoclaw/.picoclaw/workspace-writer/AGENTS.md") })
@@ -75,16 +75,16 @@ class DropletConfigurationServiceImplTest {
     @Test
     fun `createAgent rejects unsafe model values before running ssh`() = testApplication {
         val service = buildService(application)
-        val dockerDroplet = UserDropletInternal(
+        val podmanDroplet = UserDropletInternal(
             userId = "user-2",
             dropletId = 100L,
             dropletName = "abcdef1234567890",
             ipAddress = "10.0.0.6",
             status = "active",
-            deploymentMode = "docker"
+            deploymentMode = "podman"
         )
 
-        coEvery { firestoreRepository.getUserDropletInternal("user-2") } returns dockerDroplet
+        coEvery { firestoreRepository.getUserDropletInternal("user-2") } returns podmanDroplet
 
         assertFailsWith<IllegalArgumentException> {
             service.createAgent(
@@ -148,7 +148,7 @@ class DropletConfigurationServiceImplTest {
             supabaseUrl = "https://supabase.suprclaw.com",
             supabaseServiceKey = "service-key",
             supabaseSchema = "proj_user4",
-            deploymentMode = "docker",
+            deploymentMode = "podman",
             agentRuntime = AgentRuntime.PICOCLAW.wireValue
         )
 

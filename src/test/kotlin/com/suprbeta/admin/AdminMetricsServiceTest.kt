@@ -2,7 +2,7 @@ package com.suprbeta.admin
 
 import com.suprbeta.core.SshCommandExecutor
 import com.suprbeta.digitalocean.models.UserDropletInternal
-import com.suprbeta.docker.models.HostInfo
+import com.suprbeta.podman.models.HostInfo
 import com.suprbeta.firebase.FirestoreRepository
 import io.ktor.client.request.get
 import io.ktor.server.testing.testApplication
@@ -35,22 +35,22 @@ class AdminMetricsServiceTest {
                 userId = "user-1",
                 dropletId = 1L,
                 dropletName = "abcdef1234567890",
-                deploymentMode = "docker"
+                deploymentMode = "podman"
             ),
             UserDropletInternal(
                 userId = "user-2",
                 dropletId = 2L,
                 dropletName = "2222222222222222",
-                deploymentMode = "docker"
+                deploymentMode = "podman"
             )
         )
 
-        every { ssh.runSshCommand(eq("10.0.0.1"), match { it.contains("docker stats --no-stream") }) } returns
+        every { ssh.runSshCommand(eq("10.0.0.1"), match { it.contains("podman stats --no-stream") }) } returns
             """{"ID":"abcdef123456","CPUPerc":"20.0%","MemUsage":"100MiB / 1GiB","NetIO":"1MB / 2MB"}"""
-        every { ssh.runSshCommand(eq("10.0.0.2"), match { it.contains("docker stats --no-stream") }) } returns
+        every { ssh.runSshCommand(eq("10.0.0.2"), match { it.contains("podman stats --no-stream") }) } returns
             """{"ID":"222222222222","CPUPerc":"40.0%","MemUsage":"50MiB / 500MiB","NetIO":"500kB / 600kB"}"""
 
-        every { ssh.runSshCommand(eq("10.0.0.1"), match { !it.contains("docker stats --no-stream") }) } returns
+        every { ssh.runSshCommand(eq("10.0.0.1"), match { !it.contains("podman stats --no-stream") }) } returns
             """
             CPU_PERCENT=50
             MEM_TOTAL_BYTES=200
@@ -59,7 +59,7 @@ class AdminMetricsServiceTest {
             NET_TX_BYTES=2000
             CORE_COUNT=2
             """.trimIndent()
-        every { ssh.runSshCommand(eq("10.0.0.2"), match { !it.contains("docker stats --no-stream") }) } returns
+        every { ssh.runSshCommand(eq("10.0.0.2"), match { !it.contains("podman stats --no-stream") }) } returns
             """
             CPU_PERCENT=25
             MEM_TOTAL_BYTES=1000
@@ -86,7 +86,7 @@ class AdminMetricsServiceTest {
     }
 
     @Test
-    fun `collect metrics continues when docker stats fails on a host`() = testApplication {
+    fun `collect metrics continues when podman stats fails on a host`() = testApplication {
         val firestoreRepository = mockk<FirestoreRepository>()
         val ssh = mockk<SshCommandExecutor>()
         lateinit var service: AdminMetricsService
@@ -104,12 +104,12 @@ class AdminMetricsServiceTest {
                 userId = "user-9",
                 dropletId = 9L,
                 dropletName = "aaaaabbbbbccccc",
-                deploymentMode = "docker"
+                deploymentMode = "podman"
             )
         )
 
-        every { ssh.runSshCommand(eq("10.0.0.9"), match { it.contains("docker stats --no-stream") }) } throws RuntimeException("stats failed")
-        every { ssh.runSshCommand(eq("10.0.0.9"), match { !it.contains("docker stats --no-stream") }) } returns
+        every { ssh.runSshCommand(eq("10.0.0.9"), match { it.contains("podman stats --no-stream") }) } throws RuntimeException("stats failed")
+        every { ssh.runSshCommand(eq("10.0.0.9"), match { !it.contains("podman stats --no-stream") }) } returns
             """
             CPU_PERCENT=30
             MEM_TOTAL_BYTES=1000
@@ -123,7 +123,7 @@ class AdminMetricsServiceTest {
         assertEquals(1, response.hosts.size)
         val host = response.hosts.first()
         assertNotNull(host.error)
-        assertTrue(host.error.contains("docker stats unavailable"))
+        assertTrue(host.error.contains("podman stats unavailable"))
         assertEquals(1, host.containers.size)
         assertEquals("missing", host.containers.first().status)
         assertEquals("user-9", host.containers.first().userId)

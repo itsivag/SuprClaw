@@ -69,6 +69,8 @@ runcmd:
   - ufw allow OpenSSH
   - ufw allow 80/tcp
   - ufw allow 443/tcp
+  - ufw route allow proto tcp from any to 10.88.0.0/16 port 80
+  - ufw route allow proto tcp from any to 10.88.0.0/16 port 443
   - ufw --force enable
   - touch /var/run/suprclaw-backend-host-ready
 

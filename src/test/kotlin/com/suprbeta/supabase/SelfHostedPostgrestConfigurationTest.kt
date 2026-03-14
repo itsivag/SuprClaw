@@ -60,7 +60,7 @@ class SelfHostedPostgrestConfigurationTest {
                 when {
                     command.contains("grep '^PGRST_DB_SCHEMAS='") ->
                         "public,storage,graphql_public,proj_live,proj_stale"
-                    command.contains("docker compose up -d --force-recreate rest") -> ""
+                    command.contains("podman compose up -d --force-recreate rest") -> ""
                     else -> error("Unexpected SSH command: $command")
                 }
             }
@@ -85,7 +85,7 @@ class SelfHostedPostgrestConfigurationTest {
                 when {
                     command.contains("grep '^PGRST_DB_SCHEMAS='") ->
                         "public,storage,graphql_public,proj_live"
-                    command.contains("docker compose up -d --force-recreate rest") ->
+                    command.contains("podman compose up -d --force-recreate rest") ->
                         error("Did not expect a rest restart when schemas already match")
                     else -> error("Unexpected SSH command: $command")
                 }
@@ -140,7 +140,7 @@ class SelfHostedPostgrestConfigurationTest {
                 when {
                     command.contains("grep '^PGRST_DB_SCHEMAS='") ->
                         "public,storage,graphql_public,proj_dropme"
-                    command.contains("docker compose up -d --force-recreate rest") -> ""
+                    command.contains("podman compose up -d --force-recreate rest") -> ""
                     else -> error("Unexpected SSH command: $command")
                 }
             }
@@ -163,7 +163,7 @@ class SelfHostedPostgrestConfigurationTest {
         val service = newService(
             jdbcQueryExecutor = { listOf("proj_live") },
             sshCommandRunner = { _, _, command ->
-                if (command.contains("docker compose up -d --force-recreate rest")) {
+                if (command.contains("podman compose up -d --force-recreate rest")) {
                     val concurrent = activeCommands.incrementAndGet()
                     maxConcurrentCommands.updateAndGet { current -> max(current, concurrent) }
                     Thread.sleep(100)
@@ -172,7 +172,7 @@ class SelfHostedPostgrestConfigurationTest {
 
                 when {
                     command.contains("grep '^PGRST_DB_SCHEMAS='") -> "public,storage,graphql_public,proj_stale"
-                    command.contains("docker compose up -d --force-recreate rest") -> ""
+                    command.contains("podman compose up -d --force-recreate rest") -> ""
                     else -> error("Unexpected SSH command: $command")
                 }
             }

@@ -31,7 +31,7 @@ class AdminUserService(
                 proxyUrl = droplet?.gatewayUrl?.ifBlank { null },
                 deploymentMode = droplet?.deploymentMode?.ifBlank { null },
                 dropletId = droplet?.dropletId?.takeIf { it > 0L },
-                hostId = droplet?.dockerHostIdOrNull(),
+                hostId = droplet?.hostIdOrNull(),
                 containerId = droplet?.containerIdOrNull(),
                 containerCreatedAt = droplet?.createdAt?.ifBlank { null },
                 weeklyCreditsUsed = usage.credits,
@@ -83,8 +83,8 @@ class AdminUserService(
         return gatewayUrl.trim().ifBlank { null }
     }
 
-    private fun UserDropletInternal.dockerHostIdOrNull(): Long? {
-        if (!isDockerDeployment()) return null
+    private fun UserDropletInternal.hostIdOrNull(): Long? {
+        if (!isContainerDeployment()) return null
         return dropletId.takeIf { it > 0L }
     }
 

@@ -61,7 +61,7 @@ class AdminRoutesTest {
             UserDropletInternal(
                 userId = "user-1",
                 dropletId = 101L,
-                deploymentMode = "docker",
+                deploymentMode = "podman",
                 status = "active",
                 vpsGatewayUrl = "https://user-1.suprclaw.com"
             )
