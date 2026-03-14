@@ -74,6 +74,7 @@ runcmd:
   - DEBIAN_FRONTEND=noninteractive apt-get install -y podman containernetworking-plugins uidmap slirp4netns fuse-overlayfs
   - systemctl enable podman-restart.service
   - systemctl start podman-restart.service
+  - loginctl enable-linger picoclaw
   - mkdir -p /opt/traefik/dynamic /opt/traefik/certs
   - touch /opt/traefik/certs/acme.json
   - chmod 600 /opt/traefik/certs/acme.json

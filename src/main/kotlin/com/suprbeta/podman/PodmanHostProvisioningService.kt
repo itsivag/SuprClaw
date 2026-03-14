@@ -307,6 +307,7 @@ class PodmanHostProvisioningService(
             // Patch IDENTITY.md in the container with the Supabase-generated agent ID
             val leadAgent = agentRepository.getLeadAgent(userClient)
             if (leadAgent?.id != null) {
+                waitForContainerExecReady(hostIp, containerId)
                 val identityPath = "${RuntimePaths.leadWorkspace}/IDENTITY.md"
                 sshCommandExecutor.runSshCommand(
                     hostIp,
@@ -522,6 +523,59 @@ class PodmanHostProvisioningService(
 
         logGatewayDiagnostics(hostIp, containerId, port)
         throw IllegalStateException("Gateway did not become ready within ${maxWaitSeconds}s")
+    }
+
+    private suspend fun waitForContainerExecReady(hostIp: String, containerId: String, maxWaitSeconds: Long = 60L) {
+        val deadline = System.currentTimeMillis() + (maxWaitSeconds * 1000L)
+        var attempt = 0
+        var lastError: String? = null
+
+        while (System.currentTimeMillis() < deadline) {
+            attempt += 1
+            try {
+                val status = sshCommandExecutor.runSshCommand(
+                    hostIp,
+                    "podman inspect --format '{{.State.Status}}' $containerId 2>/dev/null || echo missing"
+                ).trim()
+
+                if (status.equals("running", ignoreCase = true)) {
+                    sshCommandExecutor.runSshCommand(hostIp, "podman exec $containerId true")
+                    logger.info("Container exec verified for $containerId on attempt $attempt")
+                    return
+                }
+
+                lastError = "status=$status"
+                if (attempt % 5 == 0) {
+                    logger.info("Container $containerId not exec-ready yet ($lastError)")
+                }
+            } catch (e: Exception) {
+                lastError = e.message
+                if (attempt % 5 == 0) {
+                    logger.info("Container $containerId exec probe still failing on attempt $attempt: ${e.message}")
+                }
+            }
+
+            delay(2_000)
+        }
+
+        val inspect = runCatching {
+            sshCommandExecutor.runSshCommand(
+                hostIp,
+                "podman inspect --format 'status={{.State.Status}} exit={{.State.ExitCode}} started={{.State.StartedAt}} finished={{.State.FinishedAt}}' $containerId 2>&1 || true"
+            ).trim()
+        }.getOrDefault("inspect unavailable")
+
+        val logs = runCatching {
+            sshCommandExecutor.runSshCommand(
+                hostIp,
+                "podman logs --tail 120 $containerId 2>&1 || true"
+            ).trim()
+        }.getOrDefault("container logs unavailable")
+
+        throw IllegalStateException(
+            "Container $containerId did not become exec-ready within ${maxWaitSeconds}s (last=$lastError). " +
+                "Inspect: $inspect Logs: $logs"
+        )
     }
 
     private suspend fun logGatewayDiagnostics(hostIp: String, containerId: String, port: Int) {

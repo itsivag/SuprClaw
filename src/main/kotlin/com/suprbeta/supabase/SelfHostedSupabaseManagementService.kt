@@ -302,7 +302,7 @@ class SelfHostedSupabaseManagementService(
                 else \
                     printf '%s\n' $appendedLine >> .env; \
                 fi && \
-                podman compose up -d --force-recreate rest
+                podman compose up -d --no-deps --force-recreate rest
             """.trimIndent()
         }
 

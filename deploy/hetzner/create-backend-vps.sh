@@ -62,6 +62,7 @@ runcmd:
   - DEBIAN_FRONTEND=noninteractive apt-get install -y podman uidmap slirp4netns fuse-overlayfs jq curl ufw
   - mkdir -p /opt/suprclaw/podman /etc/suprclaw /var/lib/suprclaw/caddy/data /var/lib/suprclaw/caddy/config
   - chown -R suprclaw:suprclaw /opt/suprclaw /var/lib/suprclaw
+  - loginctl enable-linger suprclaw
   - systemctl enable podman-auto-update.timer || true
   - ufw --force reset
   - ufw default deny incoming
