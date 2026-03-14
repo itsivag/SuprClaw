@@ -32,6 +32,15 @@ jobs:
           fi
 
           printf '%b' "$ENV_FILE" > .deploy.env
+          python3 - <<'PY'
+          from pathlib import Path
+
+          deploy_env = Path(".deploy.env")
+          text = deploy_env.read_text()
+          if "\\n" in text:
+              text = text.replace("\\r\\n", "\n").replace("\\n", "\n")
+              deploy_env.write_text(text)
+          PY
 
           required_env_keys=(
             HETZNER_SERVER_IP
@@ -121,6 +130,17 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
+          def normalize(path: Path) -> None:
+              if not path.exists():
+                  return
+              text = path.read_text()
+              if "\\n" in text:
+                  text = text.replace("\\r\\n", "\n").replace("\\n", "\n")
+                  path.write_text(text)
+
+          normalize(Path("deploy-bundle/backend.env"))
+          normalize(Path("deploy-bundle/litellm.env"))
+
           backend_env = Path("deploy-bundle/backend.env")
           lines = backend_env.read_text().splitlines()
           updates = {
@@ -142,7 +162,7 @@ jobs:
           for key, value in updates.items():
               if key not in seen:
                   rewritten.append(f"{key}={value}")
-          backend_env.write_text("\\n".join(rewritten) + "\\n")
+          backend_env.write_text("\n".join(rewritten) + "\n")
           PY
 
           firebase_credentials_b64="$(grep -E '^FIREBASE_CREDENTIALS_JSON_B64=' .deploy.env | tail -n1 | cut -d= -f2-)"
