@@ -142,6 +142,17 @@ jobs:
           normalize(Path("deploy-bundle/litellm.env"))
 
           backend_env = Path("deploy-bundle/backend.env")
+          excluded_keys = {
+              # Deploy transport and registry credentials should never reach the app container.
+              "GHCR_PULL_TOKEN",
+              "GHCR_PULL_USERNAME",
+              "HETZNER_DEPLOY_USER",
+              "HETZNER_SERVER_IP",
+              "SSH_PRIVATE_KEY",
+              # Firebase credentials are mounted as a file instead of injected inline.
+              "FIREBASE_CREDENTIALS_JSON",
+              "FIREBASE_CREDENTIALS_JSON_B64",
+          }
           lines = backend_env.read_text().splitlines()
           updates = {
               "SSL_ENABLED": "true",
@@ -154,6 +165,8 @@ jobs:
                   rewritten.append(line)
                   continue
               key, _ = line.split("=", 1)
+              if key in excluded_keys:
+                  continue
               if key in updates:
                   rewritten.append(f"{key}={updates[key]}")
                   seen.add(key)
