@@ -225,7 +225,6 @@ class PodmanContainerService(
         val buildContainerfile = AppConfig.podmanPicoclawContainerfile
         val refreshLatestTag = image.substringAfterLast(':', "").equals("latest", ignoreCase = true) && !image.contains("@sha256:")
         val quotedImage = singleQuote(image)
-        val quotedBuildContext = singleQuote(buildContext)
 
         if (image.startsWith("ghcr.io/", ignoreCase = true)) {
             loginToGhcrIfConfigured(hostIp)
@@ -241,7 +240,7 @@ class PodmanContainerService(
                     hostIp,
                     buildRemoteContextCommand(
                         image = quotedImage,
-                        buildContext = quotedBuildContext,
+                        buildContext = buildContext,
                         containerfilePath = buildContainerfile
                     ),
                     IMAGE_BUILD_TIMEOUT_SECONDS
@@ -265,7 +264,7 @@ class PodmanContainerService(
                     hostIp,
                     buildRemoteContextCommand(
                         image = quotedImage,
-                        buildContext = quotedBuildContext,
+                        buildContext = buildContext,
                         containerfilePath = buildContainerfile
                     ),
                     IMAGE_BUILD_TIMEOUT_SECONDS
@@ -323,7 +322,7 @@ class PodmanContainerService(
             append("podman build -t ")
             append(image)
             append(" -f- ")
-            append(buildContext)
+            append(singleQuote(buildContext))
             append(" <<'SUPRCLAW_CONTAINERFILE'\n")
             append(containerfile)
             append("\nSUPRCLAW_CONTAINERFILE")
@@ -331,10 +330,11 @@ class PodmanContainerService(
     }
 
     private fun parseGitBuildContext(buildContext: String): GitBuildContext? {
-        if (!buildContext.contains(".git#")) {
+        val normalized = buildContext.trim().removeSurrounding("'")
+        if (!normalized.contains(".git#")) {
             return null
         }
-        val (repoUrl, suffix) = buildContext.split("#", limit = 2).let {
+        val (repoUrl, suffix) = normalized.split("#", limit = 2).let {
             if (it.size != 2) return null
             it[0] to it[1]
         }

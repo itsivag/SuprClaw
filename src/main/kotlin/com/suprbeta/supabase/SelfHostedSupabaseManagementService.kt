@@ -27,6 +27,10 @@ internal val BASE_POSTGREST_SCHEMAS = listOf("public", "storage", "graphql_publi
 private const val SCHEMA_CACHE_READY_ATTEMPTS = 30
 private const val SCHEMA_CACHE_READY_DELAY_MS = 2_000L
 private const val SCHEMA_CACHE_READY_BODY_SNIPPET_LENGTH = 200
+private const val JDBC_CONNECT_RETRIES = 3
+private const val JDBC_CONNECT_TIMEOUT_SECONDS = 5
+private const val JDBC_SOCKET_TIMEOUT_SECONDS = 30
+private const val JDBC_CONNECT_RETRY_DELAY_MS = 1_000L
 private val POSTGREST_CONFIG_MUTEX = Mutex()
 
 internal data class PostgrestSchemaReconciliation(
@@ -586,9 +590,34 @@ class SelfHostedSupabaseManagementService(
 
         // Bypass DriverManager (classloader issues in fat JARs) — use the driver directly.
         val driver = org.postgresql.Driver()
-        val conn = driver.connect(jdbcUrl, props)
-            ?: throw java.sql.SQLException("PostgreSQL driver returned null for URL: $jdbcUrl")
-        return conn.use(block)
+        props.putIfAbsent("connectTimeout", JDBC_CONNECT_TIMEOUT_SECONDS.toString())
+        props.putIfAbsent("socketTimeout", JDBC_SOCKET_TIMEOUT_SECONDS.toString())
+        props.putIfAbsent("loginTimeout", JDBC_CONNECT_TIMEOUT_SECONDS.toString())
+
+        var lastException: Exception? = null
+        for (attempt in 0 until JDBC_CONNECT_RETRIES) {
+            try {
+                val conn = driver.connect(jdbcUrl, props)
+                    ?: throw java.sql.SQLException("PostgreSQL driver returned null for URL: $jdbcUrl")
+                return conn.use(block)
+            } catch (e: Exception) {
+                lastException = e
+                val attemptNumber = attempt + 1
+                if (attemptNumber == JDBC_CONNECT_RETRIES) {
+                    break
+                }
+                logger.warn(
+                    "JDBC connection attempt {}/{} failed for self-hosted Supabase; retrying in {}ms",
+                    attemptNumber,
+                    JDBC_CONNECT_RETRIES,
+                    JDBC_CONNECT_RETRY_DELAY_MS,
+                    e
+                )
+                Thread.sleep(JDBC_CONNECT_RETRY_DELAY_MS)
+            }
+        }
+
+        throw lastException ?: java.sql.SQLException("PostgreSQL connection failed for URL: $jdbcUrl")
     }
 
     /**
