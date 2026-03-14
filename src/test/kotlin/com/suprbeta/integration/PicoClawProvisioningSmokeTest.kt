@@ -59,9 +59,9 @@ class PicoClawProvisioningSmokeTest {
             "SUPABASE_SELF_HOSTED_DB_URL",
             "SUPABASE_SELF_HOSTED_SSH_HOST",
             "SUPABASE_SELF_HOSTED_SSH_USER",
-            "SUPABASE_SELF_HOSTED_STACK_DIR",
             "WEBHOOK_SECRET"
         ).filter { env(it).isBlank() }
+            .filterNot { it == "SUPABASE_SELF_HOSTED_STACK_DIR" && env("SUPABASE_SELF_HOSTED_DOCKER_DIR").isNotBlank() }
 
         assumeTrue(required.isEmpty()) {
             "Missing required env vars for provisioning smoke test: ${required.joinToString(", ")}"

@@ -103,8 +103,11 @@ class SelfHostedSupabaseManagementService(
         directory = "."
     }
 
-    private fun env(key: String): String =
-        dotenv[key] ?: System.getenv(key) ?: ""
+    private fun env(key: String, legacyKey: String? = null): String =
+        dotenv[key]
+            ?: System.getenv(key)
+            ?: legacyKey?.let { dotenv[it] ?: System.getenv(it) }
+            ?: ""
 
     private val selfHostedUrl: String = env("SUPABASE_SELF_HOSTED_URL")
         .ifBlank { throw IllegalStateException("SUPABASE_SELF_HOSTED_URL not found in environment") }
@@ -120,7 +123,8 @@ class SelfHostedSupabaseManagementService(
 
     private val sshUser: String = env("SUPABASE_SELF_HOSTED_SSH_USER").ifBlank { "root" }
 
-    private val stackDir: String = env("SUPABASE_SELF_HOSTED_STACK_DIR").ifBlank { "/opt/supabase/podman" }
+    private val stackDir: String = env("SUPABASE_SELF_HOSTED_STACK_DIR", "SUPABASE_SELF_HOSTED_DOCKER_DIR")
+        .ifBlank { "/opt/supabase/podman" }
     private val sshHostKeyVerifier: HostKeyVerifier by lazy { SshHostKeyVerifierFactory.createSelfHostedVerifier(application) }
 
     private val privateKeyPem: String by lazy {
