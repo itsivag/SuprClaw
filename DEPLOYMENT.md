@@ -55,6 +55,25 @@ SSH_PRIVATE_KEY=...
 SUPRCLAW_API_HOST=api.suprclaw.com
 ```
 
+Optional LiteLLM settings also live in the same `ENV_FILE`:
+
+```env
+LITELLM_ENABLED=true
+LITELLM_IMAGE=ghcr.io/berriai/litellm:main-stable
+LITELLM_MASTER_KEY=...
+LITELLM_PROXY_MODEL_NAME=suprclaw-default
+LITELLM_UPSTREAM_MODEL=bedrock/minimax.minimax-m2.1
+LITELLM_PUBLIC_BASE=https://api.suprclaw.com/litellm/v1
+AWS_BEARER_TOKEN_BEDROCK=...
+# or AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_REGION
+```
+
+When enabled, the deploy workflow generates the LiteLLM host files from `ENV_FILE` and exposes the proxy at:
+
+```text
+https://api.suprclaw.com/litellm/v1
+```
+
 ## Stack files on the host
 
 - `/etc/default/suprclaw-stack`

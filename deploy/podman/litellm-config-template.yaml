@@ -1,0 +1,7 @@
+model_list:
+  - model_name: "__LITELLM_PROXY_MODEL_NAME__"
+    litellm_params:
+      model: "__LITELLM_UPSTREAM_MODEL__"
+
+general_settings:
+  master_key: "__LITELLM_MASTER_KEY__"

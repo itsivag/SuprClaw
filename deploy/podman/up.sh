@@ -33,7 +33,7 @@ podman pull "$BACKEND_IMAGE"
 podman pull caddy:2
 
 ENABLE_LITELLM=0
-if [[ -s "$LITELLM_CONFIG_FILE" ]]; then
+if [[ -s "$LITELLM_CONFIG_FILE" && -s "$LITELLM_ENV_FILE" ]]; then
   ENABLE_LITELLM=1
   podman pull "$LITELLM_IMAGE"
 fi

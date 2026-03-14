@@ -114,21 +114,22 @@ jobs:
       - name: Prepare deployment bundle
         env:
           ENV_FILE: ${{ secrets.ENV_FILE }}
-          LITELLM_ENV_FILE: ${{ secrets.LITELLM_ENV_FILE }}
-          LITELLM_CONFIG_YAML: ${{ secrets.LITELLM_CONFIG_YAML }}
         run: |
           mkdir -p deploy-bundle
           cp deploy/podman/up.sh deploy-bundle/
           cp deploy/podman/down.sh deploy-bundle/
           cp deploy/podman/Caddyfile deploy-bundle/
+          cp deploy/podman/litellm-config-template.yaml deploy-bundle/
           cp deploy/podman/suprclaw-stack.service deploy-bundle/
 
           printf '%b' "$ENV_FILE" > deploy-bundle/backend.env
-          printf '%b' "$LITELLM_ENV_FILE" > deploy-bundle/litellm.env
-          printf '%b' "$LITELLM_CONFIG_YAML" > deploy-bundle/litellm-config.yaml
+          : > deploy-bundle/litellm.env
+          : > deploy-bundle/litellm-config.yaml
 
           python3 - <<'PY'
           from pathlib import Path
+
+          deploy_env = Path(".deploy.env")
 
           def normalize(path: Path) -> None:
               if not path.exists():
@@ -138,8 +139,44 @@ jobs:
                   text = text.replace("\\r\\n", "\n").replace("\\n", "\n")
                   path.write_text(text)
 
+          def parse_env(path: Path) -> dict[str, str]:
+              values: dict[str, str] = {}
+              if not path.exists():
+                  return values
+              for raw_line in path.read_text().splitlines():
+                  line = raw_line.strip()
+                  if not line or line.startswith("#") or "=" not in line:
+                      continue
+                  key, value = line.split("=", 1)
+                  values[key] = value
+              return values
+
+          normalize(deploy_env)
           normalize(Path("deploy-bundle/backend.env"))
           normalize(Path("deploy-bundle/litellm.env"))
+
+          deploy_values = parse_env(deploy_env)
+          api_host = deploy_values.get("SUPRCLAW_API_HOST", "api.suprclaw.com")
+          lite_enabled = deploy_values.get("LITELLM_ENABLED", "").lower() in {"1", "true", "yes", "on"}
+          if not lite_enabled:
+              lite_enabled = any(
+                  deploy_values.get(key, "")
+                  for key in ("LITELLM_UPSTREAM_MODEL", "AWS_BEARER_TOKEN_BEDROCK", "AWS_ACCESS_KEY_ID")
+              )
+
+          proxy_model_name = deploy_values.get("LITELLM_PROXY_MODEL_NAME", "").strip() or "suprclaw-default"
+          upstream_model = deploy_values.get("LITELLM_UPSTREAM_MODEL", "").strip()
+          master_key = (
+              deploy_values.get("LITELLM_MASTER_KEY", "").strip()
+              or deploy_values.get("LITELLM_API_KEY", "").strip()
+          )
+          public_base = deploy_values.get("LITELLM_PUBLIC_BASE", "").strip() or f"https://{api_host}/litellm/v1"
+          model_id = deploy_values.get("LITELLM_MODEL_ID", "").strip() or f"litellm/{proxy_model_name}"
+
+          if lite_enabled and not upstream_model:
+              raise SystemExit("LiteLLM is enabled, but LITELLM_UPSTREAM_MODEL is missing from ENV_FILE.")
+          if lite_enabled and not master_key:
+              raise SystemExit("LiteLLM is enabled, but LITELLM_MASTER_KEY or LITELLM_API_KEY is missing from ENV_FILE.")
 
           backend_env = Path("deploy-bundle/backend.env")
           excluded_keys = {
@@ -158,6 +195,11 @@ jobs:
               "SUPRCLAW_STATIC_DEVICE_ID",
               "SUPABASE_MCP_URL",
               "DOCKER_OPENCLAW_IMAGE",
+              "LITELLM_ENABLED",
+              "LITELLM_MASTER_KEY",
+              "LITELLM_PROXY_MODEL_NAME",
+              "LITELLM_PUBLIC_BASE",
+              "LITELLM_UPSTREAM_MODEL",
               # Firebase credentials are mounted as a file instead of injected inline.
               "FIREBASE_CREDENTIALS_JSON",
               "FIREBASE_CREDENTIALS_JSON_B64",
@@ -167,6 +209,10 @@ jobs:
               "SSL_ENABLED": "true",
               "FIREBASE_CREDENTIALS_PATH": "/etc/suprclaw/firebase-credentials.json",
           }
+          if lite_enabled:
+              updates["LITELLM_API_BASE"] = public_base
+              updates["LITELLM_API_KEY"] = master_key
+              updates["LITELLM_MODEL_ID"] = model_id
           seen = set()
           rewritten = []
           for line in lines:
@@ -185,6 +231,35 @@ jobs:
               if key not in seen:
                   rewritten.append(f"{key}={value}")
           backend_env.write_text("\n".join(rewritten) + "\n")
+
+          litellm_env = Path("deploy-bundle/litellm.env")
+          litellm_config = Path("deploy-bundle/litellm-config.yaml")
+          template = Path("deploy-bundle/litellm-config-template.yaml")
+          if lite_enabled:
+              region_name = (
+                  deploy_values.get("AWS_REGION_NAME", "").strip()
+                  or deploy_values.get("AWS_REGION", "").strip()
+                  or "us-east-1"
+              )
+              litellm_env_lines = [
+                  f"LITELLM_MASTER_KEY={master_key}",
+                  f"AWS_REGION_NAME={region_name}",
+              ]
+              for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_BEARER_TOKEN_BEDROCK"):
+                  value = deploy_values.get(key, "").strip()
+                  if value:
+                      litellm_env_lines.append(f"{key}={value}")
+              litellm_env.write_text("\n".join(litellm_env_lines) + "\n")
+
+              litellm_config.write_text(
+                  template.read_text()
+                  .replace("__LITELLM_PROXY_MODEL_NAME__", proxy_model_name)
+                  .replace("__LITELLM_UPSTREAM_MODEL__", upstream_model)
+                  .replace("__LITELLM_MASTER_KEY__", master_key)
+              )
+          else:
+              litellm_env.write_text("")
+              litellm_config.write_text("")
           PY
 
           firebase_credentials_b64="$(grep -E '^FIREBASE_CREDENTIALS_JSON_B64=' .deploy.env | tail -n1 | cut -d= -f2-)"
@@ -203,9 +278,21 @@ jobs:
 
           cat > deploy-bundle/stack.env <<EOF
           BACKEND_IMAGE=${IMAGE_NAME}:${IMAGE_TAG}
-          LITELLM_IMAGE=${LITELLM_IMAGE:-ghcr.io/berriai/litellm:main-stable}
+          LITELLM_IMAGE=$(grep -E '^LITELLM_IMAGE=' .deploy.env | tail -n1 | cut -d= -f2- || true)
           SUPRCLAW_API_HOST=${SUPRCLAW_API_HOST:-api.suprclaw.com}
           EOF
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          stack_env = Path("deploy-bundle/stack.env")
+          lines = []
+          for raw in stack_env.read_text().splitlines():
+              if raw.startswith("LITELLM_IMAGE=") and raw == "LITELLM_IMAGE=":
+                  raw = "LITELLM_IMAGE=ghcr.io/berriai/litellm:main-stable"
+              lines.append(raw)
+          stack_env.write_text("\n".join(lines) + "\n")
+          PY
 
           tar -czf suprclaw-podman-deploy.tar.gz -C deploy-bundle .
 

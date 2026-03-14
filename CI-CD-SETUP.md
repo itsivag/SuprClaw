@@ -39,13 +39,23 @@ Notes:
 - `SSH_PRIVATE_KEY` should remain the base64-encoded deploy private key, because the workflow decodes it before SSH use.
 - `SUPRCLAW_API_HOST` is optional. If omitted, the workflow defaults to `api.suprclaw.com`.
 
-Optional LiteLLM secrets:
+Optional LiteLLM settings now also live inside `ENV_FILE`:
 
-| Secret | Purpose |
-| --- | --- |
-| `LITELLM_IMAGE` | Override LiteLLM image, defaults to `ghcr.io/berriai/litellm:main-stable` |
-| `LITELLM_ENV_FILE` | Environment file content for LiteLLM |
-| `LITELLM_CONFIG_YAML` | LiteLLM config YAML mounted into the container |
+```env
+LITELLM_ENABLED=true
+LITELLM_IMAGE=ghcr.io/berriai/litellm:main-stable
+LITELLM_MASTER_KEY=...
+LITELLM_PROXY_MODEL_NAME=suprclaw-default
+LITELLM_UPSTREAM_MODEL=bedrock/minimax.minimax-m2.1
+LITELLM_PUBLIC_BASE=https://api.suprclaw.com/litellm/v1
+AWS_BEARER_TOKEN_BEDROCK=...
+# or AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_REGION
+```
+
+When LiteLLM is enabled, the deploy workflow automatically derives:
+- `/etc/suprclaw/litellm.env`
+- `/etc/suprclaw/litellm-config.yaml`
+- backend runtime values for `LITELLM_API_BASE`, `LITELLM_API_KEY`, and `LITELLM_MODEL_ID`
 
 ## Hetzner host bootstrap
 
@@ -82,6 +92,12 @@ The script installs Podman, creates the `suprclaw` user, opens `22/80/443`, and 
 - `/etc/suprclaw/litellm-config.yaml`
 - `/etc/suprclaw/Caddyfile`
 - `/etc/systemd/system/suprclaw-stack.service`
+
+Worker hosts should use the public LiteLLM base at:
+
+```text
+https://api.suprclaw.com/litellm/v1
+```
 
 ## Useful commands
 

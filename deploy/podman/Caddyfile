@@ -4,5 +4,12 @@
 
 {$SUPRCLAW_API_HOST} {
 	encode gzip zstd
-	reverse_proxy 127.0.0.1:8080
+
+	handle_path /litellm/* {
+		reverse_proxy 127.0.0.1:4000
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8080
+	}
 }
