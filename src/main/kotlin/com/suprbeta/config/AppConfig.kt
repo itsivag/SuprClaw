@@ -43,7 +43,7 @@ object AppConfig {
     val podmanContainerMemory: String =
         dotenv["PODMAN_CONTAINER_MEMORY"]
             ?: System.getenv("PODMAN_CONTAINER_MEMORY")
-            ?: "2g"
+            ?: "256m"
     val podmanContainerCpu: String =
         dotenv["PODMAN_CONTAINER_CPU"]
             ?: System.getenv("PODMAN_CONTAINER_CPU")
