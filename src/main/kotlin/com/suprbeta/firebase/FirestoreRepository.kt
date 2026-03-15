@@ -376,16 +376,25 @@ class FirestoreRepository(
     }
 
     private fun encryptConnector(userId: String, connector: ConnectorInternal): ConnectorInternal {
-        val aadPrefix = "$userId:${connector.provider}"
+        val aadPrefix = "$userId:${connector.accountId.ifBlank { connector.provider }}"
         return connector.copy(
-            mcpServerUrl = cryptoService.encrypt(connector.mcpServerUrl, "$aadPrefix:mcpServerUrl")
+            mcpServerUrl = if (connector.mcpServerUrl.isBlank()) {
+                ""
+            } else {
+                cryptoService.encrypt(connector.mcpServerUrl, "$aadPrefix:mcpServerUrl")
+            }
         )
     }
 
     private fun decryptConnector(userId: String, connector: ConnectorInternal): ConnectorInternal {
-        val aadPrefix = "$userId:${connector.provider}"
+        val aadPrefix = "$userId:${connector.accountId.ifBlank { connector.provider }}"
         return connector.copy(
-            mcpServerUrl = cryptoService.decrypt(connector.mcpServerUrl, "$aadPrefix:mcpServerUrl")
+            mcpServerUrl = when {
+                connector.mcpServerUrl.isBlank() -> ""
+                connector.mcpServerUrl.startsWith(com.suprbeta.core.CryptoService.PREFIX_V1) ->
+                    cryptoService.decrypt(connector.mcpServerUrl, "$aadPrefix:mcpServerUrl")
+                else -> connector.mcpServerUrl
+            }
         )
     }
 
@@ -394,14 +403,15 @@ class FirestoreRepository(
             if (connector.provider.isBlank()) {
                 throw IllegalArgumentException("Connector provider is required")
             }
+            val docId = connector.accountId.ifBlank { connector.provider.lowercase() }
             val encrypted = encryptConnector(userId, connector)
             firestore.collection(USERS)
                 .document(userId)
                 .collection(USER_CONNECTORS_SUBCOLLECTION)
-                .document(connector.provider.lowercase())
+                .document(docId)
                 .set(encrypted)
                 .await()
-            application.log.info("Saved connector '${connector.provider}' for userId=$userId")
+            application.log.info("Saved connector '${connector.provider}' docId=$docId for userId=$userId")
         } catch (e: Exception) {
             application.log.error("Failed to save connector '${connector.provider}' for userId=$userId", e)
             throw e
@@ -447,6 +457,40 @@ class FirestoreRepository(
         }
     }
 
+    suspend fun getUserConnectorInternalById(userId: String, accountId: String): ConnectorInternal? {
+        return try {
+            val snapshot = firestore.collection(USERS)
+                .document(userId)
+                .collection(USER_CONNECTORS_SUBCOLLECTION)
+                .document(accountId)
+                .get()
+                .await()
+            if (!snapshot.exists()) return null
+            val connector = snapshot.toObject(ConnectorInternal::class.java) ?: return null
+            decryptConnector(userId, connector)
+        } catch (e: CryptoOperationException) {
+            application.log.error("Failed to decrypt connector '$accountId' for userId=$userId", e)
+            throw e
+        } catch (e: Exception) {
+            application.log.error("Failed to get connector '$accountId' for userId=$userId", e)
+            null
+        }
+    }
+
+    suspend fun listUserConnectorsByProviderInternal(userId: String, provider: String): List<ConnectorInternal> {
+        return listUserConnectorsInternal(userId)
+            .filter { it.provider.equals(provider, ignoreCase = true) }
+    }
+
+    suspend fun findUserConnectorByConnectionInternal(
+        userId: String,
+        provider: String,
+        connectionId: String
+    ): ConnectorInternal? {
+        return listUserConnectorsByProviderInternal(userId, provider)
+            .firstOrNull { it.connectionId == connectionId }
+    }
+
     suspend fun deleteUserConnector(userId: String, provider: String) {
         try {
             firestore.collection(USERS)
@@ -458,6 +502,21 @@ class FirestoreRepository(
             application.log.info("Deleted connector '$provider' for userId=$userId")
         } catch (e: Exception) {
             application.log.error("Failed to delete connector '$provider' for userId=$userId", e)
+            throw e
+        }
+    }
+
+    suspend fun deleteUserConnectorById(userId: String, accountId: String) {
+        try {
+            firestore.collection(USERS)
+                .document(userId)
+                .collection(USER_CONNECTORS_SUBCOLLECTION)
+                .document(accountId)
+                .delete()
+                .await()
+            application.log.info("Deleted connector '$accountId' for userId=$userId")
+        } catch (e: Exception) {
+            application.log.error("Failed to delete connector '$accountId' for userId=$userId", e)
             throw e
         }
     }

@@ -4,12 +4,17 @@ import com.suprbeta.digitalocean.DropletMcpService
 import com.suprbeta.digitalocean.McpToolRuntimeConfig
 import com.suprbeta.firebase.FirestoreRepository
 import io.github.cdimascio.dotenv.dotenv
+import io.ktor.http.Parameters
 import io.ktor.http.URLBuilder
 import io.ktor.server.application.Application
 import io.ktor.server.application.log
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import java.net.URI
 import java.time.Instant
 import java.util.Base64
@@ -18,12 +23,39 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 interface ConnectorService {
-    suspend fun listConnectors(userId: String): List<ConnectorView>
-    suspend fun updateConnectorPolicy(userId: String, provider: String, allowedAgents: List<String>): ConnectorView
-    suspend fun disconnectConnector(userId: String, provider: String)
+    suspend fun listConnectors(userId: String): List<ConnectorProviderView>
+    suspend fun listConnectorAccounts(userId: String, provider: String): List<ConnectorAccountView>
+    suspend fun listConnectorTools(userId: String, provider: String, accountId: String): ConnectorToolsResponse
+    suspend fun invokeConnectorAction(
+        userId: String,
+        provider: String,
+        accountId: String,
+        actionName: String,
+        request: ConnectorActionInvokeRequest
+    ): ConnectorActionInvokeResponse
+
+    suspend fun updateConnectorPolicy(
+        userId: String,
+        provider: String,
+        accountId: String,
+        allowedAgents: List<String>,
+        isDefaultForProvider: Boolean?,
+        defaultForAgents: List<String>?
+    ): ConnectorAccountView
+
+    suspend fun disconnectConnector(userId: String, provider: String, accountId: String)
+    suspend fun startNangoConnectorSession(
+        userId: String,
+        userEmail: String?,
+        provider: String,
+        request: ConnectorSessionStartRequest
+    ): ConnectorSessionStartResponse
+
+    suspend fun getConnectorSessionStatus(userId: String, sessionId: String): ConnectorSessionStatusResponse
+    suspend fun handleNangoWebhook(rawBody: String, signatureHeader: String?)
+    fun forwardNangoOAuthCallback(provider: String, queryParameters: Parameters): String
 
     suspend fun startConnectorSession(userId: String): ConnectorSessionStartResponse
-    suspend fun getConnectorSessionStatus(userId: String, sessionId: String): ConnectorSessionStatusResponse
     suspend fun getSessionConnectPage(sessionId: String, state: String): ConnectorConnectPage
     suspend fun finalizeConnectorCallback(state: String, mcpServerUrl: String?): ConnectorSessionCallbackResponse
     fun callbackRedirectUrl(callbackResponse: ConnectorSessionCallbackResponse): String?
@@ -32,18 +64,23 @@ interface ConnectorService {
 class ConnectorServiceImpl(
     private val firestoreRepository: FirestoreRepository,
     private val dropletMcpService: DropletMcpService,
+    private val nangoService: NangoService,
     application: Application
 ) : ConnectorService {
     private val logger = application.log
     private val dotenv = dotenv { ignoreIfMissing = true; directory = "." }
+    private val json = Json { ignoreUnknownKeys = true }
     private val stateJson = Json { ignoreUnknownKeys = true }
 
     companion object {
         private const val PROVIDER_ZAPIER = "zapier"
+        private const val PROVIDER_INTERNAL_NANGO = "nango"
         private val CONNECTOR_TOOLS = setOf(PROVIDER_ZAPIER)
         private const val DEFAULT_CONNECTOR_BASE_URL = "https://api.suprclaw.com"
         private const val DEFAULT_SESSION_TTL_SECONDS = 900L
         private val DEFAULT_ENABLED_APPS = listOf("gmail", "calendar", "drive", "docs")
+        private const val NANGO_SESSION_TAG = "suprclaw_session_id"
+        private const val NANGO_AGENT_TAG = "suprclaw_agent_id"
     }
 
     private val connectorPublicBaseUrl: String by lazy {
@@ -65,28 +102,362 @@ class ConnectorServiceImpl(
     private val callbackFailureUrl: String by lazy { env("CONNECTOR_CALLBACK_FAILURE_URL") }
     private val zapierEmbedId: String by lazy { env("ZAPIER_MCP_EMBED_ID") }
 
-    override suspend fun listConnectors(userId: String): List<ConnectorView> {
-        return firestoreRepository.listUserConnectorsInternal(userId)
-            .map { it.toView(hasCredential = hasZapierCredential()) }
+    override suspend fun listConnectors(userId: String): List<ConnectorProviderView> {
+        val connectors = firestoreRepository.listUserConnectorsInternal(userId)
+        return connectors
+            .groupBy { it.provider.lowercase() }
+            .map { (provider, accounts) ->
+                ConnectorProviderView(
+                    provider = provider,
+                    providerDisplayName = providerDisplayName(provider),
+                    accounts = accounts
+                        .sortedWith(compareByDescending<ConnectorInternal> { it.isDefaultForProvider }.thenBy { it.createdAt })
+                        .map { it.toAccountView() }
+                )
+            }
+            .sortedBy { it.providerDisplayName.lowercase() }
     }
 
-    override suspend fun updateConnectorPolicy(userId: String, provider: String, allowedAgents: List<String>): ConnectorView {
+    override suspend fun listConnectorAccounts(userId: String, provider: String): List<ConnectorAccountView> {
+        return firestoreRepository.listUserConnectorsByProviderInternal(userId, provider.lowercase())
+            .sortedWith(compareByDescending<ConnectorInternal> { it.isDefaultForProvider }.thenBy { it.createdAt })
+            .map { it.toAccountView() }
+    }
+
+    override suspend fun listConnectorTools(userId: String, provider: String, accountId: String): ConnectorToolsResponse {
+        val account = resolveConnectedAccount(userId, provider, accountId)
+        val tools = nangoService.listActionTools(account.providerConfigKey)
+            .map { tool ->
+                ConnectorToolDefinition(
+                    name = tool.name,
+                    description = tool.description,
+                    parameters = tool.parameters
+                )
+            }
+
+        return ConnectorToolsResponse(
+            provider = account.provider,
+            accountId = account.accountId.ifBlank { accountId },
+            providerConfigKey = account.providerConfigKey,
+            tools = tools
+        )
+    }
+
+    override suspend fun invokeConnectorAction(
+        userId: String,
+        provider: String,
+        accountId: String,
+        actionName: String,
+        request: ConnectorActionInvokeRequest
+    ): ConnectorActionInvokeResponse {
+        val account = resolveConnectedAccount(userId, provider, accountId)
+        if (account.connectionId.isBlank() || account.providerConfigKey.isBlank()) {
+            throw IllegalStateException("Connector account '$accountId' is missing Nango connection details")
+        }
+
+        val result = nangoService.triggerAction(
+            providerConfigKey = account.providerConfigKey,
+            connectionId = account.connectionId,
+            actionName = actionName,
+            input = request.input,
+            async = request.async,
+            maxRetries = request.maxRetries
+        )
+
+        return ConnectorActionInvokeResponse(
+            actionName = actionName,
+            async = result.async,
+            output = result.output,
+            actionId = result.actionId,
+            statusUrl = result.statusUrl
+        )
+    }
+
+    override suspend fun updateConnectorPolicy(
+        userId: String,
+        provider: String,
+        accountId: String,
+        allowedAgents: List<String>,
+        isDefaultForProvider: Boolean?,
+        defaultForAgents: List<String>?
+    ): ConnectorAccountView {
         val normalizedProvider = provider.lowercase()
-        val existing = firestoreRepository.getUserConnectorInternal(userId, normalizedProvider)
-            ?: throw NoSuchElementException("Connector '$normalizedProvider' is not connected")
-        val updated = existing.copy(
-            allowedAgents = normalizeAllowedAgents(allowedAgents),
-            updatedAt = Instant.now().toString()
+        val target = firestoreRepository.getUserConnectorInternalById(userId, accountId)
+            ?: throw NoSuchElementException("Connector account '$accountId' not found")
+        if (!target.provider.equals(normalizedProvider, ignoreCase = true)) {
+            throw IllegalArgumentException("Connector account '$accountId' does not belong to provider '$normalizedProvider'")
+        }
+
+        val now = Instant.now().toString()
+        val normalizedAllowedAgents = normalizeAllowedAgents(allowedAgents)
+        val normalizedDefaultForAgents = defaultForAgents?.let(::normalizeAllowedAgents)
+        val siblings = firestoreRepository.listUserConnectorsByProviderInternal(userId, normalizedProvider)
+            .filter { it.accountId != target.accountId }
+        val agentsClaimedAsDefault = normalizedDefaultForAgents.orEmpty().toSet()
+        siblings
+            .mapNotNull { sibling ->
+                var updatedSibling = sibling
+                var changed = false
+
+                if (isDefaultForProvider == true && sibling.isDefaultForProvider) {
+                    updatedSibling = updatedSibling.copy(isDefaultForProvider = false, updatedAt = now)
+                    changed = true
+                }
+
+                if (agentsClaimedAsDefault.isNotEmpty() && sibling.defaultForAgents.any { it in agentsClaimedAsDefault }) {
+                    updatedSibling = updatedSibling.copy(
+                        defaultForAgents = updatedSibling.defaultForAgents.filterNot { it in agentsClaimedAsDefault },
+                        updatedAt = now
+                    )
+                    changed = true
+                }
+
+                updatedSibling.takeIf { changed }
+            }
+            .forEach { sibling -> firestoreRepository.saveUserConnector(userId, sibling) }
+
+        val updated = target.copy(
+            allowedAgents = normalizedAllowedAgents,
+            isDefaultForProvider = isDefaultForProvider ?: target.isDefaultForProvider,
+            defaultForAgents = normalizedDefaultForAgents ?: target.defaultForAgents,
+            updatedAt = now
         )
         firestoreRepository.saveUserConnector(userId, updated)
-        return updated.toView(hasCredential = hasZapierCredential())
+        return updated.toAccountView()
     }
 
-    override suspend fun disconnectConnector(userId: String, provider: String) {
+    override suspend fun disconnectConnector(userId: String, provider: String, accountId: String) {
         val normalizedProvider = provider.lowercase()
-        firestoreRepository.deleteUserConnector(userId, normalizedProvider)
-        reconcileMcpForUser(userId)
-        logger.info("Connector '$normalizedProvider' disconnected for userId=$userId")
+        val connector = firestoreRepository.getUserConnectorInternalById(userId, accountId)
+            ?: throw NoSuchElementException("Connector account '$accountId' not found")
+        if (!connector.provider.equals(normalizedProvider, ignoreCase = true)) {
+            throw IllegalArgumentException("Connector account '$accountId' does not belong to provider '$normalizedProvider'")
+        }
+
+        if (connector.connectionId.isNotBlank() && connector.providerConfigKey.isNotBlank()) {
+            runCatching {
+                nangoService.deleteConnection(
+                    providerConfigKey = connector.providerConfigKey,
+                    connectionId = connector.connectionId
+                )
+            }.onFailure {
+                logger.warn("Failed to delete Nango connection ${connector.connectionId} for userId=$userId", it)
+            }
+        }
+
+        if (connector.accountId.isNotBlank()) {
+            firestoreRepository.deleteUserConnectorById(userId, connector.accountId)
+        } else {
+            firestoreRepository.deleteUserConnector(userId, normalizedProvider)
+        }
+
+        if (normalizedProvider == PROVIDER_ZAPIER) {
+            reconcileMcpForUser(userId)
+        }
+        logger.info("Connector '$normalizedProvider' accountId=$accountId disconnected for userId=$userId")
+    }
+
+    override suspend fun startNangoConnectorSession(
+        userId: String,
+        userEmail: String?,
+        provider: String,
+        request: ConnectorSessionStartRequest
+    ): ConnectorSessionStartResponse {
+        val providerDef = nangoService.requireProvider(provider)
+        val now = Instant.now()
+        val sessionId = "session_${UUID.randomUUID().toString().replace("-", "").take(24)}"
+        val tags = buildMap {
+            put("end_user_id", userId)
+            userEmail?.takeIf { it.isNotBlank() }?.let { put("end_user_email", it) }
+            put(NANGO_SESSION_TAG, sessionId)
+            request.agentId?.takeIf { it.isNotBlank() }?.let { put(NANGO_AGENT_TAG, it) }
+        }
+
+        val reconnectTarget = request.accountId?.takeIf { it.isNotBlank() }?.let { accountId ->
+            firestoreRepository.getUserConnectorInternalById(userId, accountId)
+                ?: throw NoSuchElementException("Connector account '$accountId' not found")
+        }
+
+        val nangoSession = if (reconnectTarget != null) {
+            if (!reconnectTarget.provider.equals(providerDef.provider, ignoreCase = true)) {
+                throw IllegalArgumentException("Connector account '$request.accountId' does not belong to provider '${providerDef.provider}'")
+            }
+            if (reconnectTarget.connectionId.isBlank()) {
+                throw IllegalStateException("Connector account '${reconnectTarget.accountId}' is missing a connection ID")
+            }
+            nangoService.createReconnectSession(
+                provider = providerDef.copy(
+                    providerConfigKey = reconnectTarget.providerConfigKey.ifBlank { providerDef.providerConfigKey }
+                ),
+                connectionId = reconnectTarget.connectionId,
+                tags = tags
+            )
+        } else {
+            nangoService.createConnectSession(providerDef, tags)
+        }
+
+        val session = ConnectorSessionInternal(
+            id = sessionId,
+            userId = userId,
+            status = ConnectorSessionStatus.PENDING,
+            providerInternal = PROVIDER_INTERNAL_NANGO,
+            connectUrl = nangoSession.connectLink.orEmpty(),
+            callbackState = "",
+            createdAt = now.toString(),
+            updatedAt = now.toString(),
+            expiresAt = nangoSession.expiresAt,
+            error = null,
+            connectorId = reconnectTarget?.accountId,
+            enabledApps = emptyList(),
+            allowedAgents = emptyList(),
+            provider = providerDef.provider,
+            providerConfigKey = reconnectTarget?.providerConfigKey?.ifBlank { providerDef.providerConfigKey }
+                ?: providerDef.providerConfigKey,
+            nangoSessionToken = nangoSession.token,
+            requestedScopes = request.scopePreset?.let(::listOf) ?: emptyList(),
+            redirectUri = request.returnPath.orEmpty(),
+            connectionId = reconnectTarget?.connectionId,
+            accountId = reconnectTarget?.accountId,
+            agentId = request.agentId,
+            returnPath = request.returnPath
+        )
+        firestoreRepository.saveConnectorSession(session)
+
+        return ConnectorSessionStartResponse(
+            sessionId = session.id,
+            sessionToken = nangoSession.token,
+            providerConfigKey = session.providerConfigKey,
+            expiresAt = session.expiresAt,
+            connectUrl = nangoSession.connectLink
+        )
+    }
+
+    override suspend fun getConnectorSessionStatus(userId: String, sessionId: String): ConnectorSessionStatusResponse {
+        val session = firestoreRepository.getConnectorSession(sessionId)
+            ?: throw NoSuchElementException("Connector session '$sessionId' not found")
+        if (session.userId != userId) throw NoSuchElementException("Connector session '$sessionId' not found")
+
+        val normalized = normalizeSessionStatus(session)
+        if (normalized != session) {
+            firestoreRepository.saveConnectorSession(normalized)
+        }
+
+        val account = normalized.accountId?.takeIf { it.isNotBlank() }?.let {
+            firestoreRepository.getUserConnectorInternalById(userId, it)?.toAccountView()
+        }
+
+        return ConnectorSessionStatusResponse(
+            sessionId = normalized.id,
+            provider = normalized.provider.ifBlank { normalized.providerInternal },
+            status = normalized.status,
+            error = normalized.error,
+            account = account
+        )
+    }
+
+    override suspend fun handleNangoWebhook(rawBody: String, signatureHeader: String?) {
+        if (!nangoService.verifyWebhookSignature(rawBody, signatureHeader)) {
+            throw IllegalArgumentException("Invalid Nango webhook signature")
+        }
+
+        val payload = json.parseToJsonElement(rawBody).jsonObject
+        val type = payload.string("type")
+        val operation = payload.string("operation")
+        if (type != "auth" || operation.isNullOrBlank()) {
+            return
+        }
+
+        val tags = payload.objectValue("tags").stringMap()
+        val sessionId = tags[NANGO_SESSION_TAG]
+        val session = sessionId?.let { firestoreRepository.getConnectorSession(it) }
+        val provider = payload.string("provider")
+            ?: session?.provider
+            ?: return
+        val userId = tags["end_user_id"]
+            ?: session?.userId
+            ?: payload.objectValue("endUser").string("endUserId")
+            ?: return
+        val connectionId = payload.string("connectionId").orEmpty()
+        val providerConfigKey = payload.string("providerConfigKey")
+            ?: session?.providerConfigKey
+            ?: nangoService.requireProvider(provider).providerConfigKey
+        val success = payload.boolean("success") ?: false
+        val now = Instant.now().toString()
+
+        when (operation) {
+            "creation", "override" -> {
+                if (!success) {
+                    markSessionFailure(session, payload.errorDescription())
+                    return
+                }
+
+                val existing = firestoreRepository.findUserConnectorByConnectionInternal(userId, provider, connectionId)
+                    ?: session?.accountId?.let { firestoreRepository.getUserConnectorInternalById(userId, it) }
+
+                val connection = nangoService.getConnection(providerConfigKey, connectionId)
+                val connector = ConnectorInternal(
+                    provider = provider.lowercase(),
+                    accountId = existing?.accountId?.ifBlank { connection.connectionId } ?: connection.connectionId,
+                    connectionId = connection.connectionId,
+                    providerConfigKey = connection.providerConfigKey,
+                    externalAccountId = connection.metadata["external_account_id"]
+                        ?: connection.tags["external_account_id"]
+                        ?: existing?.externalAccountId,
+                    displayName = connection.tags["end_user_display_name"]
+                        ?: connection.metadata["display_name"]
+                        ?: existing?.displayName,
+                    email = connection.tags["end_user_email"] ?: existing?.email,
+                    avatarUrl = connection.metadata["avatar_url"] ?: existing?.avatarUrl,
+                    status = ConnectorAccountStatus.CONNECTED,
+                    grantedScopes = extractScopes(connection, existing),
+                    allowedAgents = existing?.allowedAgents ?: emptyList(),
+                    isDefaultForProvider = existing?.isDefaultForProvider
+                        ?: firestoreRepository.listUserConnectorsByProviderInternal(userId, provider).isEmpty(),
+                    defaultForAgents = existing?.defaultForAgents ?: emptyList(),
+                    lastValidatedAt = now,
+                    createdAt = existing?.createdAt?.ifBlank { now } ?: now,
+                    updatedAt = now,
+                    lastError = null,
+                    mcpServerUrl = existing?.mcpServerUrl.orEmpty(),
+                    enabledApps = existing?.enabledApps ?: emptyList()
+                )
+                firestoreRepository.saveUserConnector(userId, connector)
+                if (session != null) {
+                    firestoreRepository.saveConnectorSession(
+                        session.copy(
+                            status = ConnectorSessionStatus.COMPLETED,
+                            updatedAt = now,
+                            error = null,
+                            connectorId = connector.accountId,
+                            accountId = connector.accountId,
+                            connectionId = connector.connectionId,
+                            provider = connector.provider,
+                            providerConfigKey = connector.providerConfigKey
+                        )
+                    )
+                }
+            }
+
+            "refresh" -> {
+                val existing = firestoreRepository.findUserConnectorByConnectionInternal(userId, provider, connectionId)
+                if (existing != null) {
+                    firestoreRepository.saveUserConnector(
+                        userId,
+                        existing.copy(
+                            status = ConnectorAccountStatus.RECONNECT_REQUIRED,
+                            updatedAt = now,
+                            lastValidatedAt = now,
+                            lastError = payload.errorDescription() ?: "Nango token refresh failed"
+                        )
+                    )
+                }
+                markSessionFailure(session, payload.errorDescription() ?: "Nango token refresh failed")
+            }
+        }
+    }
+
+    override fun forwardNangoOAuthCallback(provider: String, queryParameters: Parameters): String {
+        return nangoService.buildCallbackForwardUrl(provider, queryParameters)
     }
 
     override suspend fun startConnectorSession(userId: String): ConnectorSessionStartResponse {
@@ -121,23 +492,26 @@ class ConnectorServiceImpl(
             error = null,
             connectorId = null,
             enabledApps = DEFAULT_ENABLED_APPS,
-            allowedAgents = emptyList()
+            allowedAgents = emptyList(),
+            provider = PROVIDER_ZAPIER,
+            providerConfigKey = PROVIDER_ZAPIER,
+            nangoSessionToken = "",
+            requestedScopes = emptyList(),
+            redirectUri = "",
+            connectionId = null,
+            accountId = null,
+            agentId = null,
+            returnPath = null
         )
         firestoreRepository.saveConnectorSession(session)
-        logger.info("Connector session started: sessionId=$sessionId userId=$userId provider=$PROVIDER_ZAPIER")
-        return ConnectorSessionStartResponse(connectUrl = connectUrl, sessionId = sessionId)
-    }
-
-    override suspend fun getConnectorSessionStatus(userId: String, sessionId: String): ConnectorSessionStatusResponse {
-        val session = firestoreRepository.getConnectorSession(sessionId)
-            ?: throw NoSuchElementException("Connector session '$sessionId' not found")
-        if (session.userId != userId) throw NoSuchElementException("Connector session '$sessionId' not found")
-
-        val normalized = normalizeSessionStatus(session)
-        if (normalized != session) {
-            firestoreRepository.saveConnectorSession(normalized)
-        }
-        return ConnectorSessionStatusResponse(sessionId = normalized.id, status = normalized.status, error = normalized.error)
+        logger.info("Legacy connector session started: sessionId=$sessionId userId=$userId provider=$PROVIDER_ZAPIER")
+        return ConnectorSessionStartResponse(
+            sessionId = sessionId,
+            sessionToken = "",
+            providerConfigKey = PROVIDER_ZAPIER,
+            expiresAt = expiresAt.toString(),
+            connectUrl = connectUrl
+        )
     }
 
     override suspend fun getSessionConnectPage(sessionId: String, state: String): ConnectorConnectPage {
@@ -169,7 +543,6 @@ class ConnectorServiceImpl(
         }
 
         val callbackUrl = "$connectorPublicBaseUrl/api/connectors/apps/callback"
-        logger.info("Prepared connector connect page for sessionId=$sessionId")
         return ConnectorConnectPage(
             sessionId = sessionId,
             state = state,
@@ -196,18 +569,10 @@ class ConnectorServiceImpl(
         val normalized = normalizeSessionStatus(session)
         if (normalized.status == ConnectorSessionStatus.EXPIRED) {
             firestoreRepository.saveConnectorSession(normalized)
-            return ConnectorSessionCallbackResponse(
-                sessionId = normalized.id,
-                status = normalized.status,
-                error = normalized.error
-            )
+            return ConnectorSessionCallbackResponse(normalized.id, normalized.status, normalized.error)
         }
         if (!normalized.status.equals(ConnectorSessionStatus.PENDING, ignoreCase = true)) {
-            return ConnectorSessionCallbackResponse(
-                sessionId = normalized.id,
-                status = normalized.status,
-                error = normalized.error
-            )
+            return ConnectorSessionCallbackResponse(normalized.id, normalized.status, normalized.error)
         }
 
         val providedMcpServerUrl = mcpServerUrl?.trim().orEmpty()
@@ -218,8 +583,7 @@ class ConnectorServiceImpl(
                 error = "Missing mcpServerUrl in callback"
             )
             firestoreRepository.saveConnectorSession(failed)
-            logger.warn("Connector callback failed: missing mcpServerUrl sessionId=${failed.id}")
-            return ConnectorSessionCallbackResponse(sessionId = failed.id, status = failed.status, error = failed.error)
+            return ConnectorSessionCallbackResponse(failed.id, failed.status, failed.error)
         }
 
         return try {
@@ -233,11 +597,11 @@ class ConnectorServiceImpl(
                 status = ConnectorSessionStatus.COMPLETED,
                 updatedAt = Instant.now().toString(),
                 error = null,
-                connectorId = PROVIDER_ZAPIER
+                connectorId = PROVIDER_ZAPIER,
+                accountId = PROVIDER_ZAPIER
             )
             firestoreRepository.saveConnectorSession(completed)
-            logger.info("Connector session completed: sessionId=${completed.id} userId=${completed.userId}")
-            ConnectorSessionCallbackResponse(sessionId = completed.id, status = completed.status, error = null)
+            ConnectorSessionCallbackResponse(completed.id, completed.status, null)
         } catch (e: Exception) {
             val failed = normalized.copy(
                 status = ConnectorSessionStatus.FAILED,
@@ -246,7 +610,7 @@ class ConnectorServiceImpl(
             )
             firestoreRepository.saveConnectorSession(failed)
             logger.error("Connector callback finalize failed: sessionId=${failed.id}", e)
-            ConnectorSessionCallbackResponse(sessionId = failed.id, status = failed.status, error = failed.error)
+            ConnectorSessionCallbackResponse(failed.id, failed.status, failed.error)
         }
     }
 
@@ -277,10 +641,14 @@ class ConnectorServiceImpl(
         val existing = firestoreRepository.getUserConnectorInternal(userId, PROVIDER_ZAPIER)
         val connector = ConnectorInternal(
             provider = PROVIDER_ZAPIER,
-            status = "connected",
+            accountId = PROVIDER_ZAPIER,
+            connectionId = "",
+            providerConfigKey = "",
+            status = ConnectorAccountStatus.CONNECTED,
             mcpServerUrl = normalizedUrl,
             enabledApps = normalizeEnabledApps(enabledApps),
             allowedAgents = normalizeAllowedAgents(allowedAgents),
+            isDefaultForProvider = true,
             createdAt = existing?.createdAt?.ifBlank { now } ?: now,
             updatedAt = now,
             lastError = null
@@ -288,8 +656,7 @@ class ConnectorServiceImpl(
 
         firestoreRepository.saveUserConnector(userId, connector)
         reconcileMcpForUser(userId)
-        logger.info("Connector '$PROVIDER_ZAPIER' connected for userId=$userId")
-        return connector.toView(hasCredential = true)
+        return connector.toLegacyView(hasCredential = true)
     }
 
     private suspend fun reconcileMcpForUser(userId: String) {
@@ -298,18 +665,16 @@ class ConnectorServiceImpl(
         if (!droplet.status.equals("active", ignoreCase = true)) return
 
         val activeConnectors = firestoreRepository.listUserConnectorsInternal(userId)
-            .filter { it.status.equals("connected", ignoreCase = true) }
-        val connectorTools = activeConnectors
-            .mapNotNull { connectorToolName(it.provider) }
+            .filter { it.status.equals(ConnectorAccountStatus.CONNECTED, ignoreCase = true) }
+            .filter { it.provider == PROVIDER_ZAPIER }
+        val connectorTools = activeConnectors.mapNotNull { connectorToolName(it.provider) }
 
         val stableTools = droplet.configuredMcpTools.filterNot { it in CONNECTOR_TOOLS }
         val allTools = (stableTools + connectorTools).distinct()
 
         val runtimeConfigByTool = activeConnectors.mapNotNull { connector ->
             val toolName = connectorToolName(connector.provider) ?: return@mapNotNull null
-            toolName to McpToolRuntimeConfig(
-                upstreamOverride = connector.mcpServerUrl.ifBlank { null }
-            )
+            toolName to McpToolRuntimeConfig(upstreamOverride = connector.mcpServerUrl.ifBlank { null })
         }.toMap()
 
         dropletMcpService.configureMcpTools(droplet, allTools, runtimeConfigByTool)
@@ -345,9 +710,8 @@ class ConnectorServiceImpl(
     }
 
     private fun normalizeZapierUrl(rawUrl: String): String {
-        val url = rawUrl.trim()
         val uri = try {
-            URI(url)
+            URI(rawUrl.trim())
         } catch (_: Exception) {
             throw IllegalArgumentException("Invalid mcpServerUrl")
         }
@@ -397,9 +761,8 @@ class ConnectorServiceImpl(
             throw IllegalArgumentException("Invalid callback state signature")
         }
         val payloadJson = String(base64UrlDecode(payloadB64), Charsets.UTF_8)
-        val payload = runCatching { stateJson.decodeFromString(SignedStatePayload.serializer(), payloadJson) }
+        return runCatching { stateJson.decodeFromString(SignedStatePayload.serializer(), payloadJson) }
             .getOrElse { throw IllegalArgumentException("Invalid callback state payload") }
-        return payload
     }
 
     private fun hmacSha256(input: ByteArray, secret: String): ByteArray {
@@ -437,6 +800,51 @@ class ConnectorServiceImpl(
         return zapierEmbedId
     }
 
+    private suspend fun markSessionFailure(session: ConnectorSessionInternal?, error: String?) {
+        if (session == null) return
+        firestoreRepository.saveConnectorSession(
+            session.copy(
+                status = ConnectorSessionStatus.FAILED,
+                updatedAt = Instant.now().toString(),
+                error = error
+            )
+        )
+    }
+
+    private fun extractScopes(connection: NangoConnectionRecord, existing: ConnectorInternal?): List<String> {
+        val rawScopes = connection.raw.objectValue("credentials").objectValue("raw").string("scope")
+            ?: connection.raw.objectValue("credentials").string("scope")
+            ?: existing?.grantedScopes?.joinToString(" ")
+        return rawScopes
+            ?.split(',', ' ')
+            ?.map { it.trim() }
+            ?.filter { it.isNotBlank() }
+            ?.distinct()
+            ?: existing?.grantedScopes
+            ?: emptyList()
+    }
+
+    private fun providerDisplayName(provider: String): String {
+        return if (provider == PROVIDER_ZAPIER) {
+            "Zapier"
+        } else {
+            nangoService.providers[provider]?.displayName ?: provider.replaceFirstChar { it.uppercase() }
+        }
+    }
+
+    private suspend fun resolveConnectedAccount(userId: String, provider: String, accountId: String): ConnectorInternal {
+        val normalizedProvider = provider.lowercase()
+        val account = firestoreRepository.getUserConnectorInternalById(userId, accountId)
+            ?: throw NoSuchElementException("Connector account '$accountId' not found")
+        if (!account.provider.equals(normalizedProvider, ignoreCase = true)) {
+            throw IllegalArgumentException("Connector account '$accountId' does not belong to provider '$normalizedProvider'")
+        }
+        if (!account.status.equals(ConnectorAccountStatus.CONNECTED, ignoreCase = true)) {
+            throw IllegalStateException("Connector account '$accountId' is not connected")
+        }
+        return account
+    }
+
     private fun env(key: String): String = dotenv[key] ?: System.getenv(key) ?: ""
 }
 
@@ -449,7 +857,27 @@ private data class SignedStatePayload(
     val nonce: String
 )
 
-private fun ConnectorInternal.toView(hasCredential: Boolean): ConnectorView {
+private fun ConnectorInternal.toAccountView(): ConnectorAccountView = ConnectorAccountView(
+    provider = provider,
+    accountId = accountId.ifBlank { provider.lowercase() },
+    connectionId = connectionId,
+    providerConfigKey = providerConfigKey,
+    externalAccountId = externalAccountId,
+    displayName = displayName,
+    email = email,
+    avatarUrl = avatarUrl,
+    status = status,
+    grantedScopes = grantedScopes,
+    allowedAgents = allowedAgents,
+    isDefaultForProvider = isDefaultForProvider,
+    defaultForAgents = defaultForAgents,
+    lastValidatedAt = lastValidatedAt,
+    createdAt = createdAt,
+    updatedAt = updatedAt,
+    lastError = lastError
+)
+
+private fun ConnectorInternal.toLegacyView(hasCredential: Boolean): ConnectorView {
     val host = runCatching { URI(mcpServerUrl).host ?: "" }.getOrDefault("")
     return ConnectorView(
         provider = provider,
@@ -463,3 +891,19 @@ private fun ConnectorInternal.toView(hasCredential: Boolean): ConnectorView {
         lastError = lastError
     )
 }
+
+private fun JsonObject.string(key: String): String? = this[key]?.jsonObjectOrPrimitiveContent()
+
+private fun JsonObject.boolean(key: String): Boolean? = string(key)?.toBooleanStrictOrNull()
+
+private fun JsonObject.objectValue(key: String): JsonObject =
+    this[key]?.let { runCatching { it.jsonObject }.getOrNull() } ?: JsonObject(emptyMap())
+
+private fun JsonObject.stringMap(): Map<String, String> =
+    entries.mapNotNull { (key, value) -> value.jsonObjectOrPrimitiveContent()?.let { key to it } }.toMap()
+
+private fun JsonObject.errorDescription(): String? =
+    objectValue("error").string("description") ?: objectValue("error").string("type")
+
+private fun kotlinx.serialization.json.JsonElement.jsonObjectOrPrimitiveContent(): String? =
+    runCatching { jsonPrimitive.contentOrNull }.getOrNull()

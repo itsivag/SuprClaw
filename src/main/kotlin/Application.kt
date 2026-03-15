@@ -9,6 +9,7 @@ import com.suprbeta.browser.configureBrowserRoutes
 import com.suprbeta.chat.ChatHistoryServiceImpl
 import com.suprbeta.chat.configureChatRoutes
 import com.suprbeta.connector.ConnectorServiceImpl
+import com.suprbeta.connector.NangoService
 import com.suprbeta.connector.configureConnectorRoutes
 import com.suprbeta.config.AppConfig
 import com.suprbeta.digitalocean.DropletConfigurationService
@@ -148,6 +149,7 @@ fun Application.module() {
     val connectorService = ConnectorServiceImpl(
         firestoreRepository = firestoreRepository,
         dropletMcpService = provisioningServices.dropletMcpService,
+        nangoService = NangoService(httpClient, this),
         application = this
     )
     configureConnectorRoutes(connectorService)

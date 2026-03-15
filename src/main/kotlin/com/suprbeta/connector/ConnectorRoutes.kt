@@ -7,8 +7,9 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.Parameters
 import io.ktor.server.application.Application
 import io.ktor.server.application.log
-import io.ktor.server.request.receiveParameters
 import io.ktor.server.request.receive
+import io.ktor.server.request.receiveParameters
+import io.ktor.server.request.receiveText
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondRedirect
 import io.ktor.server.response.respondText
@@ -25,19 +26,34 @@ fun Application.configureConnectorRoutes(connectorService: ConnectorService) {
             route("/api/connectors") {
                 get {
                     val user = call.attributes[firebaseUserKey]
-                    val connectors = connectorService.listConnectors(user.uid)
-                    call.respond(HttpStatusCode.OK, ConnectorListResponse(connectors))
+                    call.respond(HttpStatusCode.OK, ConnectorListResponse(connectorService.listConnectors(user.uid)))
+                }
+
+                get("/sessions/{sessionId}") {
+                    val user = call.attributes[firebaseUserKey]
+                    val sessionId = call.parameters["sessionId"].orEmpty()
+                    if (sessionId.isBlank()) {
+                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing sessionId"))
+                        return@get
+                    }
+                    try {
+                        call.respond(HttpStatusCode.OK, connectorService.getConnectorSessionStatus(user.uid, sessionId))
+                    } catch (e: NoSuchElementException) {
+                        call.respond(HttpStatusCode.NotFound, mapOf("error" to (e.message ?: "Session not found")))
+                    } catch (e: Exception) {
+                        call.application.log.error("Failed to fetch connector session $sessionId for user ${user.uid}", e)
+                        call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Failed to fetch connector session")))
+                    }
                 }
 
                 post("/apps/session") {
                     val user = call.attributes[firebaseUserKey]
                     try {
-                        val session = connectorService.startConnectorSession(user.uid)
-                        call.respond(HttpStatusCode.OK, session)
+                        call.respond(HttpStatusCode.OK, connectorService.startConnectorSession(user.uid))
                     } catch (e: IllegalStateException) {
                         call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to (e.message ?: "Connector session flow is not configured")))
                     } catch (e: Exception) {
-                        call.application.log.error("Failed to start connector session for user ${user.uid}", e)
+                        call.application.log.error("Failed to start legacy connector session for user ${user.uid}", e)
                         call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Failed to start connector session")))
                     }
                 }
@@ -50,51 +66,198 @@ fun Application.configureConnectorRoutes(connectorService: ConnectorService) {
                         return@get
                     }
                     try {
-                        val status = connectorService.getConnectorSessionStatus(user.uid, sessionId)
-                        call.respond(HttpStatusCode.OK, status)
+                        call.respond(HttpStatusCode.OK, connectorService.getConnectorSessionStatus(user.uid, sessionId))
                     } catch (e: NoSuchElementException) {
                         call.respond(HttpStatusCode.NotFound, mapOf("error" to (e.message ?: "Session not found")))
                     } catch (e: Exception) {
-                        call.application.log.error("Failed to get connector session status for user ${user.uid}", e)
-                        call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Failed to get session status")))
+                        call.application.log.error("Failed to fetch legacy connector session $sessionId for user ${user.uid}", e)
+                        call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Failed to fetch connector session")))
                     }
                 }
 
-                put("{provider}/policy") {
-                    val user = call.attributes[firebaseUserKey]
-                    val provider = call.parameters["provider"].orEmpty()
-                    if (provider.isBlank()) {
-                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing provider"))
-                        return@put
+                route("/{provider}") {
+                    post("/sessions/start") {
+                        val user = call.attributes[firebaseUserKey]
+                        val provider = call.parameters["provider"].orEmpty()
+                        if (provider.isBlank()) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing provider"))
+                            return@post
+                        }
+                        try {
+                            val request = call.receive<ConnectorSessionStartRequest>()
+                            val response = connectorService.startNangoConnectorSession(
+                                userId = user.uid,
+                                userEmail = user.email,
+                                provider = provider,
+                                request = request
+                            )
+                            call.respond(HttpStatusCode.OK, response)
+                        } catch (e: IllegalArgumentException) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to (e.message ?: "Invalid request")))
+                        } catch (e: NoSuchElementException) {
+                            call.respond(HttpStatusCode.NotFound, mapOf("error" to (e.message ?: "Account not found")))
+                        } catch (e: IllegalStateException) {
+                            call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to (e.message ?: "Connector auth is not configured")))
+                        } catch (e: Exception) {
+                            call.application.log.error("Failed to start Nango connector session for user ${user.uid}", e)
+                            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Failed to start connector session")))
+                        }
                     }
-                    try {
-                        val request = call.receive<UpdateConnectorPolicyRequest>()
-                        val connector = connectorService.updateConnectorPolicy(user.uid, provider, request.allowedAgents)
-                        call.respond(HttpStatusCode.OK, connector)
-                    } catch (e: IllegalArgumentException) {
-                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to (e.message ?: "Invalid request")))
-                    } catch (e: NoSuchElementException) {
-                        call.respond(HttpStatusCode.NotFound, mapOf("error" to (e.message ?: "Connector not found")))
-                    } catch (e: Exception) {
-                        call.application.log.error("Failed to update connector policy for user ${user.uid}", e)
-                        call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Failed to update policy")))
+
+                    get("/accounts") {
+                        val user = call.attributes[firebaseUserKey]
+                        val provider = call.parameters["provider"].orEmpty()
+                        if (provider.isBlank()) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing provider"))
+                            return@get
+                        }
+                        try {
+                            call.respond(
+                                HttpStatusCode.OK,
+                                ConnectorAccountsResponse(
+                                    provider = provider.lowercase(),
+                                    accounts = connectorService.listConnectorAccounts(user.uid, provider)
+                                )
+                            )
+                        } catch (e: Exception) {
+                            call.application.log.error("Failed to list connector accounts for provider $provider user ${user.uid}", e)
+                            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Failed to list connector accounts")))
+                        }
+                    }
+
+                    get("/accounts/{accountId}/tools") {
+                        val user = call.attributes[firebaseUserKey]
+                        val provider = call.parameters["provider"].orEmpty()
+                        val accountId = call.parameters["accountId"].orEmpty()
+                        if (provider.isBlank() || accountId.isBlank()) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing provider or accountId"))
+                            return@get
+                        }
+                        try {
+                            call.respond(
+                                HttpStatusCode.OK,
+                                connectorService.listConnectorTools(user.uid, provider, accountId)
+                            )
+                        } catch (e: IllegalArgumentException) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to (e.message ?: "Invalid request")))
+                        } catch (e: NoSuchElementException) {
+                            call.respond(HttpStatusCode.NotFound, mapOf("error" to (e.message ?: "Connector account not found")))
+                        } catch (e: IllegalStateException) {
+                            call.respond(HttpStatusCode.Conflict, mapOf("error" to (e.message ?: "Connector account is not ready")))
+                        } catch (e: Exception) {
+                            call.application.log.error("Failed to list Nango tools for account $accountId user ${user.uid}", e)
+                            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Failed to list connector tools")))
+                        }
+                    }
+
+                    post("/accounts/{accountId}/actions/{actionName}") {
+                        val user = call.attributes[firebaseUserKey]
+                        val provider = call.parameters["provider"].orEmpty()
+                        val accountId = call.parameters["accountId"].orEmpty()
+                        val actionName = call.parameters["actionName"].orEmpty()
+                        if (provider.isBlank() || accountId.isBlank() || actionName.isBlank()) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing provider, accountId, or actionName"))
+                            return@post
+                        }
+                        try {
+                            val request = call.receive<ConnectorActionInvokeRequest>()
+                            call.respond(
+                                HttpStatusCode.OK,
+                                connectorService.invokeConnectorAction(user.uid, provider, accountId, actionName, request)
+                            )
+                        } catch (e: IllegalArgumentException) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to (e.message ?: "Invalid request")))
+                        } catch (e: NoSuchElementException) {
+                            call.respond(HttpStatusCode.NotFound, mapOf("error" to (e.message ?: "Connector account not found")))
+                        } catch (e: IllegalStateException) {
+                            call.respond(HttpStatusCode.Conflict, mapOf("error" to (e.message ?: "Connector account is not ready")))
+                        } catch (e: Exception) {
+                            call.application.log.error("Failed to invoke Nango action $actionName for account $accountId user ${user.uid}", e)
+                            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Failed to invoke connector action")))
+                        }
+                    }
+
+                    put("/accounts/{accountId}/policy") {
+                        val user = call.attributes[firebaseUserKey]
+                        val provider = call.parameters["provider"].orEmpty()
+                        val accountId = call.parameters["accountId"].orEmpty()
+                        if (provider.isBlank() || accountId.isBlank()) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing provider or accountId"))
+                            return@put
+                        }
+                        try {
+                            val request = call.receive<UpdateConnectorPolicyRequest>()
+                            val response = connectorService.updateConnectorPolicy(
+                                userId = user.uid,
+                                provider = provider,
+                                accountId = accountId,
+                                allowedAgents = request.allowedAgents,
+                                isDefaultForProvider = request.isDefaultForProvider,
+                                defaultForAgents = request.defaultForAgents
+                            )
+                            call.respond(HttpStatusCode.OK, response)
+                        } catch (e: IllegalArgumentException) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to (e.message ?: "Invalid request")))
+                        } catch (e: NoSuchElementException) {
+                            call.respond(HttpStatusCode.NotFound, mapOf("error" to (e.message ?: "Connector account not found")))
+                        } catch (e: Exception) {
+                            call.application.log.error("Failed to update connector policy for provider $provider user ${user.uid}", e)
+                            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Failed to update connector policy")))
+                        }
+                    }
+
+                    delete("/accounts/{accountId}") {
+                        val user = call.attributes[firebaseUserKey]
+                        val provider = call.parameters["provider"].orEmpty()
+                        val accountId = call.parameters["accountId"].orEmpty()
+                        if (provider.isBlank() || accountId.isBlank()) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing provider or accountId"))
+                            return@delete
+                        }
+                        try {
+                            connectorService.disconnectConnector(user.uid, provider, accountId)
+                            call.respond(HttpStatusCode.OK, mapOf("message" to "Connector disconnected"))
+                        } catch (e: IllegalArgumentException) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to (e.message ?: "Invalid request")))
+                        } catch (e: NoSuchElementException) {
+                            call.respond(HttpStatusCode.NotFound, mapOf("error" to (e.message ?: "Connector account not found")))
+                        } catch (e: Exception) {
+                            call.application.log.error("Failed to disconnect connector account $accountId for user ${user.uid}", e)
+                            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Failed to disconnect connector")))
+                        }
                     }
                 }
+            }
+        }
 
-                delete("{provider}") {
-                    val user = call.attributes[firebaseUserKey]
-                    val provider = call.parameters["provider"].orEmpty()
-                    if (provider.isBlank()) {
-                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing provider"))
-                        return@delete
-                    }
-                    try {
-                        connectorService.disconnectConnector(user.uid, provider)
-                        call.respond(HttpStatusCode.OK, mapOf("message" to "Connector disconnected"))
-                    } catch (e: Exception) {
-                        call.application.log.error("Failed to disconnect connector '$provider' for user ${user.uid}", e)
-                        call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Failed to disconnect connector")))
-                    }
+        route("/api/connectors") {
+            post("/webhooks/nango") {
+                val rawBody = call.receiveText()
+                try {
+                    connectorService.handleNangoWebhook(rawBody, call.request.headers["X-Nango-Hmac-Sha256"])
+                    call.respond(HttpStatusCode.Accepted, mapOf("message" to "Webhook processed"))
+                } catch (e: IllegalArgumentException) {
+                    call.respond(HttpStatusCode.Unauthorized, mapOf("error" to (e.message ?: "Invalid webhook signature")))
+                } catch (e: Exception) {
+                    call.application.log.error("Failed to process Nango webhook", e)
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Failed to process webhook")))
+                }
+            }
+
+            get("/oauth/callback/{provider}") {
+                val provider = call.parameters["provider"].orEmpty()
+                if (provider.isBlank()) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing provider"))
+                    return@get
+                }
+                try {
+                    val redirect = connectorService.forwardNangoOAuthCallback(provider, call.request.queryParameters)
+                    call.respondRedirect(redirect, permanent = false)
+                } catch (e: IllegalArgumentException) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to (e.message ?: "Invalid provider")))
+                } catch (e: Exception) {
+                    call.application.log.error("Failed to forward OAuth callback for provider $provider", e)
+                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Failed to forward OAuth callback")))
                 }
             }
         }
@@ -109,10 +272,7 @@ fun Application.configureConnectorRoutes(connectorService: ConnectorService) {
                 }
                 try {
                     val page = connectorService.getSessionConnectPage(sessionId, state)
-                    call.respondText(
-                        text = buildConnectorEmbedHtml(page),
-                        contentType = ContentType.Text.Html
-                    )
+                    call.respondText(buildConnectorEmbedHtml(page), ContentType.Text.Html)
                 } catch (e: NoSuchElementException) {
                     call.respond(HttpStatusCode.NotFound, mapOf("error" to (e.message ?: "Session not found")))
                 } catch (e: IllegalArgumentException) {
@@ -120,7 +280,7 @@ fun Application.configureConnectorRoutes(connectorService: ConnectorService) {
                 } catch (e: IllegalStateException) {
                     call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to (e.message ?: "Connector embed flow is not configured")))
                 } catch (e: Exception) {
-                    call.application.log.error("Failed to render connector connect page", e)
+                    call.application.log.error("Failed to render legacy connector connect page", e)
                     call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Failed to render connect page")))
                 }
             }
@@ -304,7 +464,7 @@ private suspend fun io.ktor.server.application.ApplicationCall.handleConnectorCa
     } catch (e: IllegalArgumentException) {
         respond(HttpStatusCode.BadRequest, mapOf("error" to (e.message ?: "Invalid callback request")))
     } catch (e: Exception) {
-        application.log.error("Failed to finalize connector callback", e)
+        application.log.error("Failed to finalize legacy connector callback", e)
         respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Failed to finalize callback")))
     }
 }
